@@ -1,7 +1,7 @@
 # TV Scheduler Design
 
 Date: 2026-09-14
-Status: Approved design awaiting implementation-plan review
+Status: Approved architecture; awaiting user review of written spec before implementation planning
 Repository: `MarkJRogers92/TV`
 
 ## 1. Purpose
