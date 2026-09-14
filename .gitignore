@@ -1,2 +1,7 @@
-.worktrees/
-.superpowers/
+node_modules/
+dist/
+dist-server/
+data/
+playwright-report/
+test-results/
+*.marktv.json

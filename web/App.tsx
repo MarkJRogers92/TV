@@ -1,0 +1,91 @@
+import { useEffect, useState } from "react";
+import { markTvApi } from "./api";
+import { Nav, type PageName } from "./components/Nav";
+import { ChannelEditor } from "./pages/ChannelEditor";
+import { Dashboard } from "./pages/Dashboard";
+import { Library } from "./pages/Library";
+import { Schedule } from "./pages/Schedule";
+import { Tunarr } from "./pages/Tunarr";
+import type { Channel } from "./types";
+import "./styles.css";
+
+const routePages: Record<string, PageName> = {
+  channel: "Channel",
+  library: "Library",
+  schedule: "Schedule",
+  tunarr: "Tunarr",
+};
+const pageFromHash = (): PageName =>
+  routePages[window.location.hash.replace(/^#\//, "")] ?? "Dashboard";
+
+export function App() {
+  const [page, setPage] = useState<PageName>(() => pageFromHash());
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [channelId, setChannelId] = useState("marktv-laughs");
+  useEffect(() => {
+    markTvApi
+      .listChannels()
+      .then((loaded) => {
+        setChannels(loaded);
+        if (
+          loaded.length &&
+          !loaded.some((channel) => channel.id === channelId)
+        )
+          setChannelId(loaded[0].id);
+      })
+      .catch(() => undefined);
+  }, [channelId]);
+  useEffect(() => {
+    const route = () => setPage(pageFromHash());
+    window.addEventListener("hashchange", route);
+    return () => window.removeEventListener("hashchange", route);
+  }, []);
+  const navigate = (next: PageName) => {
+    window.location.hash =
+      next === "Dashboard" ? "#/" : `#/${next.toLowerCase()}`;
+    setPage(next);
+  };
+  const content =
+    page === "Dashboard" ? (
+      <Dashboard channelId={channelId} />
+    ) : page === "Channel" ? (
+      <ChannelEditor channelId={channelId} />
+    ) : page === "Library" ? (
+      <Library />
+    ) : page === "Schedule" ? (
+      <Schedule channelId={channelId} />
+    ) : (
+      <Tunarr />
+    );
+  return (
+    <main>
+      <header>
+        <div>
+          <h1>MarkTV</h1>
+          <p>Local linear programming studio</p>
+        </div>
+        <Nav current={page} onNavigate={navigate} />
+      </header>
+      <div className="channel-picker">
+        <label>
+          Selected channel
+          <select
+            value={channelId}
+            onChange={(event) => setChannelId(event.target.value)}
+          >
+            {channels.length ? (
+              channels.map((channel) => (
+                <option key={channel.id} value={channel.id}>
+                  {channel.name} · {channel.number}
+                </option>
+              ))
+            ) : (
+              <option value="marktv-laughs">MarkTV Laughs · 7</option>
+            )}
+          </select>
+        </label>
+      </div>
+      {content}
+    </main>
+  );
+}

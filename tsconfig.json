@@ -1,0 +1,1 @@
+{"compilerOptions":{"target":"ES2022","module":"ESNext","moduleResolution":"bundler","strict":true,"jsx":"react-jsx","esModuleInterop":true,"skipLibCheck":true,"types":["vitest/globals"]},"include":["src","web","tests"]}

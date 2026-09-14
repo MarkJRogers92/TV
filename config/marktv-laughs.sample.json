@@ -1,0 +1,571 @@
+{
+  "channel": {
+    "id": "marktv-laughs",
+    "name": "MarkTV Laughs",
+    "number": 7,
+    "timezone": "America/Chicago",
+    "enabled": true,
+    "revision": "demo-2",
+    "dayparts": [
+      {
+        "id": "morning",
+        "name": "Morning",
+        "days": [0, 1, 2, 3, 4, 5, 6],
+        "start": "06:00",
+        "end": "12:00",
+        "priority": 1
+      },
+      {
+        "id": "daytime",
+        "name": "Daytime",
+        "days": [0, 1, 2, 3, 4, 5, 6],
+        "start": "12:00",
+        "end": "17:00",
+        "priority": 1
+      },
+      {
+        "id": "evening",
+        "name": "Evening",
+        "days": [0, 1, 2, 3, 4, 5, 6],
+        "start": "17:00",
+        "end": "20:00",
+        "priority": 1
+      },
+      {
+        "id": "late-night",
+        "name": "Late Night",
+        "days": [0, 1, 2, 3, 4, 5, 6],
+        "start": "20:00",
+        "end": "00:00",
+        "priority": 1
+      },
+      {
+        "id": "overnight",
+        "name": "Overnight",
+        "days": [0, 1, 2, 3, 4, 5, 6],
+        "start": "00:00",
+        "end": "06:00",
+        "priority": 1
+      }
+    ],
+    "slots": [
+      {
+        "id": "friday-movie",
+        "days": [5, 6],
+        "time": "20:00",
+        "poolIds": ["movies"],
+        "kind": "movie",
+        "fallbackPoolIds": [],
+        "movieMidroll": {
+          "intervalMinutes": 30,
+          "breakMinutes": 3,
+          "minimumMinutes": 60,
+          "maxBreaks": 4,
+          "tailBufferMinutes": 0,
+          "strategy": "lazy"
+        }
+      },
+      {
+        "id": "morning-shows",
+        "daypartId": "morning",
+        "days": [],
+        "poolIds": ["apartment-4b", "space-neighbors"],
+        "kind": "episode",
+        "fallbackPoolIds": []
+      },
+      {
+        "id": "daytime-shows",
+        "daypartId": "daytime",
+        "days": [],
+        "poolIds": ["apartment-4b", "space-neighbors"],
+        "kind": "episode",
+        "fallbackPoolIds": []
+      },
+      {
+        "id": "evening-shows",
+        "daypartId": "evening",
+        "days": [],
+        "poolIds": ["apartment-4b", "space-neighbors"],
+        "kind": "episode",
+        "fallbackPoolIds": []
+      },
+      {
+        "id": "late-night-shows",
+        "daypartId": "late-night",
+        "days": [],
+        "poolIds": ["apartment-4b", "space-neighbors"],
+        "kind": "episode",
+        "fallbackPoolIds": []
+      },
+      {
+        "id": "overnight-shows",
+        "daypartId": "overnight",
+        "days": [],
+        "poolIds": ["apartment-4b", "space-neighbors"],
+        "kind": "episode",
+        "fallbackPoolIds": []
+      }
+    ],
+    "breakPolicy": {
+      "boundaryMinutes": 30,
+      "poolIds": ["ads", "bumpers", "filler"],
+      "stationIdPoolIds": ["ids"],
+      "cooldownMinutes": 120
+    }
+  },
+  "pools": [
+    {
+      "id": "apartment-4b",
+      "name": "Apartment 4B",
+      "kinds": ["episode"],
+      "mediaIds": [
+        "apartment-4b-1",
+        "apartment-4b-2",
+        "apartment-4b-3",
+        "apartment-4b-4",
+        "apartment-4b-5",
+        "apartment-4b-6",
+        "apartment-4b-7",
+        "apartment-4b-8",
+        "apartment-4b-9",
+        "apartment-4b-10",
+        "apartment-4b-11",
+        "apartment-4b-12"
+      ],
+      "mode": "chronological",
+      "noRepeatMinutes": 720,
+      "weight": 2
+    },
+    {
+      "id": "space-neighbors",
+      "name": "Space Neighbors",
+      "kinds": ["episode"],
+      "mediaIds": [
+        "space-neighbors-1",
+        "space-neighbors-2",
+        "space-neighbors-3",
+        "space-neighbors-4",
+        "space-neighbors-5",
+        "space-neighbors-6",
+        "space-neighbors-7",
+        "space-neighbors-8",
+        "space-neighbors-9",
+        "space-neighbors-10",
+        "space-neighbors-11",
+        "space-neighbors-12"
+      ],
+      "mode": "chronological",
+      "noRepeatMinutes": 720,
+      "weight": 1
+    },
+    {
+      "id": "movies",
+      "name": "Movies",
+      "kinds": ["movie"],
+      "mediaIds": ["wacky-weekend"],
+      "mode": "shuffle",
+      "noRepeatMinutes": 10080,
+      "weight": 1
+    },
+    {
+      "id": "ads",
+      "name": "Commercials",
+      "kinds": ["commercial"],
+      "mediaIds": ["ad-1"],
+      "mode": "shuffle",
+      "noRepeatMinutes": 120,
+      "weight": 1
+    },
+    {
+      "id": "bumpers",
+      "name": "Bumpers",
+      "kinds": ["bumper"],
+      "mediaIds": ["bumper-1"],
+      "mode": "shuffle",
+      "noRepeatMinutes": 120,
+      "weight": 1
+    },
+    {
+      "id": "filler",
+      "name": "General filler",
+      "kinds": ["filler"],
+      "mediaIds": ["filler-1"],
+      "mode": "shuffle",
+      "noRepeatMinutes": 120,
+      "weight": 1
+    },
+    {
+      "id": "ids",
+      "name": "Station IDs",
+      "kinds": ["station-id"],
+      "mediaIds": ["id-1"],
+      "mode": "shuffle",
+      "noRepeatMinutes": 120,
+      "weight": 1
+    }
+  ],
+  "media": [
+    {
+      "id": "apartment-4b-1",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Apartment 4B 1",
+      "showTitle": "Apartment 4B",
+      "season": 1,
+      "episode": 1,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "apartment-4b-2",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Apartment 4B 2",
+      "showTitle": "Apartment 4B",
+      "season": 1,
+      "episode": 2,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "apartment-4b-3",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Apartment 4B 3",
+      "showTitle": "Apartment 4B",
+      "season": 1,
+      "episode": 3,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "apartment-4b-4",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Apartment 4B 4",
+      "showTitle": "Apartment 4B",
+      "season": 1,
+      "episode": 4,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "apartment-4b-5",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Apartment 4B 5",
+      "showTitle": "Apartment 4B",
+      "season": 1,
+      "episode": 5,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "apartment-4b-6",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Apartment 4B 6",
+      "showTitle": "Apartment 4B",
+      "season": 1,
+      "episode": 6,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "apartment-4b-7",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Apartment 4B 7",
+      "showTitle": "Apartment 4B",
+      "season": 1,
+      "episode": 7,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "apartment-4b-8",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Apartment 4B 8",
+      "showTitle": "Apartment 4B",
+      "season": 1,
+      "episode": 8,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "apartment-4b-9",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Apartment 4B 9",
+      "showTitle": "Apartment 4B",
+      "season": 1,
+      "episode": 9,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "apartment-4b-10",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Apartment 4B 10",
+      "showTitle": "Apartment 4B",
+      "season": 1,
+      "episode": 10,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "apartment-4b-11",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Apartment 4B 11",
+      "showTitle": "Apartment 4B",
+      "season": 1,
+      "episode": 11,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "apartment-4b-12",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Apartment 4B 12",
+      "showTitle": "Apartment 4B",
+      "season": 1,
+      "episode": 12,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "space-neighbors-1",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Space Neighbors 1",
+      "showTitle": "Space Neighbors",
+      "season": 1,
+      "episode": 1,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "space-neighbors-2",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Space Neighbors 2",
+      "showTitle": "Space Neighbors",
+      "season": 1,
+      "episode": 2,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "space-neighbors-3",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Space Neighbors 3",
+      "showTitle": "Space Neighbors",
+      "season": 1,
+      "episode": 3,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "space-neighbors-4",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Space Neighbors 4",
+      "showTitle": "Space Neighbors",
+      "season": 1,
+      "episode": 4,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "space-neighbors-5",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Space Neighbors 5",
+      "showTitle": "Space Neighbors",
+      "season": 1,
+      "episode": 5,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "space-neighbors-6",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Space Neighbors 6",
+      "showTitle": "Space Neighbors",
+      "season": 1,
+      "episode": 6,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "space-neighbors-7",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Space Neighbors 7",
+      "showTitle": "Space Neighbors",
+      "season": 1,
+      "episode": 7,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "space-neighbors-8",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Space Neighbors 8",
+      "showTitle": "Space Neighbors",
+      "season": 1,
+      "episode": 8,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "space-neighbors-9",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Space Neighbors 9",
+      "showTitle": "Space Neighbors",
+      "season": 1,
+      "episode": 9,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "space-neighbors-10",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Space Neighbors 10",
+      "showTitle": "Space Neighbors",
+      "season": 1,
+      "episode": 10,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "space-neighbors-11",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Space Neighbors 11",
+      "showTitle": "Space Neighbors",
+      "season": 1,
+      "episode": 11,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "space-neighbors-12",
+      "source": "placeholder",
+      "kind": "episode",
+      "title": "Space Neighbors 12",
+      "showTitle": "Space Neighbors",
+      "season": 1,
+      "episode": 12,
+      "durationMs": 1380000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "wacky-weekend",
+      "source": "placeholder",
+      "kind": "movie",
+      "title": "The Wacky Weekend Movie",
+      "durationMs": 5400000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "ad-1",
+      "source": "placeholder",
+      "kind": "commercial",
+      "title": "Fictional Soda",
+      "durationMs": 30000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "bumper-1",
+      "source": "placeholder",
+      "kind": "bumper",
+      "title": "MarkTV Laughs Bumper",
+      "durationMs": 15000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "filler-1",
+      "source": "placeholder",
+      "kind": "filler",
+      "title": "Fictional Community Calendar",
+      "durationMs": 60000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    },
+    {
+      "id": "id-1",
+      "source": "placeholder",
+      "kind": "station-id",
+      "title": "MarkTV Laughs ID",
+      "durationMs": 15000,
+      "durationStatus": "ok",
+      "available": true,
+      "tags": []
+    }
+  ]
+}
