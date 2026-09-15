@@ -3,15 +3,11 @@ import { basename, extname, isAbsolute, join } from "node:path";
 import type { MediaAdapter, MediaScanResult, ProbeResult } from "./adapter.js";
 import type { MediaItem } from "../domain/models.js";
 import { probeDuration } from "./ffprobe.js";
-
-const supportedExtensions = new Set([
-  ".mp4",
-  ".m4v",
-  ".mkv",
-  ".mov",
-  ".avi",
-  ".webm",
-]);
+import {
+  isVideoExtension,
+  parseVideoCandidate,
+} from "../acquisition/filename.js";
+import { assertManagedDirectory, type ManagedDirectoryIdentity } from "../acquisition/paths.js";
 
 export type MediaScanErrorCode =
   | "INVALID_SCAN_ROOT"
@@ -35,6 +31,31 @@ function metadataFromPath(path: string) {
   const extension = extname(path);
   const rawTitle = basename(path, extension);
   const episodeHint = rawTitle.match(/S(\d+)E(\d+)/i);
+  // Managed library names are produced by canonicalVideoName, so their
+  // canonical episode titles are trusted metadata and keep words such as
+  // "Trailer", "Extras", or "Featurette" verbatim.
+  const parsed = parseVideoCandidate(
+    {
+      provider: "real-debrid",
+      itemType: "torrent",
+      remoteItemId: "local-scan",
+      remoteFileId: path,
+      originalFilename: basename(path),
+      remotePath: basename(path),
+      bytes: null,
+    },
+    { trustedManagedCanonical: true },
+  );
+  if (parsed) {
+    return {
+      extension,
+      title: parsed.episodeTitle ?? rawTitle.replaceAll("_", " "),
+      kind: "episode" as const,
+      showTitle: parsed.seriesTitle ?? rawTitle.replaceAll("_", " "),
+      season: parsed.season,
+      episode: parsed.episode,
+    };
+  }
   const title = rawTitle.replaceAll("_", " ");
   const kind = /(?:^|[/\\])movies?(?:[/\\]|$)/i.test(path)
     ? "movie"
@@ -91,18 +112,25 @@ function normalizeProbe(result: ProbeResult | number | undefined): ProbeResult {
       durationMs: Number.isFinite(result) && result > 0 ? result : null,
     };
   if (!result) return { durationMs: null, reason: "Missing usable duration" };
+  if (result.hasVideoStream === false)
+    return { durationMs: null, hasVideoStream: false, reason: result.reason ?? "Missing readable video stream" };
   return result;
 }
 
 export class LocalFolderAdapter implements MediaAdapter {
-  constructor(private readonly probe: Probe = probeDuration) {}
+  constructor(
+    private readonly probe: Probe = probeDuration,
+    private readonly expectedRoot?: ManagedDirectoryIdentity,
+  ) {}
 
   async scan(root: string): Promise<MediaScanResult> {
     const scanRoot = await validateMediaRoot(root);
+    if (this.expectedRoot) await assertManagedDirectory(this.expectedRoot);
     const items: MediaItem[] = [];
     const diagnostics: MediaScanResult["diagnostics"] = [];
 
     const walk = async (directory: string): Promise<void> => {
+      if (this.expectedRoot) await assertManagedDirectory(this.expectedRoot);
       let entries;
       try {
         entries = await readdir(directory, { withFileTypes: true });
@@ -128,7 +156,7 @@ export class LocalFolderAdapter implements MediaAdapter {
         }
         if (
           !entry.isFile() ||
-          !supportedExtensions.has(extname(discoveredPath).toLowerCase())
+          !isVideoExtension(extname(discoveredPath))
         )
           continue;
 
@@ -155,7 +183,7 @@ export class LocalFolderAdapter implements MediaAdapter {
           showTitle: metadata.showTitle,
           season: metadata.season,
           episode: metadata.episode,
-          available: Boolean(probed.durationMs),
+          available: Boolean(probed.durationMs) && probed.hasVideoStream !== false,
           tags: [],
         });
         if (!probed.durationMs) {
@@ -169,6 +197,7 @@ export class LocalFolderAdapter implements MediaAdapter {
     };
 
     await walk(scanRoot);
+    if (this.expectedRoot) await assertManagedDirectory(this.expectedRoot);
     return { items, diagnostics };
   }
 }

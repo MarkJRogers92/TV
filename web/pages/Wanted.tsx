@@ -1,0 +1,322 @@
+import { useEffect, useState } from "react";
+import { markTvApi, type MarkTvApi } from "../api";
+import { AcquisitionStatus, formatBytes } from "../components/AcquisitionStatus";
+import type { ApiError, SeasonPackView, WantedView } from "../types";
+
+function episodeCode(season: number, episode: number): string {
+  return `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`;
+}
+
+const terminalStates = new Set(["imported", "cancelled"]);
+
+function hasNonterminalAcquisition(wanted: readonly WantedView[]): boolean {
+  return wanted.some((entry) =>
+    !terminalStates.has(entry.status) || (entry.job !== null && !terminalStates.has(entry.job.state)),
+  );
+}
+
+export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
+  const [wanted, setWanted] = useState<WantedView[]>([]);
+  const [packs, setPacks] = useState<SeasonPackView[]>([]);
+  const [loadError, setLoadError] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [seriesTitle, setSeriesTitle] = useState("");
+  const [season, setSeason] = useState("");
+  const [episode, setEpisode] = useState("");
+  const [episodeTitle, setEpisodeTitle] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    Promise.all([client.listWanted(), client.listSeasonPacks()])
+      .then(([loadedWanted, loadedPacks]) => {
+        setWanted(loadedWanted);
+        setPacks(loadedPacks);
+      })
+      .catch(() => setLoadError("Wanted data is unavailable."));
+  }, [client]);
+
+  useEffect(() => {
+    if (!hasNonterminalAcquisition(wanted)) return;
+    let disposed = false;
+    let inFlight = false;
+    const refreshActive = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const [loadedWanted, loadedPacks] = await Promise.all([
+          client.listWanted(),
+          client.listSeasonPacks(),
+        ]);
+        if (!disposed) {
+          setWanted(loadedWanted);
+          setPacks(loadedPacks);
+        }
+      } catch {
+        // Background refresh deliberately stays quiet; explicit actions keep
+        // their existing safe error surface.
+      } finally {
+        inFlight = false;
+      }
+    };
+    const timer = window.setInterval(() => { void refreshActive(); }, 5_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [client, wanted]);
+
+  const refresh = async () => {
+    try {
+      const [loadedWanted, loadedPacks] = await Promise.all([
+        client.listWanted(),
+        client.listSeasonPacks(),
+      ]);
+      setWanted(loadedWanted);
+      setPacks(loadedPacks);
+    } catch (caught) {
+      setActionError((caught as ApiError).message);
+    }
+  };
+
+  const add = async () => {
+    setActionError("");
+    setNotice("");
+    const seasonNumber = Number(season);
+    const episodeNumber = Number(episode);
+    if (!seriesTitle.trim() || !Number.isInteger(seasonNumber) || !Number.isInteger(episodeNumber)) {
+      setActionError("Enter a series title, season, and episode.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const created = await client.addWanted({
+        seriesTitle: seriesTitle.trim(),
+        season: seasonNumber,
+        episode: episodeNumber,
+        episodeTitle: episodeTitle.trim() ? episodeTitle.trim() : null,
+      });
+      setWanted((current) => [...current, created]);
+      setSeriesTitle("");
+      setSeason("");
+      setEpisode("");
+      setEpisodeTitle("");
+      setNotice(`Added ${created.seriesTitle} ${episodeCode(created.season, created.episode)}.`);
+    } catch (caught) {
+      setActionError((caught as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (entry: WantedView) => {
+    setActionError("");
+    setNotice("");
+    try {
+      await client.removeWanted(entry.id);
+      setWanted((current) => current.filter((item) => item.id !== entry.id));
+      setNotice(`Removed ${entry.seriesTitle} ${episodeCode(entry.season, entry.episode)}.`);
+    } catch (caught) {
+      setActionError((caught as ApiError).message);
+    }
+  };
+
+  const retry = async (jobId: string) => {
+    setActionError("");
+    setNotice("");
+    try {
+      await client.retryJob(jobId);
+      setNotice("Retry queued for the acquisition job.");
+      await refresh();
+    } catch (caught) {
+      setActionError((caught as ApiError).message);
+    }
+  };
+
+  const cancel = async (jobId: string) => {
+    setActionError("");
+    setNotice("");
+    try {
+      await client.cancelJob(jobId);
+      setNotice("Cancellation requested for the acquisition job.");
+      await refresh();
+    } catch (caught) {
+      setActionError((caught as ApiError).message);
+    }
+  };
+
+  const importSeason = async (packId: string) => {
+    setActionError("");
+    setNotice("");
+    try {
+      const result = await client.importSeason(packId);
+      setNotice(
+        `Season import scheduled for ${result.wantedIds.length} episode(s).`,
+      );
+      await refresh();
+    } catch (caught) {
+      setActionError((caught as ApiError).message);
+    }
+  };
+
+  return (
+    <section>
+      <h2>Wanted</h2>
+      <p>Track episodes MarkTV should acquire. Links open the Stremio search for each episode.</p>
+      {loadError ? <p role="alert">{loadError}</p> : null}
+      {actionError ? <p role="alert">{actionError}</p> : null}
+      {notice ? <p className="success">{notice}</p> : null}
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void add();
+        }}
+      >
+        <fieldset>
+          <legend>Add a wanted episode</legend>
+          <div className="form-grid">
+            <label>
+              Series title
+              <input
+                aria-label="Series title"
+                value={seriesTitle}
+                onChange={(event) => setSeriesTitle(event.target.value)}
+              />
+            </label>
+            <label>
+              Season
+              <input
+                aria-label="Season"
+                inputMode="numeric"
+                value={season}
+                onChange={(event) => setSeason(event.target.value)}
+              />
+            </label>
+            <label>
+              Episode
+              <input
+                aria-label="Episode"
+                inputMode="numeric"
+                value={episode}
+                onChange={(event) => setEpisode(event.target.value)}
+              />
+            </label>
+            <label>
+              Episode title (optional)
+              <input
+                aria-label="Episode title (optional)"
+                value={episodeTitle}
+                onChange={(event) => setEpisodeTitle(event.target.value)}
+              />
+            </label>
+          </div>
+          <button type="submit" disabled={busy}>
+            Add episode
+          </button>
+        </fieldset>
+      </form>
+      <h3>Wanted episodes ({wanted.length})</h3>
+      {wanted.length === 0 ? (
+        <p>No wanted episodes yet.</p>
+      ) : (
+        <div className="cards">
+          {wanted.map((entry) => (
+            <article key={entry.id}>
+              <h4>
+                {entry.seriesTitle} {episodeCode(entry.season, entry.episode)}
+              </h4>
+              {entry.episodeTitle ? <p>{entry.episodeTitle}</p> : null}
+              <p>
+                Episode status: <AcquisitionStatus state={entry.status} />
+              </p>
+              {entry.job ? (
+                <p>
+                  Job {entry.job.provider} · attempt {entry.job.attempt} of{" "}
+                  {entry.job.maxAttempts}:{" "}
+                  <AcquisitionStatus
+                    state={entry.job.state}
+                    receivedBytes={entry.job.receivedBytes}
+                    expectedBytes={entry.job.expectedBytes}
+                  />
+                  {entry.job.cancelRequested ? <span> · cancel requested</span> : null}
+                </p>
+              ) : (
+                <p>No acquisition job yet.</p>
+              )}
+              {entry.review ? (
+                <p>
+                  Needs review: {entry.review.message}
+                  {entry.review.candidateCount > 0
+                    ? ` (${entry.review.candidateCount} candidate(s))`
+                    : null}
+                </p>
+              ) : null}
+              <p>
+                <a href={entry.stremioUrl}>Open in Stremio</a>
+              </p>
+              <div>
+                {entry.job ? (
+                  <>
+                    <button onClick={() => void retry(entry.job?.id ?? "")}>
+                      Retry job
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={() => void cancel(entry.job?.id ?? "")}
+                    >
+                      Cancel job
+                    </button>
+                  </>
+                ) : null}
+                <button className="secondary" onClick={() => void remove(entry)}>
+                  Remove episode
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      <h3>
+        Season packs ({packs.length} season pack offer{packs.length === 1 ? "" : "s"})
+      </h3>
+      {packs.length === 0 ? (
+        <p>No season pack offers.</p>
+      ) : (
+        <div className="cards">
+          {packs.map((pack) => (
+            <article key={pack.id}>
+              <h4>
+                {pack.seriesTitle ?? "Unknown series"}
+                {pack.season !== null ? ` Season ${pack.season}` : null}
+              </h4>
+              <p>{pack.message}</p>
+              <p>
+                {pack.episodeCount !== null
+                  ? `${pack.episodeCount} episode(s)`
+                  : "Unknown episode count"}
+                {pack.totalBytes !== null
+                  ? ` · ${formatBytes(pack.totalBytes)}`
+                  : null}
+                {pack.provider ? ` · ${pack.provider}` : null}
+              </p>
+              <ul>
+                {pack.episodes.map((item, index) => (
+                  <li key={`${pack.id}-${index}`}>
+                    Episode {item.episode !== null ? item.episode : "unknown"}
+                    {item.resolution ? ` · ${item.resolution}` : null}
+                    {item.sizeBytes !== null ? ` · ${formatBytes(item.sizeBytes)}` : null}
+                    {" · "}
+                    <AcquisitionStatus state={item.status} />
+                  </li>
+                ))}
+              </ul>
+              <button onClick={() => void importSeason(pack.id)}>
+                Import season
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}

@@ -111,9 +111,13 @@ test("persists, scans, and removes explicit read-only media roots with safe erro
   });
   expect(added.statusCode).toBe(201);
   const root = added.json();
-  expect((await app.inject("/api/v1/media/roots")).json()).toEqual([
-    expect.objectContaining({ id: root.id, path: root.path }),
-  ]);
+  // The app also registers the owner-only managed acquisition library exactly
+  // once, so an explicit read-only root is one entry among the registered roots.
+  expect((await app.inject("/api/v1/media/roots")).json()).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ id: root.id, path: root.path }),
+    ]),
+  );
   const scanned = await app.inject({
     method: "POST",
     url: `/api/v1/media/roots/${root.id}/scan`,

@@ -3,9 +3,11 @@ import { markTvApi } from "./api";
 import { Nav, type PageName } from "./components/Nav";
 import { ChannelEditor } from "./pages/ChannelEditor";
 import { Dashboard } from "./pages/Dashboard";
+import { Integrations } from "./pages/Integrations";
 import { Library } from "./pages/Library";
 import { Schedule } from "./pages/Schedule";
 import { Tunarr } from "./pages/Tunarr";
+import { Wanted } from "./pages/Wanted";
 import type { Channel } from "./types";
 import "./styles.css";
 
@@ -14,6 +16,8 @@ const routePages: Record<string, PageName> = {
   library: "Library",
   schedule: "Schedule",
   tunarr: "Tunarr",
+  wanted: "Wanted",
+  integrations: "Integrations",
 };
 const pageFromHash = (): PageName =>
   routePages[window.location.hash.replace(/^#\//, "")] ?? "Dashboard";
@@ -54,6 +58,10 @@ export function App() {
       <Library />
     ) : page === "Schedule" ? (
       <Schedule channelId={channelId} />
+    ) : page === "Wanted" ? (
+      <Wanted />
+    ) : page === "Integrations" ? (
+      <Integrations />
     ) : (
       <Tunarr />
     );

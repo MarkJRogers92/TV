@@ -169,3 +169,16 @@ th {
     max-width: none;
   }
 }
+
+.cards article ul {
+  margin: 12px 0;
+  padding-left: 20px;
+}
+.cards article li {
+  margin: 4px 0;
+}
+@media (max-width: 760px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+}

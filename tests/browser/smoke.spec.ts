@@ -32,6 +32,56 @@ test("runs the seeded admin workflow without browser errors", async ({
     await page.getByRole("link", { name }).click();
     await expect(page.getByRole("heading", { name })).toBeVisible();
   }
+
+  await page.getByRole("link", { name: "Wanted" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Wanted", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Track episodes MarkTV should acquire."),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("group", { name: "Add a wanted episode" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Series title")).toBeVisible();
+  await expect(page.getByLabel("Season")).toBeVisible();
+  await expect(page.getByLabel("Episode", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Episode title (optional)")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Add episode" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /Wanted episodes/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /Season packs/ }),
+  ).toBeVisible();
+
+  await page.getByRole("link", { name: "Integrations" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Integrations", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Tokens are never shown again."),
+  ).toBeVisible();
+  for (const label of ["Real-Debrid", "TorBox"] as const) {
+    await expect(
+      page.getByRole("heading", { name: label }),
+    ).toBeVisible();
+  }
+  const realDebridToken = page.getByLabel("Token for real-debrid");
+  const torBoxToken = page.getByLabel("Token for torbox");
+  await expect(realDebridToken).toBeVisible();
+  await expect(torBoxToken).toBeVisible();
+  await expect(realDebridToken).toHaveValue("");
+  await expect(torBoxToken).toHaveValue("");
+  await expect(
+    page.getByRole("button", { name: "Save token" }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Test connection" }).first(),
+  ).toBeVisible();
+
   await page.getByRole("link", { name: "Dashboard" }).click();
   await expect(
     page.getByRole("heading", { name: "Now Playing" }),

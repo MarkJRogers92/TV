@@ -3,11 +3,18 @@ import type {
   ApiError,
   Channel,
   GeneratedSchedule,
+  ImportSeasonResult,
+  IntegrationProjection,
+  IntegrationProvider,
+  JobActionResult,
   MediaItem,
   MediaRoot,
+  NewWantedInput,
   Pool,
   ScanResult,
   Schedule,
+  SeasonPackView,
+  WantedView,
 } from "./types";
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -68,6 +75,27 @@ export const markTvApi = {
     ),
   generateSchedule: (channelId: string, date: string) =>
     api<GeneratedSchedule>("/schedules/generate", body({ channelId, date })),
+  listWanted: () => api<WantedView[]>("/acquisitions/wanted"),
+  addWanted: (input: NewWantedInput) =>
+    api<WantedView>("/acquisitions/wanted", body(input)),
+  removeWanted: (id: string) =>
+    api<WantedView>(`/acquisitions/wanted/${id}`, { method: "DELETE" }),
+  listSeasonPacks: () =>
+    api<SeasonPackView[]>("/acquisitions/season-packs"),
+  retryJob: (id: string) =>
+    api<JobActionResult>(`/acquisitions/jobs/${id}/retry`, body({})),
+  cancelJob: (id: string) =>
+    api<JobActionResult>(`/acquisitions/jobs/${id}/cancel`, body({})),
+  importSeason: (id: string) =>
+    api<ImportSeasonResult>(
+      `/acquisitions/reviews/${encodeURIComponent(id)}/import-season`,
+      body({}),
+    ),
+  listIntegrations: () => api<IntegrationProjection[]>("/integrations"),
+  saveIntegrationToken: (provider: IntegrationProvider, token: string) =>
+    api<IntegrationProjection>(`/integrations/${provider}/token`, update({ token })),
+  testIntegration: (provider: IntegrationProvider) =>
+    api<IntegrationProjection>(`/integrations/${provider}/test`, body({})),
 };
 
 export type MarkTvApi = typeof markTvApi;

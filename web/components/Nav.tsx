@@ -4,6 +4,8 @@ export const pageNames = [
   "Library",
   "Schedule",
   "Tunarr",
+  "Wanted",
+  "Integrations",
 ] as const;
 export type PageName = (typeof pageNames)[number];
 

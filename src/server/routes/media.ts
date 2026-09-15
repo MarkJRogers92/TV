@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { mediaSchema } from "../../domain/models.js";
@@ -8,22 +7,18 @@ import {
   MediaScanError,
   validateMediaRoot,
 } from "../../media/localFolder.js";
+import {
+  getMediaRoot,
+  listMediaRoots,
+  mediaRootId,
+  putMediaRoot,
+  removeMediaRoot,
+} from "../../media/roots.js";
+import { assertManagedDirectory, captureManagedDirectory } from "../../acquisition/paths.js";
 import type { MediaRootRecord, ServerContext } from "../context.js";
 import { notFound, validationError } from "../errors.js";
 
 const rootSchema = z.object({ path: z.string().min(1) });
-const settingPrefix = "media-root:";
-const rootId = (path: string) =>
-  createHash("sha256").update(path).digest("hex").slice(0, 16);
-
-function mediaRoots(context: ServerContext): MediaRootRecord[] {
-  return context.repositories.settings
-    .list()
-    .filter((setting) => setting.id.startsWith(settingPrefix))
-    .map((setting) => setting.value as MediaRootRecord)
-    .sort((left, right) => left.path.localeCompare(right.path));
-}
-
 function scanError(
   reply: Parameters<typeof validationError>[0],
   error: unknown,
@@ -67,18 +62,19 @@ export async function registerMediaRoutes(
     return reply.code(204).send();
   });
 
-  app.get("/api/v1/media/roots", async () => mediaRoots(context));
+  app.get("/api/v1/media/roots", async () => listMediaRoots(repositories));
   app.post("/api/v1/media/roots", async (request, reply) => {
     try {
       const { path } = rootSchema.parse(request.body);
       const resolved = await validateMediaRoot(path);
       const root: MediaRootRecord = {
-        id: rootId(resolved),
+        id: mediaRootId(resolved),
         path: resolved,
         lastScannedAt: null,
         diagnostics: [],
+        directoryIdentity: await captureManagedDirectory(resolved),
       };
-      repositories.settings.put(`${settingPrefix}${root.id}`, root);
+      putMediaRoot(repositories, root);
       return reply.code(201).send(root);
     } catch (error) {
       return scanError(reply, error);
@@ -86,26 +82,28 @@ export async function registerMediaRoutes(
   });
   app.delete("/api/v1/media/roots/:id", async (request, reply) => {
     const id = (request.params as { id: string }).id;
-    if (!repositories.settings.get(`${settingPrefix}${id}`))
+    if (!removeMediaRoot(repositories, id))
       return notFound(reply, "Media root");
-    repositories.settings.remove(`${settingPrefix}${id}`);
     return reply.code(204).send();
   });
   app.post("/api/v1/media/roots/:id/scan", async (request, reply) => {
     const id = (request.params as { id: string }).id;
-    const stored = repositories.settings.get(`${settingPrefix}${id}`)?.value as
-      MediaRootRecord | undefined;
+    const stored = getMediaRoot(repositories, id);
     if (!stored) return notFound(reply, "Media root");
     try {
-      const result = await new LocalFolderAdapter().scan(stored.path);
+      const identity = stored.directoryIdentity ?? await captureManagedDirectory(stored.path);
+      await assertManagedDirectory(identity);
+      const result = await new LocalFolderAdapter(undefined, identity).scan(stored.path);
+      await assertManagedDirectory(identity);
       const root = {
         ...stored,
+        directoryIdentity: identity,
         lastScannedAt: context.now().toISOString(),
         diagnostics: result.diagnostics,
       };
       repositories.transaction(() => {
         result.items.forEach((item) => repositories.media.put(item));
-        repositories.settings.put(`${settingPrefix}${id}`, root);
+        putMediaRoot(repositories, root);
       });
       return { root, result };
     } catch (error) {
