@@ -21,9 +21,9 @@ The mutation order is channel create/update, filler-list create/update, then man
 
 ## Episode and movie mid-rolls
 
-For a scheduled episode or movie with mid-roll metadata, MarkTV splits the same matched Tunarr content ID into positive-duration content segments with exact `startOffsetMs` values. It inserts positive flex entries between them with the resolved filler-list ID, the channel break cooldown, and `origin: "midroll"`. The original file is never cut or re-encoded. The schedule entry records source-content duration separately from broadcast duration; content plus every inserted break must equal the wall-clock entry duration.
+For a scheduled episode or movie with mid-roll metadata, MarkTV splits the same matched Tunarr content ID into positive-duration content segments with exact `startOffsetMs` values. It inserts deterministic pods of complete matched commercials, filler, or bumpers between those segments. MarkTV materializes those pods as ordinary content entries because Tunarr 1.3.14 renders mid-roll flex entries as offline time even when they carry a filler-list configuration. The original files are never cut or re-encoded. The schedule entry records source-content duration separately from broadcast duration; content plus every inserted break must equal the wall-clock entry duration.
 
-Duplicate, unordered, non-positive, out-of-range, or duration-inconsistent break layouts block the dry run. Mid-rolls also block when there is no matched positive-duration filler program or when the complete Tunarr lineup duration differs from MarkTV's schedule. Ordinary unsplit programs and scheduled interstitial entries remain ordered content items. Existing flex entries remain flex items.
+Duplicate, unordered, non-positive, out-of-range, or duration-inconsistent break layouts block the dry run. Mid-rolls also block when there is no matched positive-duration filler program, when complete spots cannot exactly fill a break, or when the complete Tunarr lineup duration differs from MarkTV's schedule. Ordinary unsplit programs and scheduled interstitial entries remain ordered content items. Existing flex entries remain flex items.
 
 ## Recovery and limitations
 
@@ -32,6 +32,7 @@ Duplicate, unordered, non-positive, out-of-range, or duration-inconsistent break
 - `PLACEHOLDER_MEDIA`: replace preview media with a real scanned file and regenerate.
 - `TRANSCODE_CONFIG_REQUIRED` or `TRANSCODE_CONFIG_NOT_FOUND`: choose an existing Tunarr configuration ID.
 - `MIDROLL_FILLER_UNAVAILABLE`: add matching filler media to both applications and regenerate.
+- `MIDROLL_EXACT_FILL_UNAVAILABLE`: add a combination of complete matched spots whose durations exactly fill the configured break, then regenerate.
 - `INVALID_MIDROLL_LAYOUT`: regenerate; the stored break offsets or broadcast accounting are unsafe.
 - `LINEUP_DURATION_MISMATCH` or `SCHEDULE_DURATION_MISMATCH`: do not sync; regenerate and review unmatched media or timing diagnostics.
 - `UNSUPPORTED_SCHEMA` or a capability blocker: do not bypass the guard. Record the Tunarr version and review/update the adapter against Tunarr's current API before retrying.

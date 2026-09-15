@@ -177,30 +177,14 @@ test("plans channel/filler updates and the exact midroll lineup", () => {
   expect(lineup).toHaveLength(6);
   expect(lineup).toEqual([
     { type: "content", id: "movie", duration: 1_800_000, startOffsetMs: 0 },
-    {
-      type: "flex",
-      duration: 60_000,
-      fillerConfig: {
-        fillerListIds: ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"],
-        fillerRepeatCooldownMs: 7_200_000,
-        origin: "midroll",
-      },
-    },
+    { type: "content", id: "ad", duration: 60_000 },
     {
       type: "content",
       id: "movie",
       duration: 3_600_000,
       startOffsetMs: 1_800_000,
     },
-    {
-      type: "flex",
-      duration: 60_000,
-      fillerConfig: {
-        fillerListIds: ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"],
-        fillerRepeatCooldownMs: 7_200_000,
-        origin: "midroll",
-      },
-    },
+    { type: "content", id: "ad", duration: 60_000 },
     {
       type: "content",
       id: "movie",
@@ -214,30 +198,30 @@ test("plans channel/filler updates and the exact midroll lineup", () => {
 test("splits an episode at exact source offsets and preserves broadcast duration", () => {
   const episodeSchedule: Schedule = {
     ...schedule,
-    durationMs: 1_800_000,
+    durationMs: 1_620_000,
     entries: [
       {
         id: "episode-entry",
         start: "2026-09-13T00:00:00.000Z",
-        end: "2026-09-13T00:28:00.000Z",
+        end: "2026-09-13T00:25:00.000Z",
         localStart: "00:00",
-        localEnd: "00:28",
-        durationMs: 1_680_000,
+        localEnd: "00:25",
+        durationMs: 1_500_000,
         contentDurationMs: 1_380_000,
         kind: "episode",
         title: "Episode",
         path: "/media/episode.mkv",
         midrolls: [
-          { offsetMs: 448_500, durationMs: 150_000 },
-          { offsetMs: 903_500, durationMs: 150_000 },
+          { offsetMs: 448_500, durationMs: 60_000 },
+          { offsetMs: 903_500, durationMs: 60_000 },
         ],
       },
       {
         id: "ad-entry",
-        start: "2026-09-13T00:28:00.000Z",
-        end: "2026-09-13T00:29:00.000Z",
-        localStart: "00:28",
-        localEnd: "00:29",
+        start: "2026-09-13T00:25:00.000Z",
+        end: "2026-09-13T00:26:00.000Z",
+        localStart: "00:25",
+        localEnd: "00:26",
         durationMs: 60_000,
         kind: "commercial",
         title: "Ad",
@@ -245,10 +229,10 @@ test("splits an episode at exact source offsets and preserves broadcast duration
       },
       {
         id: "flex-entry",
-        start: "2026-09-13T00:29:00.000Z",
-        end: "2026-09-13T00:30:00.000Z",
-        localStart: "00:29",
-        localEnd: "00:30",
+        start: "2026-09-13T00:26:00.000Z",
+        end: "2026-09-13T00:27:00.000Z",
+        localStart: "00:26",
+        localEnd: "00:27",
         durationMs: 60_000,
         kind: "flex",
         title: "Flexible programming",
@@ -271,22 +255,14 @@ test("splits an episode at exact source offsets and preserves broadcast duration
       : [];
   expect(lineup).toEqual([
     { type: "content", id: "episode", duration: 448_500, startOffsetMs: 0 },
-    expect.objectContaining({
-      type: "flex",
-      duration: 150_000,
-      fillerConfig: expect.objectContaining({ origin: "midroll" }),
-    }),
+    { type: "content", id: "ad", duration: 60_000 },
     {
       type: "content",
       id: "episode",
       duration: 455_000,
       startOffsetMs: 448_500,
     },
-    expect.objectContaining({
-      type: "flex",
-      duration: 150_000,
-      fillerConfig: expect.objectContaining({ origin: "midroll" }),
-    }),
+    { type: "content", id: "ad", duration: 60_000 },
     {
       type: "content",
       id: "episode",
@@ -299,6 +275,67 @@ test("splits an episode at exact source offsets and preserves broadcast duration
   expect(lineup.reduce((total, item) => total + item.duration, 0)).toBe(
     episodeSchedule.durationMs,
   );
+});
+
+test("materializes mid-roll commercials instead of leaving Tunarr offline flex", () => {
+  const adInventory = Array.from({ length: 5 }, (_, index) => ({
+    id: `ad-${index + 1}`,
+    path: `/media/ad-${index + 1}.mkv`,
+    program: {
+      ...wrapper(`ad-${index + 1}`, `/media/ad-${index + 1}.mkv`),
+      duration: 30_000,
+    },
+  }));
+  const adEntries = adInventory.map((item, index) => ({
+    id: `ad-entry-${index + 1}`,
+    start: new Date(Date.parse("2026-09-13T00:25:30.000Z") + index * 30_000).toISOString(),
+    end: new Date(Date.parse("2026-09-13T00:26:00.000Z") + index * 30_000).toISOString(),
+    localStart: `00:${String(25 + Math.floor((30 + index * 30) / 60)).padStart(2, "0")}`,
+    localEnd: `00:${String(25 + Math.floor((60 + index * 30) / 60)).padStart(2, "0")}`,
+    durationMs: 30_000,
+    kind: "commercial" as const,
+    title: `Ad ${index + 1}`,
+    path: item.path,
+  }));
+  const episodeSchedule: Schedule = {
+    ...schedule,
+    durationMs: 1_680_000,
+    entries: [
+      {
+        id: "episode-entry",
+        start: "2026-09-13T00:00:00.000Z",
+        end: "2026-09-13T00:25:30.000Z",
+        localStart: "00:00",
+        localEnd: "00:25",
+        durationMs: 1_530_000,
+        contentDurationMs: 1_380_000,
+        kind: "episode",
+        title: "Episode",
+        path: "/media/episode.mkv",
+        midrolls: [{ offsetMs: 450_000, durationMs: 150_000 }],
+      },
+      ...adEntries,
+    ],
+  };
+  const plan = buildTunarrSyncPlan(
+    episodeSchedule,
+    [...inventory, ...adInventory],
+    capabilities,
+    { libraryId: "lib", channelId: "7", createChannel: false },
+    snapshots,
+  );
+  expect(plan.syncEligible).toBe(true);
+  const programming = plan.operations.find(
+    (operation) => operation.type === "programming",
+  );
+  const lineup = programming?.type === "programming" ? programming.payload : [];
+  const firstResume = lineup.findIndex(
+    (item) => item.type === "content" && item.startOffsetMs === 450_000,
+  );
+  const midroll = lineup.slice(1, firstResume);
+  expect(midroll).toHaveLength(5);
+  expect(midroll.every((item) => item.type === "content")).toBe(true);
+  expect(midroll.reduce((total, item) => total + item.duration, 0)).toBe(150_000);
 });
 
 test("keeps station IDs out of the mid-roll filler list", () => {
@@ -448,6 +485,35 @@ test("blocks midroll sync when no usable filler list can be created", () => {
   );
   expect(plan.blockingErrors).toContainEqual(
     expect.objectContaining({ code: "MIDROLL_FILLER_UNAVAILABLE" }),
+  );
+});
+
+test("blocks midroll sync when complete spots cannot exactly fill the break", () => {
+  const unfillable: Schedule = {
+    ...schedule,
+    durationMs: 7_440_000,
+    entries: [
+      {
+        ...schedule.entries[0],
+        durationMs: 7_380_000,
+        midrolls: [
+          { offsetMs: 1_800_000, durationMs: 90_000 },
+          { offsetMs: 5_400_000, durationMs: 90_000 },
+        ],
+      },
+      schedule.entries[1],
+    ],
+  };
+  const plan = buildTunarrSyncPlan(
+    unfillable,
+    inventory,
+    capabilities,
+    { libraryId: "lib", channelId: "7", createChannel: false },
+    snapshots,
+  );
+  expect(plan.syncEligible).toBe(false);
+  expect(plan.blockingErrors).toContainEqual(
+    expect.objectContaining({ code: "MIDROLL_EXACT_FILL_UNAVAILABLE" }),
   );
 });
 

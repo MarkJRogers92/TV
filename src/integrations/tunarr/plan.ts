@@ -65,6 +65,7 @@ export type TunarrSyncPlan = {
 
 export const PENDING_FILLER_ID = "__MARKTV_FILLER_ID__";
 const fillerKinds = new Set(["commercial", "filler", "bumper"]);
+type MidrollCandidate = { id: string; duration: number };
 const hash = (value: unknown) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const fillerName = (schedule: Schedule) =>
@@ -168,8 +169,7 @@ function validMidrollLayout(entry: ScheduleEntry) {
 function splitContent(
   entry: ScheduleEntry,
   contentId: string,
-  fillerListId: string,
-  cooldownMs: number,
+  midrollPods: Array<TunarrLineup | undefined>,
 ): TunarrLineup {
   const breaks = entry.midrolls ?? [];
   if (!breaks.length)
@@ -177,7 +177,7 @@ function splitContent(
   const contentDurationMs = entry.contentDurationMs!;
   const lineup: TunarrLineup = [];
   let offset = 0;
-  for (const midroll of breaks) {
+  for (const [index, midroll] of breaks.entries()) {
     if (midroll.offsetMs <= offset) continue;
     lineup.push({
       type: "content",
@@ -185,15 +185,11 @@ function splitContent(
       duration: midroll.offsetMs - offset,
       startOffsetMs: offset,
     });
-    lineup.push({
-      type: "flex",
-      duration: midroll.durationMs,
-      fillerConfig: {
-        fillerListIds: [fillerListId],
-        fillerRepeatCooldownMs: cooldownMs,
-        origin: "midroll",
-      },
-    });
+    lineup.push(
+      ...(midrollPods[index] ?? [
+        { type: "flex" as const, duration: midroll.durationMs },
+      ]),
+    );
     offset = midroll.offsetMs;
   }
   if (offset < contentDurationMs) {
@@ -205,6 +201,55 @@ function splitContent(
     });
   }
   return lineup;
+}
+
+function selectExactMidrollFill(
+  candidates: MidrollCandidate[],
+  targetDuration: number,
+  seed: string,
+): TunarrLineup | undefined {
+  const ordered = [...candidates].sort((left, right) =>
+    hash(`${seed}:${left.id}`).localeCompare(hash(`${seed}:${right.id}`)),
+  );
+
+  const byDuration = new Map<number, MidrollCandidate[]>();
+  for (const candidate of ordered) {
+    const group = byDuration.get(candidate.duration) ?? [];
+    group.push(candidate);
+    byDuration.set(candidate.duration, group);
+  }
+  for (const [duration, group] of byDuration) {
+    const count = targetDuration / duration;
+    if (Number.isInteger(count) && count > 0 && group.length >= count) {
+      return group.slice(0, count).map((candidate) => ({
+        type: "content" as const,
+        id: candidate.id,
+        duration: candidate.duration,
+      }));
+    }
+  }
+
+  const combinations = new Map<number, MidrollCandidate[]>([[0, []]]);
+  for (const candidate of ordered) {
+    const reachable = [...combinations.entries()].sort(
+      ([left], [right]) => right - left,
+    );
+    for (const [duration, selected] of reachable) {
+      const nextDuration = duration + candidate.duration;
+      if (nextDuration > targetDuration || combinations.has(nextDuration))
+        continue;
+      const next = [...selected, candidate];
+      if (nextDuration === targetDuration) {
+        return next.map((item) => ({
+          type: "content" as const,
+          id: item.id,
+          duration: item.duration,
+        }));
+      }
+      combinations.set(nextDuration, next);
+    }
+  }
+  return undefined;
 }
 
 export function resolveFillerId(lineup: TunarrLineup, fillerListId: string) {
@@ -318,6 +363,21 @@ export function buildTunarrSyncPlan(
     (list) => list.id === mapping.fillerListId || list.name === name,
   );
   const matches = new Map<string, TunarrContentProgram>();
+  const entryMatches = new Map<string, TunarrInventory[number]>();
+  const midrollCandidates = new Map<string, MidrollCandidate>();
+  for (const entry of schedule.entries) {
+    if (entry.kind === "flex") continue;
+    const match = matchEntry(entry, inventory, blockingErrors, matchCounts);
+    if (!match) continue;
+    entryMatches.set(entry.id, match);
+    if (fillerKinds.has(entry.kind) && match.program.duration > 0) {
+      matches.set(match.id, match.program);
+      midrollCandidates.set(match.id, {
+        id: match.id,
+        duration: entry.durationMs,
+      });
+    }
+  }
   const lineup: TunarrLineup = [];
   let hasMidroll = false;
   for (const entry of schedule.entries) {
@@ -325,10 +385,9 @@ export function buildTunarrSyncPlan(
       lineup.push({ type: "flex", duration: entry.durationMs });
       continue;
     }
-    const match = matchEntry(entry, inventory, blockingErrors, matchCounts);
+    const match = entryMatches.get(entry.id);
     if (!match) continue;
-    if (fillerKinds.has(entry.kind) && match.program.duration > 0)
-      matches.set(match.id, match.program);
+    let midrollPods: Array<TunarrLineup | undefined> = [];
     if (entry.midrolls?.length) {
       hasMidroll = true;
       if (!validMidrollLayout(entry)) {
@@ -338,15 +397,22 @@ export function buildTunarrSyncPlan(
         });
         continue;
       }
+      midrollPods = entry.midrolls.map((midroll, index) => {
+        const pod = selectExactMidrollFill(
+          [...midrollCandidates.values()],
+          midroll.durationMs,
+          `${schedule.seed}:${entry.id}:${index}`,
+        );
+        if (!pod && midrollCandidates.size) {
+          blockingErrors.push({
+            code: "MIDROLL_EXACT_FILL_UNAVAILABLE",
+            message: `${entry.title} has a ${midroll.durationMs}ms break that cannot be filled with complete matched spots`,
+          });
+        }
+        return pod;
+      });
     }
-    lineup.push(
-      ...splitContent(
-        entry,
-        match.id,
-        knownFiller?.id ?? PENDING_FILLER_ID,
-        (schedule.breakPolicy?.cooldownMinutes ?? 0) * 60_000,
-      ),
-    );
+    lineup.push(...splitContent(entry, match.id, midrollPods));
   }
   const programs = [...matches.values()];
   if (knownFiller) {
