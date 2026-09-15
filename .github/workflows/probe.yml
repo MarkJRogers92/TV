@@ -1,0 +1,21 @@
+name: Probe inode behaviour
+
+# THROWAWAY diagnostic workflow. Exists only to run scripts/probe-inode.mjs on a
+# real Linux runner. Not intended to be merged.
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Measure inode recycling on the CI filesystem
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Run probe
+        run: node scripts/probe-inode.mjs
