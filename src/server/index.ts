@@ -1,18 +1,10 @@
-import fastifyStatic from "@fastify/static";
 import { join } from "node:path";
 import { assertLoopbackHost, buildApp } from "./app.js";
+import { registerStaticUi } from "./staticUi.js";
 
 const app = await buildApp();
 if (process.env.MARKTV_DEV !== "1") {
-  await app.register(fastifyStatic, {
-    root: join(process.cwd(), "dist"),
-    prefix: "/",
-  });
-  app.setNotFoundHandler((request, reply) =>
-    request.url.startsWith("/api/")
-      ? reply.code(404).send({ code: "NOT_FOUND" })
-      : reply.sendFile("index.html"),
-  );
+  await registerStaticUi(app, join(process.cwd(), "dist"));
 }
 
 const host = process.env.MARKTV_HOST ?? "127.0.0.1";
