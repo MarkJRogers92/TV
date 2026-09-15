@@ -726,6 +726,40 @@ describe("POST /api/v1/acquisitions/reviews/:id/select-candidate", () => {
       await app.close();
     }
   });
+
+  test("does not reserve when the Wanted title changes during provider revalidation", async () => {
+    const selected = episodeCandidate("candidate-a");
+    const { app, realDebrid } = await rig({
+      items: [{
+        provider: selected.provider, itemType: selected.itemType, remoteItemId: selected.remoteItemId,
+        originalName: "A Show S01E02 720p", completedAt: NOW,
+        files: [{ provider: selected.provider, itemType: selected.itemType, remoteItemId: selected.remoteItemId, remoteFileId: selected.remoteFileId, originalFilename: selected.filename, remotePath: "display", bytes: selected.sizeBytes }],
+      }],
+    });
+    const database = directDatabase();
+    database.acquisitions.wanted.create(wantedRecord("wanted-e2", 2, "needs-review"));
+    database.acquisitions.reviews.save(episodeReview({ id: "review-title-race", wantedId: "wanted-e2" }));
+    database.close();
+    const originalList = realDebrid.listCompletedItems.bind(realDebrid);
+    realDebrid.listCompletedItems = async () => {
+      const changed = directDatabase();
+      const wanted = changed.acquisitions.wanted.get("wanted-e2")!;
+      changed.acquisitions.wanted.save({ ...wanted, seriesTitle: "Different Show" });
+      changed.close();
+      return originalList();
+    };
+    try {
+      const response = await app.inject({ method: "POST", url: selectCandidateUrl("review-title-race"), payload: { candidateIndex: 0, reviewUpdatedAt: NOW } });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ code: "SELECTION_CONFLICT" });
+      const final = directDatabase();
+      expect(final.acquisitions.jobs.listByWanted("wanted-e2")).toEqual([]);
+      expect(final.acquisitions.reviews.get("review-title-race")).toBeDefined();
+      final.close();
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 describe("DELETE /api/v1/acquisitions/wanted/:id", () => {

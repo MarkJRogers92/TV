@@ -26,7 +26,7 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
   const [episode, setEpisode] = useState("");
   const [episodeTitle, setEpisodeTitle] = useState("");
   const [busy, setBusy] = useState(false);
-  const [selectedCandidates, setSelectedCandidates] = useState<Record<string, number | undefined>>({});
+  const [selectedCandidates, setSelectedCandidates] = useState<Record<string, { candidateIndex: number; reviewUpdatedAt: string } | undefined>>({});
 
   useEffect(() => {
     Promise.all([client.listWanted(), client.listSeasonPacks()])
@@ -66,6 +66,20 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
       window.clearInterval(timer);
     };
   }, [client, wanted]);
+
+  useEffect(() => {
+    const activeReviewVersions = new Map(
+      wanted.flatMap((entry) => entry.review ? [[entry.review.id, entry.review.updatedAt] as const] : []),
+    );
+    setSelectedCandidates((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([reviewId, selection]) =>
+          selection !== undefined && activeReviewVersions.get(reviewId) === selection.reviewUpdatedAt,
+        ),
+      );
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [wanted]);
 
   const refresh = async () => {
     try {
@@ -163,12 +177,12 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
   };
 
   const selectCandidate = async (reviewId: string, reviewUpdatedAt: string) => {
-    const candidateIndex = selectedCandidates[reviewId];
-    if (candidateIndex === undefined) return;
+    const selection = selectedCandidates[reviewId];
+    if (!selection || selection.reviewUpdatedAt !== reviewUpdatedAt) return;
     setActionError("");
     setNotice("");
     try {
-      await client.selectCandidate(reviewId, { candidateIndex, reviewUpdatedAt });
+      await client.selectCandidate(reviewId, { candidateIndex: selection.candidateIndex, reviewUpdatedAt });
       setNotice("Candidate selected and acquisition scheduled.");
       await refresh();
     } catch (caught) {
@@ -268,7 +282,8 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
                       ? ` (${entry.review.candidateCount} candidate(s))`
                       : null}
                   </p>
-                  {entry.review.candidates.length > 0 ? (
+                  {entry.review.candidates.length > 0 &&
+                  (entry.review.kind === "ambiguous" || entry.review.kind === "uncertain-title") ? (
                     <fieldset>
                       <legend>Choose a file deliberately</legend>
                       {entry.review.candidates.map((candidate) => (
@@ -277,10 +292,13 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
                             type="radio"
                             name={`candidate-${entry.review?.id}`}
                             aria-label={`Select ${candidate.filename}`}
-                            checked={selectedCandidates[entry.review!.id] === candidate.candidateIndex}
+                            checked={selectedCandidates[entry.review!.id]?.reviewUpdatedAt === entry.review!.updatedAt && selectedCandidates[entry.review!.id]?.candidateIndex === candidate.candidateIndex}
                             onChange={() => setSelectedCandidates((current) => ({
                               ...current,
-                              [entry.review!.id]: candidate.candidateIndex,
+                              [entry.review!.id]: {
+                                candidateIndex: candidate.candidateIndex,
+                                reviewUpdatedAt: entry.review!.updatedAt,
+                              },
                             }))}
                           />
                           {candidate.filename} · {candidate.provider}
@@ -289,12 +307,14 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
                         </label>
                       ))}
                       <button
-                        disabled={selectedCandidates[entry.review.id] === undefined}
+                        disabled={selectedCandidates[entry.review.id]?.reviewUpdatedAt !== entry.review.updatedAt}
                         onClick={() => void selectCandidate(entry.review!.id, entry.review!.updatedAt)}
                       >
                         Use selected candidate
                       </button>
                     </fieldset>
+                  ) : entry.review.kind === "multi-episode" ? (
+                    <p>This file cannot be selected as a single episode.</p>
                   ) : null}
                 </div>
               ) : null}

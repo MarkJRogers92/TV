@@ -856,7 +856,11 @@ export class AcquisitionCoordinator {
       const currentLocator = review.candidates[candidateIndex];
       if (!currentLocator || !sameReviewCandidate(currentLocator, locator)) return { kind: "stale-review" };
       const wanted = repository.wanted.get(expectedWanted.id);
-      if (!wanted || wanted.status !== "needs-review" || wanted.season !== locator.season || wanted.episode !== locator.episode) return { kind: "conflict" };
+      if (
+        !wanted || wanted.status !== "needs-review" ||
+        wanted.seriesTitle !== expectedWanted.seriesTitle ||
+        wanted.season !== locator.season || wanted.episode !== locator.episode
+      ) return { kind: "conflict" };
       if (repository.jobs.listByWanted(wanted.id).some((job) => !isTerminal(job.state))) return { kind: "conflict" };
       if (repository.imports.findByEpisode(wanted.seriesTitle, wanted.season, wanted.episode)) return { kind: "conflict" };
       if (repository.jobs.findRemote(locator.provider, locator.remoteItemId, locator.remoteFileId)) return { kind: "conflict" };

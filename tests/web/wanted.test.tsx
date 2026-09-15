@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Wanted } from "../../web/pages/Wanted";
 
@@ -96,6 +96,38 @@ test("candidate choices remain unselected until the user deliberately selects on
     candidateIndex: 1,
     reviewUpdatedAt: "2026-09-14T00:00:00.000Z",
   });
+});
+
+test("resets a prior candidate choice when its review is refreshed", async () => {
+  const refreshed = {
+    ...wantedEntry,
+    review: {
+      ...wantedEntry.review,
+      updatedAt: "2026-09-14T00:05:00.000Z",
+      candidates: [wantedEntry.review.candidates[0]],
+    },
+  };
+  const listWanted = vi.fn()
+    .mockResolvedValueOnce([{ ...wantedEntry }])
+    .mockResolvedValueOnce([refreshed]);
+  render(<Wanted client={stubClient({ listWanted }) as never} />);
+  await screen.findByText("Wanted episodes (1)");
+  fireEvent.click(screen.getByLabelText("Select A.Show.S01E02.720p.candidate-b.mkv"));
+  expect(screen.getByRole("button", { name: "Use selected candidate" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Retry job" }));
+  await waitFor(() => expect(screen.queryByLabelText("Select A.Show.S01E02.720p.candidate-b.mkv")).toBeNull());
+  expect(screen.getByRole("button", { name: "Use selected candidate" })).toBeDisabled();
+});
+
+test("does not offer selection controls for a multi-episode review", async () => {
+  const multiEpisode = {
+    ...wantedEntry,
+    review: { ...wantedEntry.review, kind: "multi-episode" },
+  };
+  render(<Wanted client={stubClient({ listWanted: async () => [multiEpisode] }) as never} />);
+  await screen.findByText("Wanted episodes (1)");
+  expect(screen.getByText(/cannot be selected as a single episode/i)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Use selected candidate" })).toBeNull();
 });
 
 test("does not turn blank season or episode inputs into episode zero", async () => {
