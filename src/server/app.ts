@@ -22,6 +22,7 @@ import { registerMediaRoutes } from "./routes/media.js";
 import { registerPoolRoutes } from "./routes/pools.js";
 import { registerScheduleRoutes } from "./routes/schedules.js";
 import { registerTunarrRoutes } from "./routes/tunarr.js";
+import { registerWatchRoutes } from "./routes/watch.js";
 import { ScheduleService, type ExportSchedule } from "./scheduleService.js";
 
 /**
@@ -221,6 +222,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await registerPoolRoutes(app, context);
   await registerScheduleRoutes(app, context);
   await registerTunarrRoutes(app, context);
+  await registerWatchRoutes(app, context);
   // Deterministic startup: recover durable jobs and arm exactly one
   // unreferenced poll timer before the app begins serving.
   try {

@@ -1,5 +1,6 @@
 export const pageNames = [
   "Dashboard",
+  "Watch Live",
   "Channel",
   "Library",
   "Schedule",
@@ -16,12 +17,16 @@ export function Nav({
   current: PageName;
   onNavigate: (page: PageName) => void;
 }) {
+  const hrefFor = (page: PageName) => {
+    if (page === "Dashboard") return "#/";
+    return `#/${page.toLowerCase().replaceAll(" ", "-")}`;
+  };
   return (
     <nav aria-label="Main navigation">
       {pageNames.map((page) => (
         <a
           aria-current={current === page ? "page" : undefined}
-          href={page === "Dashboard" ? "#/" : `#/${page.toLowerCase()}`}
+          href={hrefFor(page)}
           key={page}
           onClick={(event) => {
             event.preventDefault();

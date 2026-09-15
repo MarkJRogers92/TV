@@ -8,10 +8,12 @@ import { Library } from "./pages/Library";
 import { Schedule } from "./pages/Schedule";
 import { Tunarr } from "./pages/Tunarr";
 import { Wanted } from "./pages/Wanted";
+import { WatchLive } from "./pages/WatchLive";
 import type { Channel } from "./types";
 import "./styles.css";
 
 const routePages: Record<string, PageName> = {
+  "watch-live": "Watch Live",
   channel: "Channel",
   library: "Library",
   schedule: "Schedule",
@@ -21,6 +23,10 @@ const routePages: Record<string, PageName> = {
 };
 const pageFromHash = (): PageName =>
   routePages[window.location.hash.replace(/^#\//, "")] ?? "Dashboard";
+const hrefForPage = (page: PageName) =>
+  page === "Dashboard"
+    ? "#/"
+    : `#/${page.toLowerCase().replaceAll(" ", "-")}`;
 
 export function App() {
   const [page, setPage] = useState<PageName>(() => pageFromHash());
@@ -45,13 +51,14 @@ export function App() {
     return () => window.removeEventListener("hashchange", route);
   }, []);
   const navigate = (next: PageName) => {
-    window.location.hash =
-      next === "Dashboard" ? "#/" : `#/${next.toLowerCase()}`;
+    window.location.hash = hrefForPage(next);
     setPage(next);
   };
   const content =
     page === "Dashboard" ? (
       <Dashboard channelId={channelId} />
+    ) : page === "Watch Live" ? (
+      <WatchLive channelId={channelId} />
     ) : page === "Channel" ? (
       <ChannelEditor channelId={channelId} />
     ) : page === "Library" ? (

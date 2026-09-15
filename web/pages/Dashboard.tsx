@@ -25,7 +25,12 @@ export function Dashboard({
           ? `${status.channel.name} · Channel ${status.channel.number}`
           : "Loading channel…"}
       </p>
-      <h2>Dashboard</h2>
+      <div className="dashboard-heading">
+        <h2>Dashboard</h2>
+        <a className="watch-live-button" href="#/watch-live">
+          <span aria-hidden="true">▶</span> Watch Live
+        </a>
+      </div>
       {error ? <p role="alert">{error}</p> : null}
       {status ? (
         <>

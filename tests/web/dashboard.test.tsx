@@ -29,6 +29,10 @@ test("shows selected channel, current clock, preview status, and current program
   expect(await screen.findByText("MarkTV Laughs · Channel 7")).toBeVisible();
   expect(screen.getByText("Preview only")).toBeVisible();
   expect(screen.getByText(/Current time.*18:12/)).toBeVisible();
+  expect(screen.getByRole("link", { name: "Watch Live" })).toHaveAttribute(
+    "href",
+    "#/watch-live",
+  );
   expect(screen.getByRole("heading", { name: "Now Playing" })).toBeVisible();
   expect(screen.getByText("Apartment 4B 1")).toBeVisible();
   expect(screen.getByRole("heading", { name: "Up Next" })).toBeVisible();
