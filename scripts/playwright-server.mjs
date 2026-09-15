@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const dataDir = await mkdtemp(join(tmpdir(), "marktv-playwright-"));
+const port = process.env.MARKTV_PLAYWRIGHT_PORT ?? "4177";
 const server = spawn(process.execPath, ["dist-server/src/server/index.js"], {
   cwd: process.cwd(),
-  env: { ...process.env, MARKTV_DATA_DIR: dataDir, MARKTV_PORT: "4177" },
+  env: { ...process.env, MARKTV_DATA_DIR: dataDir, MARKTV_PORT: port },
   stdio: "inherit",
 });
 let stopping = false;

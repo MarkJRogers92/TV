@@ -110,3 +110,35 @@ test("persists multiple primary and fallback pools plus each pool's selection se
     expect.objectContaining({ id: "apartment-4b", mode: "shuffle" }),
   );
 });
+
+test("enables and configures two episode mid-show breaks", async () => {
+  const seeded = demo();
+  seeded.channel.slots[1].episodeMidroll = undefined;
+  const client = {
+    getChannel: vi.fn(async () => seeded.channel),
+    listPools: vi.fn(async () => seeded.pools),
+    updateChannel: vi.fn(async (channel) => channel),
+    updatePool: vi.fn(async (pool) => pool),
+  };
+  render(<ChannelEditor client={client as never} channelId="marktv-laughs" />);
+  await screen.findByLabelText("Channel name");
+  fireEvent.click(screen.getByLabelText("Slot 2 episode mid-show breaks"));
+  fireEvent.change(screen.getByLabelText("Slot 2 first break target minutes"), {
+    target: { value: "7.25" },
+  });
+  fireEvent.change(screen.getByLabelText("Slot 2 search window minutes"), {
+    target: { value: "1.5" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save channel" }));
+
+  await waitFor(() => expect(client.updateChannel).toHaveBeenCalled());
+  expect(client.updateChannel.mock.calls[0][0].slots[1].episodeMidroll).toEqual(
+    {
+      targetMinutes: [7.25, 15],
+      searchWindowMinutes: 1.5,
+      breakMinutes: 2.5,
+      minimumSegmentMinutes: 2,
+      tailBufferMinutes: 2,
+    },
+  );
+});

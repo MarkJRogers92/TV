@@ -147,6 +147,20 @@ export function validateChannelConfiguration(
           "Movie mid-roll values must be valid non-negative durations and counts",
       });
     }
+    if (slot.movieMidroll && slot.kind !== "movie") {
+      issues.push({
+        code: "INVALID_BREAK_POLICY",
+        path: `slots.${slot.id}.movieMidroll`,
+        message: "Movie mid-roll policies may only be used by movie slots",
+      });
+    }
+    if (slot.episodeMidroll && slot.kind !== "episode") {
+      issues.push({
+        code: "INVALID_BREAK_POLICY",
+        path: `slots.${slot.id}.episodeMidroll`,
+        message: "Episode mid-roll policies may only be used by episode slots",
+      });
+    }
   }
   channel.breakPolicy.poolIds.forEach((poolId) =>
     requirePool(poolId, "breakPolicy.poolIds"),

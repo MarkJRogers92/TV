@@ -64,7 +64,7 @@ export type TunarrSyncPlan = {
 };
 
 export const PENDING_FILLER_ID = "__MARKTV_FILLER_ID__";
-const fillerKinds = new Set(["commercial", "filler", "bumper", "station-id"]);
+const fillerKinds = new Set(["commercial", "filler", "bumper"]);
 const hash = (value: unknown) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const fillerName = (schedule: Schedule) =>
@@ -139,22 +139,42 @@ function matchEntry(
   return matches[0];
 }
 
-function splitMovie(
+function validMidrollLayout(entry: ScheduleEntry) {
+  const breaks = entry.midrolls ?? [];
+  if (!breaks.length) return true;
+  if (entry.kind !== "episode" && entry.kind !== "movie") return false;
+  if (!entry.contentDurationMs || entry.contentDurationMs <= 0) return false;
+  if (
+    entry.contentDurationMs +
+      breaks.reduce((total, midroll) => total + midroll.durationMs, 0) !==
+    entry.durationMs
+  )
+    return false;
+  let previousOffset = 0;
+  for (const midroll of breaks) {
+    if (
+      !Number.isInteger(midroll.offsetMs) ||
+      !Number.isInteger(midroll.durationMs) ||
+      midroll.durationMs <= 0 ||
+      midroll.offsetMs <= previousOffset ||
+      midroll.offsetMs >= entry.contentDurationMs
+    )
+      return false;
+    previousOffset = midroll.offsetMs;
+  }
+  return true;
+}
+
+function splitContent(
   entry: ScheduleEntry,
   contentId: string,
   fillerListId: string,
   cooldownMs: number,
 ): TunarrLineup {
-  const breaks = [...(entry.midrolls ?? [])]
-    .filter(
-      (midroll) =>
-        midroll.offsetMs > 0 &&
-        midroll.offsetMs < entry.durationMs &&
-        midroll.durationMs > 0,
-    )
-    .sort((left, right) => left.offsetMs - right.offsetMs);
+  const breaks = entry.midrolls ?? [];
   if (!breaks.length)
     return [{ type: "content", id: contentId, duration: entry.durationMs }];
+  const contentDurationMs = entry.contentDurationMs!;
   const lineup: TunarrLineup = [];
   let offset = 0;
   for (const midroll of breaks) {
@@ -176,11 +196,11 @@ function splitMovie(
     });
     offset = midroll.offsetMs;
   }
-  if (offset < entry.durationMs) {
+  if (offset < contentDurationMs) {
     lineup.push({
       type: "content",
       id: contentId,
-      duration: entry.durationMs - offset,
+      duration: contentDurationMs - offset,
       startOffsetMs: offset,
     });
   }
@@ -307,10 +327,20 @@ export function buildTunarrSyncPlan(
     }
     const match = matchEntry(entry, inventory, blockingErrors, matchCounts);
     if (!match) continue;
-    if (fillerKinds.has(entry.kind)) matches.set(match.id, match.program);
-    if (entry.kind === "movie" && entry.midrolls?.length) hasMidroll = true;
+    if (fillerKinds.has(entry.kind) && match.program.duration > 0)
+      matches.set(match.id, match.program);
+    if (entry.midrolls?.length) {
+      hasMidroll = true;
+      if (!validMidrollLayout(entry)) {
+        blockingErrors.push({
+          code: "INVALID_MIDROLL_LAYOUT",
+          message: `${entry.title} has unsafe or inconsistent mid-roll timing`,
+        });
+        continue;
+      }
+    }
     lineup.push(
-      ...splitMovie(
+      ...splitContent(
         entry,
         match.id,
         knownFiller?.id ?? PENDING_FILLER_ID,
@@ -332,6 +362,28 @@ export function buildTunarrSyncPlan(
     blockingErrors.push({
       code: "MIDROLL_FILLER_UNAVAILABLE",
       message: "Mid-roll breaks require at least one matched filler program",
+    });
+  }
+  const entryDurationMs = schedule.entries.reduce(
+    (total, entry) => total + entry.durationMs,
+    0,
+  );
+  if (entryDurationMs !== schedule.durationMs) {
+    blockingErrors.push({
+      code: "SCHEDULE_DURATION_MISMATCH",
+      message:
+        "Schedule entries do not add up to the declared schedule duration",
+    });
+  }
+  const lineupDurationMs = lineup.reduce(
+    (total, item) => total + item.duration,
+    0,
+  );
+  if (lineupDurationMs !== schedule.durationMs) {
+    blockingErrors.push({
+      code: "LINEUP_DURATION_MISMATCH",
+      message:
+        "Tunarr lineup duration does not exactly match the MarkTV schedule",
     });
   }
   operations.push({

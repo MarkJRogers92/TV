@@ -82,6 +82,36 @@ export const movieMidrollSchema = z.object({
   strategy: z.enum(["lazy", "eager"]),
 });
 
+export const episodeMidrollSchema = z
+  .object({
+    targetMinutes: z.tuple([z.number().positive(), z.number().positive()]),
+    searchWindowMinutes: z.number().positive(),
+    breakMinutes: z.number().positive(),
+    minimumSegmentMinutes: z.number().positive(),
+    tailBufferMinutes: z.number().positive(),
+  })
+  .superRefine((policy, context) => {
+    if (policy.targetMinutes[0] >= policy.targetMinutes[1]) {
+      context.addIssue({
+        code: "custom",
+        path: ["targetMinutes"],
+        message: "Episode break targets must be unique and increasing",
+      });
+    }
+    if (
+      policy.targetMinutes[0] < policy.minimumSegmentMinutes ||
+      policy.targetMinutes[1] - policy.targetMinutes[0] <
+        policy.minimumSegmentMinutes
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["targetMinutes"],
+        message: "Episode break targets must preserve minimum content segments",
+      });
+    }
+  });
+export type EpisodeMidrollPolicy = z.infer<typeof episodeMidrollSchema>;
+
 export const slotSchema = z.object({
   id: z.string().min(1),
   daypartId: z.string().optional(),
@@ -92,6 +122,7 @@ export const slotSchema = z.object({
   fallbackPoolIds: z.array(z.string()).default([]),
   allowCooldownRelaxation: z.boolean().optional(),
   movieMidroll: movieMidrollSchema.optional(),
+  episodeMidroll: episodeMidrollSchema.optional(),
 });
 export type SlotRule = z.infer<typeof slotSchema>;
 
@@ -136,6 +167,7 @@ export const scheduleEntrySchema = z
     localStart: localTimeSchema,
     localEnd: localTimeSchema,
     durationMs: z.number().int().positive(),
+    contentDurationMs: z.number().int().positive().optional(),
     kind: z.union([z.enum(mediaKinds), z.literal("flex")]),
     title: z.string().min(1),
     mediaId: z.string().optional(),
@@ -168,6 +200,54 @@ export const scheduleEntrySchema = z
         code: "custom",
         path: ["mediaId"],
         message: "Program entries require a media ID",
+      });
+    }
+    if (entry.midrolls?.length) {
+      if (entry.kind !== "episode" && entry.kind !== "movie") {
+        context.addIssue({
+          code: "custom",
+          path: ["midrolls"],
+          message: "Only episode and movie entries may have mid-rolls",
+        });
+      }
+      const breakDurationMs = entry.midrolls.reduce(
+        (total, midroll) => total + midroll.durationMs,
+        0,
+      );
+      if (
+        entry.contentDurationMs !== undefined &&
+        entry.contentDurationMs + breakDurationMs !== entry.durationMs
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["durationMs"],
+          message: "Mid-roll broadcast duration must equal content plus breaks",
+        });
+      }
+      const sourceDurationMs = entry.contentDurationMs ?? entry.durationMs;
+      let previousOffset = 0;
+      entry.midrolls.forEach((midroll, index) => {
+        if (
+          midroll.offsetMs <= previousOffset ||
+          midroll.offsetMs >= sourceDurationMs
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["midrolls", index, "offsetMs"],
+            message:
+              "Mid-roll offsets must be unique, increasing, and inside the source content",
+          });
+        }
+        previousOffset = midroll.offsetMs;
+      });
+    } else if (
+      entry.contentDurationMs !== undefined &&
+      entry.contentDurationMs !== entry.durationMs
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["contentDurationMs"],
+        message: "Content duration may differ only when mid-rolls are present",
       });
     }
   });

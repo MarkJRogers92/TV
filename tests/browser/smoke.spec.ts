@@ -30,7 +30,7 @@ test("runs the seeded admin workflow without browser errors", async ({
 
   for (const name of ["Channel", "Library", "Tunarr"] as const) {
     await page.getByRole("link", { name }).click();
-    await expect(page.getByRole("heading", { name })).toBeVisible();
+    await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   }
 
   await page.getByRole("link", { name: "Wanted" }).click();

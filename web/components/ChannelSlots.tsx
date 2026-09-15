@@ -1,5 +1,9 @@
 import type { Channel, Pool } from "../types";
 import { MovieMidrollFields } from "./MovieMidrollFields";
+import {
+  defaultEpisodeMidroll,
+  EpisodeMidrollFields,
+} from "./EpisodeMidrollFields";
 
 const numberValue = (value: string) => Number(value) || 0;
 
@@ -139,6 +143,31 @@ export function ChannelSlots({
             <MovieMidrollFields
               midroll={slot.movieMidroll}
               onChange={(movieMidroll) => changeSlot(index, { movieMidroll })}
+            />
+          ) : null}
+          {slot.kind === "episode" ? (
+            <label>
+              <input
+                type="checkbox"
+                checked={Boolean(slot.episodeMidroll)}
+                onChange={(event) =>
+                  changeSlot(index, {
+                    episodeMidroll: event.target.checked
+                      ? defaultEpisodeMidroll
+                      : undefined,
+                  })
+                }
+              />{" "}
+              Slot {index + 1} episode mid-show breaks
+            </label>
+          ) : null}
+          {slot.episodeMidroll ? (
+            <EpisodeMidrollFields
+              labelPrefix={`Slot ${index + 1}`}
+              midroll={slot.episodeMidroll}
+              onChange={(episodeMidroll) =>
+                changeSlot(index, { episodeMidroll })
+              }
             />
           ) : null}
           <button

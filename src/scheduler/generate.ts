@@ -14,6 +14,10 @@ import type {
   ScheduleEntry,
   SlotRule,
 } from "../domain/models.js";
+import {
+  episodeBreakAnalysisKey,
+  type EpisodeBreakAnalysis,
+} from "../media/episodeBreaks.js";
 import { validateChannelConfiguration } from "../domain/validation.js";
 import { fillToBoundary } from "./fill.js";
 import { createSeededRandom, fingerprint } from "./random.js";
@@ -26,6 +30,7 @@ export type GenerateScheduleInput = {
   date: string;
   history?: Played[];
   now?: Date;
+  episodeBreakAnalyses?: Record<string, EpisodeBreakAnalysis>;
 };
 export type ScheduleGenerationResult =
   | { ok: true; schedule: Schedule; diagnostics: ScheduleDiagnostic[] }
@@ -80,6 +85,11 @@ function generationFingerprint(input: GenerateScheduleInput) {
         left.at.localeCompare(right.at) ||
         left.mediaId.localeCompare(right.mediaId),
     ),
+    episodeBreakAnalyses: Object.fromEntries(
+      Object.entries(input.episodeBreakAnalyses ?? {}).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    ),
   });
 }
 
@@ -98,24 +108,71 @@ function resolveSlot(channel: Channel, at: DateTime): SlotRule | undefined {
   );
 }
 
-function attachMidrolls(
-  entry: ScheduleEntry,
+function buildMidrolls(
   slot: SlotRule,
+  mediaId: string,
   durationMs: number,
-) {
-  const policy = slot.movieMidroll;
-  if (!policy || durationMs < policy.minimumMinutes * 60_000) return;
-  const intervalMs = policy.intervalMinutes * 60_000;
-  const breakMs = policy.breakMinutes * 60_000;
-  const latestEnd = durationMs - policy.tailBufferMinutes * 60_000;
-  entry.midrolls = [];
-  for (
-    let offsetMs = intervalMs;
-    entry.midrolls.length < policy.maxBreaks && offsetMs + breakMs <= latestEnd;
-    offsetMs += intervalMs
-  ) {
-    entry.midrolls.push({ offsetMs, durationMs: breakMs });
+  analyses: Record<string, EpisodeBreakAnalysis> | undefined,
+): {
+  midrolls: NonNullable<ScheduleEntry["midrolls"]>;
+  fallbacks: number[];
+  unsafe?: boolean;
+} {
+  if (slot.movieMidroll) {
+    const policy = slot.movieMidroll;
+    if (durationMs < policy.minimumMinutes * 60_000)
+      return { midrolls: [], fallbacks: [] };
+    const intervalMs = policy.intervalMinutes * 60_000;
+    const breakMs = policy.breakMinutes * 60_000;
+    const latestEnd = durationMs - policy.tailBufferMinutes * 60_000;
+    const midrolls: NonNullable<ScheduleEntry["midrolls"]> = [];
+    for (
+      let offsetMs = intervalMs;
+      midrolls.length < policy.maxBreaks && offsetMs + breakMs <= latestEnd;
+      offsetMs += intervalMs
+    ) {
+      midrolls.push({ offsetMs, durationMs: breakMs });
+    }
+    return { midrolls, fallbacks: [] };
   }
+  if (!slot.episodeMidroll) return { midrolls: [], fallbacks: [] };
+  const policy = slot.episodeMidroll;
+  const targetsMs = policy.targetMinutes.map((minutes) =>
+    Math.round(Number(minutes) * 60_000),
+  );
+  const analysis = analyses?.[episodeBreakAnalysisKey(mediaId, policy)] ??
+    analyses?.[mediaId] ?? {
+      offsetsMs: targetsMs,
+      fallbackTargetIndexes: targetsMs.map((_, index) => index),
+    };
+  const minimumSegmentMs = Math.round(policy.minimumSegmentMinutes * 60_000);
+  const tailBufferMs = Math.round(policy.tailBufferMinutes * 60_000);
+  const searchWindowMs = Math.round(policy.searchWindowMinutes * 60_000);
+  const offsetsAreSafe =
+    analysis.offsetsMs.length === targetsMs.length &&
+    analysis.offsetsMs.every(
+      (offset, index) =>
+        Number.isInteger(offset) &&
+        offset > 0 &&
+        Math.abs(offset - targetsMs[index]) <= searchWindowMs &&
+        offset - (analysis.offsetsMs[index - 1] ?? 0) >= minimumSegmentMs,
+    ) &&
+    durationMs - analysis.offsetsMs.at(-1)! >= tailBufferMs;
+  if (!offsetsAreSafe) return { midrolls: [], fallbacks: [], unsafe: true };
+  return {
+    midrolls: analysis.offsetsMs.map((offsetMs) => ({
+      offsetMs,
+      durationMs: Math.round(policy.breakMinutes * 60_000),
+    })),
+    fallbacks: analysis.fallbackTargetIndexes,
+  };
+}
+
+function strictNextBoundary(at: DateTime, boundaryMinutes: number) {
+  const elapsedBoundaries = Math.floor(at.minute / boundaryMinutes) + 1;
+  return at.startOf("hour").plus({
+    minutes: elapsedBoundaries * boundaryMinutes,
+  });
 }
 
 function nextBoundary(at: DateTime, boundaryMinutes: number) {
@@ -185,7 +242,7 @@ export function generateSchedule(
       : result.error.issues.map((issue) => {
           const path = issue.path.join(".");
           return {
-            code: path.includes("movieMidroll")
+            code: /(?:movie|episode)Midroll/.test(path)
               ? ("INVALID_BREAK_POLICY" as const)
               : ("INVALID_CONFIGURATION" as const),
             path,
@@ -335,7 +392,38 @@ export function generateSchedule(
       continue;
     }
 
-    const finish = at.plus({ milliseconds: chosen.durationMs });
+    const attached = buildMidrolls(
+      slot,
+      chosen.id,
+      chosen.durationMs,
+      input.episodeBreakAnalyses,
+    );
+    let midrolls = attached.midrolls;
+    let broadcastDurationMs =
+      chosen.durationMs +
+      midrolls.reduce((total, midroll) => total + midroll.durationMs, 0);
+    if (
+      slot.kind === "episode" &&
+      midrolls.length &&
+      at.plus({ milliseconds: broadcastDurationMs }) >
+        strictNextBoundary(at, input.channel.breakPolicy.boundaryMinutes)
+    ) {
+      diagnostics.push({
+        code: "EPISODE_BREAKS_SKIPPED_BLOCK_OVERFLOW",
+        message: `${chosen.title} plus its mid-show breaks cannot fit before the next schedule boundary`,
+        mediaId: chosen.id,
+      });
+      midrolls = [];
+      broadcastDurationMs = chosen.durationMs;
+    }
+    if (attached.unsafe) {
+      diagnostics.push({
+        code: "EPISODE_BREAKS_SKIPPED_UNSAFE_OFFSETS",
+        message: `${chosen.title} cannot satisfy the configured content and tail buffers`,
+        mediaId: chosen.id,
+      });
+    }
+    const finish = at.plus({ milliseconds: broadcastDurationMs });
     if (finish > dayEnd) {
       entries.push(
         flexEntry(at, dayEnd, "Selected program exceeds broadcast day", {
@@ -357,7 +445,7 @@ export function generateSchedule(
       end: finish.toUTC().toISO()!,
       localStart: localTime(at),
       localEnd: localTime(finish),
-      durationMs: chosen.durationMs,
+      durationMs: broadcastDurationMs,
       kind: chosen.kind,
       title: chosen.title,
       mediaId: chosen.id,
@@ -371,7 +459,17 @@ export function generateSchedule(
         primaryCandidates.length > 1,
       ),
     };
-    attachMidrolls(entry, slot, chosen.durationMs);
+    if (midrolls.length) {
+      entry.contentDurationMs = chosen.durationMs;
+      entry.midrolls = midrolls;
+      for (const targetIndex of attached.fallbacks) {
+        diagnostics.push({
+          code: "EPISODE_BREAK_FALLBACK",
+          message: `${chosen.title} break ${targetIndex + 1} used the configured target because no safe black transition was detected`,
+          mediaId: chosen.id,
+        });
+      }
+    }
     entries.push(entry);
     history.push({ mediaId: chosen.id, at: entry.start });
     at = finish;

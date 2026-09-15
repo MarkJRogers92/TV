@@ -17,13 +17,13 @@ Enter the Tunarr URL and library ID. For an existing channel, enter its channel 
 
 Sync is enabled only for an eligible dry run. Any edited input invalidates it. Immediately before the first mutation, MarkTV fetches every snapshot again and compares a fingerprint containing the complete MarkTV schedule, mapping inputs, Tunarr version/capabilities, channel state, filler state, transcode configurations, and inventory. A stale or changed snapshot returns `STALE_DRY_RUN` before writing anything.
 
-The mutation order is channel create/update, filler-list create/update, then manual programming. A new channel uses conservative required `SaveableChannel` values and the user-supplied transcode configuration. An existing channel keeps its required Tunarr fields while applying the MarkTV name, number, duration, and start time. The filler list name is deterministic per MarkTV channel and contains the matched official `ContentProgram` wrappers for commercial, filler, bumper, and station-ID entries. Returned channel and filler IDs are resolved before dependent operations. On the first HTTP failure, MarkTV stops and reports completed operations and the IDs already resolved.
+The mutation order is channel create/update, filler-list create/update, then manual programming. A new channel uses conservative required `SaveableChannel` values and the user-supplied transcode configuration. An existing channel keeps its required Tunarr fields while applying the MarkTV name, number, duration, and start time. The mid-roll filler list name is deterministic per MarkTV channel and contains matched official `ContentProgram` wrappers for commercials, general filler, and bumpers. Station IDs remain explicit scheduled content and are not eligible inside mid-show breaks. Returned channel and filler IDs are resolved before dependent operations. On the first HTTP failure, MarkTV stops and reports completed operations and the IDs already resolved.
 
-## Movie mid-rolls
+## Episode and movie mid-rolls
 
-For a scheduled movie with mid-roll metadata, MarkTV splits the same matched Tunarr content ID into positive-duration content segments with exact `startOffsetMs` values. It inserts positive flex entries between them with the resolved filler-list ID, the channel break cooldown, and `origin: "midroll"`. Invalid or duplicate offsets are skipped safely; content never extends beyond the movie duration. A movie mid-roll blocks the dry run if no matched filler program is available.
+For a scheduled episode or movie with mid-roll metadata, MarkTV splits the same matched Tunarr content ID into positive-duration content segments with exact `startOffsetMs` values. It inserts positive flex entries between them with the resolved filler-list ID, the channel break cooldown, and `origin: "midroll"`. The original file is never cut or re-encoded. The schedule entry records source-content duration separately from broadcast duration; content plus every inserted break must equal the wall-clock entry duration.
 
-Ordinary non-movie and scheduled interstitial entries remain ordered content items. Existing flex entries remain flex items.
+Duplicate, unordered, non-positive, out-of-range, or duration-inconsistent break layouts block the dry run. Mid-rolls also block when there is no matched positive-duration filler program or when the complete Tunarr lineup duration differs from MarkTV's schedule. Ordinary unsplit programs and scheduled interstitial entries remain ordered content items. Existing flex entries remain flex items.
 
 ## Recovery and limitations
 
@@ -32,6 +32,8 @@ Ordinary non-movie and scheduled interstitial entries remain ordered content ite
 - `PLACEHOLDER_MEDIA`: replace preview media with a real scanned file and regenerate.
 - `TRANSCODE_CONFIG_REQUIRED` or `TRANSCODE_CONFIG_NOT_FOUND`: choose an existing Tunarr configuration ID.
 - `MIDROLL_FILLER_UNAVAILABLE`: add matching filler media to both applications and regenerate.
+- `INVALID_MIDROLL_LAYOUT`: regenerate; the stored break offsets or broadcast accounting are unsafe.
+- `LINEUP_DURATION_MISMATCH` or `SCHEDULE_DURATION_MISMATCH`: do not sync; regenerate and review unmatched media or timing diagnostics.
 - `UNSUPPORTED_SCHEMA` or a capability blocker: do not bypass the guard. Record the Tunarr version and review/update the adapter against Tunarr's current API before retrying.
 - A partial failure may leave a channel or filler list created/updated. Review the returned completed operations and IDs, then run a new dry run; MarkTV never replays a stored operation blindly.
 

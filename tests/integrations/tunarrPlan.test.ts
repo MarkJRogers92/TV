@@ -37,6 +37,16 @@ const inventory: TunarrInventory = [
     path: "/media/ad.mkv",
     program: wrapper("ad", "/media/ad.mkv"),
   },
+  {
+    id: "episode",
+    path: "/media/episode.mkv",
+    program: wrapper("episode", "/media/episode.mkv"),
+  },
+  {
+    id: "station-id",
+    path: "/media/station-id.mkv",
+    program: wrapper("station-id", "/media/station-id.mkv"),
+  },
 ];
 const existingChannel = {
   id: "7",
@@ -92,7 +102,7 @@ const schedule: Schedule = {
   seed: "seed",
   revision: "revision-1",
   generatedAt: "2026-09-13T00:00:00.000Z",
-  durationMs: 7_260_000,
+  durationMs: 7_380_000,
   diagnostics: [],
   breakPolicy: {
     boundaryMinutes: 15,
@@ -104,10 +114,11 @@ const schedule: Schedule = {
     {
       id: "movie-entry",
       start: "2026-09-13T00:00:00.000Z",
-      end: "2026-09-13T02:00:00.000Z",
+      end: "2026-09-13T02:02:00.000Z",
       localStart: "00:00",
-      localEnd: "02:00",
-      durationMs: 7_200_000,
+      localEnd: "02:02",
+      durationMs: 7_320_000,
+      contentDurationMs: 7_200_000,
       kind: "movie",
       title: "Movie",
       path: "/media/movie.mkv",
@@ -118,10 +129,10 @@ const schedule: Schedule = {
     },
     {
       id: "ad-entry",
-      start: "2026-09-13T02:00:00.000Z",
-      end: "2026-09-13T02:01:00.000Z",
-      localStart: "02:00",
-      localEnd: "02:01",
+      start: "2026-09-13T02:02:00.000Z",
+      end: "2026-09-13T02:03:00.000Z",
+      localStart: "02:02",
+      localEnd: "02:03",
       durationMs: 60_000,
       kind: "commercial",
       title: "Ad",
@@ -199,6 +210,192 @@ test("plans channel/filler updates and the exact midroll lineup", () => {
     { type: "content", id: "ad", duration: 60_000 },
   ]);
 });
+
+test("splits an episode at exact source offsets and preserves broadcast duration", () => {
+  const episodeSchedule: Schedule = {
+    ...schedule,
+    durationMs: 1_800_000,
+    entries: [
+      {
+        id: "episode-entry",
+        start: "2026-09-13T00:00:00.000Z",
+        end: "2026-09-13T00:28:00.000Z",
+        localStart: "00:00",
+        localEnd: "00:28",
+        durationMs: 1_680_000,
+        contentDurationMs: 1_380_000,
+        kind: "episode",
+        title: "Episode",
+        path: "/media/episode.mkv",
+        midrolls: [
+          { offsetMs: 448_500, durationMs: 150_000 },
+          { offsetMs: 903_500, durationMs: 150_000 },
+        ],
+      },
+      {
+        id: "ad-entry",
+        start: "2026-09-13T00:28:00.000Z",
+        end: "2026-09-13T00:29:00.000Z",
+        localStart: "00:28",
+        localEnd: "00:29",
+        durationMs: 60_000,
+        kind: "commercial",
+        title: "Ad",
+        path: "/media/ad.mkv",
+      },
+      {
+        id: "flex-entry",
+        start: "2026-09-13T00:29:00.000Z",
+        end: "2026-09-13T00:30:00.000Z",
+        localStart: "00:29",
+        localEnd: "00:30",
+        durationMs: 60_000,
+        kind: "flex",
+        title: "Flexible programming",
+      },
+    ],
+  };
+  const plan = buildTunarrSyncPlan(
+    episodeSchedule,
+    inventory,
+    capabilities,
+    { libraryId: "lib", channelId: "7", createChannel: false },
+    snapshots,
+  );
+  expect(plan.syncEligible).toBe(true);
+  const programmingOperation = plan.operations.at(-1)!;
+  expect(programmingOperation.type).toBe("programming");
+  const lineup =
+    programmingOperation.type === "programming"
+      ? programmingOperation.payload
+      : [];
+  expect(lineup).toEqual([
+    { type: "content", id: "episode", duration: 448_500, startOffsetMs: 0 },
+    expect.objectContaining({
+      type: "flex",
+      duration: 150_000,
+      fillerConfig: expect.objectContaining({ origin: "midroll" }),
+    }),
+    {
+      type: "content",
+      id: "episode",
+      duration: 455_000,
+      startOffsetMs: 448_500,
+    },
+    expect.objectContaining({
+      type: "flex",
+      duration: 150_000,
+      fillerConfig: expect.objectContaining({ origin: "midroll" }),
+    }),
+    {
+      type: "content",
+      id: "episode",
+      duration: 476_500,
+      startOffsetMs: 903_500,
+    },
+    { type: "content", id: "ad", duration: 60_000 },
+    { type: "flex", duration: 60_000 },
+  ]);
+  expect(lineup.reduce((total, item) => total + item.duration, 0)).toBe(
+    episodeSchedule.durationMs,
+  );
+});
+
+test("keeps station IDs out of the mid-roll filler list", () => {
+  const withStationId: Schedule = {
+    ...schedule,
+    durationMs: schedule.durationMs + 60_000,
+    entries: [
+      ...schedule.entries,
+      {
+        id: "station-id-entry",
+        start: "2026-09-13T02:03:00.000Z",
+        end: "2026-09-13T02:04:00.000Z",
+        localStart: "02:03",
+        localEnd: "02:04",
+        durationMs: 60_000,
+        kind: "station-id",
+        title: "Station ID",
+        path: "/media/station-id.mkv",
+      },
+    ],
+  };
+  const plan = buildTunarrSyncPlan(
+    withStationId,
+    inventory,
+    capabilities,
+    { libraryId: "lib", channelId: "7", createChannel: false },
+    snapshots,
+  );
+  const filler = plan.operations.find(
+    (operation) => operation.type === "filler-update",
+  );
+  expect(filler?.type === "filler-update" && filler.payload.programs).toEqual([
+    wrapper("ad", "/media/ad.mkv"),
+  ]);
+});
+
+test.each([
+  {
+    name: "duplicate offsets",
+    midrolls: [
+      { offsetMs: 450_000, durationMs: 150_000 },
+      { offsetMs: 450_000, durationMs: 150_000 },
+    ],
+    contentDurationMs: 1_380_000,
+    durationMs: 1_680_000,
+  },
+  {
+    name: "offset beyond source duration",
+    midrolls: [{ offsetMs: 1_400_000, durationMs: 150_000 }],
+    contentDurationMs: 1_380_000,
+    durationMs: 1_530_000,
+  },
+  {
+    name: "broadcast runtime mismatch",
+    midrolls: [{ offsetMs: 450_000, durationMs: 150_000 }],
+    contentDurationMs: 1_380_000,
+    durationMs: 1_380_000,
+  },
+  {
+    name: "legacy mid-roll without explicit source duration",
+    midrolls: [{ offsetMs: 450_000, durationMs: 150_000 }],
+    contentDurationMs: undefined,
+    durationMs: 1_380_000,
+  },
+])(
+  "blocks $name instead of silently rewriting the content",
+  ({ midrolls, contentDurationMs, durationMs }) => {
+    const invalid = {
+      ...schedule,
+      durationMs,
+      entries: [
+        {
+          ...schedule.entries[0],
+          kind: "episode" as const,
+          path: "/media/episode.mkv",
+          durationMs,
+          contentDurationMs,
+          end: new Date(
+            Date.parse(schedule.entries[0].start) + durationMs,
+          ).toISOString(),
+          midrolls,
+        },
+      ],
+    };
+    const plan = buildTunarrSyncPlan(
+      invalid,
+      inventory,
+      capabilities,
+      { libraryId: "lib", channelId: "7", createChannel: false },
+      snapshots,
+    );
+    expect(plan.syncEligible).toBe(false);
+    expect(plan.blockingErrors).toContainEqual(
+      expect.objectContaining({ code: "INVALID_MIDROLL_LAYOUT" }),
+    );
+  },
+);
 
 test("blocks channel creation without a verified transcode and plans safe defaults", () => {
   const baseMapping = { libraryId: "lib", createChannel: true };
@@ -341,18 +538,16 @@ test("blocks a valid HTTP health response that reports an unhealthy subsystem", 
 });
 
 test("normalizes library IDs by trimming and deduplicating", async () => {
-  const mod = (await import(
-    "../../src/integrations/tunarr/types.js"
-  )) as unknown as {
-    normalizeLibraryIds: (ids: unknown) => string[];
-    resolveLibraryIds: (input: unknown) => string[];
-  };
+  const mod =
+    (await import("../../src/integrations/tunarr/types.js")) as unknown as {
+      normalizeLibraryIds: (ids: unknown) => string[];
+      resolveLibraryIds: (input: unknown) => string[];
+    };
   expect(typeof mod.normalizeLibraryIds).toBe("function");
   expect(typeof mod.resolveLibraryIds).toBe("function");
-  expect(mod.normalizeLibraryIds([" lib-a ", "lib-a", "lib-b ", "", "  "])).toEqual([
-    "lib-a",
-    "lib-b",
-  ]);
+  expect(
+    mod.normalizeLibraryIds([" lib-a ", "lib-a", "lib-b ", "", "  "]),
+  ).toEqual(["lib-a", "lib-b"]);
   expect(mod.resolveLibraryIds({ libraryId: "lib" })).toEqual(["lib"]);
   expect(mod.resolveLibraryIds({ libraryIds: [" b ", "a", "b"] })).toEqual([
     "b",
@@ -364,17 +559,21 @@ test("normalizes library IDs by trimming and deduplicating", async () => {
 });
 
 test("preserves canonical libraryIds in the sync plan mapping", async () => {
-  const mod = (await import(
-    "../../src/integrations/tunarr/types.js"
-  )) as unknown as {
-    resolveLibraryIds: (input: unknown) => string[];
-  };
+  const mod =
+    (await import("../../src/integrations/tunarr/types.js")) as unknown as {
+      resolveLibraryIds: (input: unknown) => string[];
+    };
   const canonical = mod.resolveLibraryIds({ libraryIds: ["lib-a", "lib-b"] });
   const plan = buildTunarrSyncPlan(
     schedule,
     inventory,
     capabilities,
-    { libraryId: canonical[0], libraryIds: canonical, channelId: "7", createChannel: false } as never,
+    {
+      libraryId: canonical[0],
+      libraryIds: canonical,
+      channelId: "7",
+      createChannel: false,
+    } as never,
     snapshots,
   );
   expect(plan.mapping).toMatchObject({ libraryIds: ["lib-a", "lib-b"] });

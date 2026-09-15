@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { demo } from "../../src/demo/marktvLaughs.js";
-import { channelSchema } from "../../src/domain/models.js";
+import { channelSchema, scheduleEntrySchema } from "../../src/domain/models.js";
 import { validateChannelConfiguration } from "../../src/domain/validation.js";
 
 test("rejects an invalid IANA timezone at the domain boundary", () => {
@@ -8,6 +8,39 @@ test("rejects an invalid IANA timezone at the domain boundary", () => {
   expect(
     channelSchema.safeParse({ ...channel, timezone: "Chicago-ish" }).success,
   ).toBe(false);
+});
+
+test("validates new mid-roll timing while preserving readable legacy entries", () => {
+  const entry = {
+    id: "episode",
+    start: "2026-09-14T00:00:00.000Z",
+    end: "2026-09-14T00:28:00.000Z",
+    localStart: "00:00",
+    localEnd: "00:28",
+    durationMs: 1_680_000,
+    contentDurationMs: 1_380_000,
+    kind: "episode",
+    title: "Episode",
+    mediaId: "episode",
+    midrolls: [
+      { offsetMs: 450_000, durationMs: 150_000 },
+      { offsetMs: 900_000, durationMs: 150_000 },
+    ],
+  };
+  expect(scheduleEntrySchema.safeParse(entry).success).toBe(true);
+  expect(
+    scheduleEntrySchema.safeParse({
+      ...entry,
+      midrolls: [
+        { offsetMs: 450_000, durationMs: 150_000 },
+        { offsetMs: 450_000, durationMs: 150_000 },
+      ],
+    }).success,
+  ).toBe(false);
+  expect(
+    scheduleEntrySchema.safeParse({ ...entry, contentDurationMs: undefined })
+      .success,
+  ).toBe(true);
 });
 
 describe("validateChannelConfiguration", () => {

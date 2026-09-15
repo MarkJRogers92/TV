@@ -130,7 +130,7 @@ export function demo(timezone = "America/Chicago"): {
       number: 7,
       timezone,
       enabled: true,
-      revision: "demo-2",
+      revision: "demo-3",
       dayparts: [
         {
           id: "morning",
@@ -198,6 +198,13 @@ export function demo(timezone = "America/Chicago"): {
             poolIds: ["apartment-4b", "space-neighbors"],
             kind: "episode",
             fallbackPoolIds: [],
+            episodeMidroll: {
+              targetMinutes: [7.5, 15],
+              searchWindowMinutes: 1.5,
+              breakMinutes: 2.5,
+              minimumSegmentMinutes: 2,
+              tailBufferMinutes: 2,
+            },
           }),
         ),
       ],

@@ -5,7 +5,7 @@
     "number": 7,
     "timezone": "America/Chicago",
     "enabled": true,
-    "revision": "demo-2",
+    "revision": "demo-3",
     "dayparts": [
       {
         "id": "morning",
@@ -71,7 +71,14 @@
         "days": [],
         "poolIds": ["apartment-4b", "space-neighbors"],
         "kind": "episode",
-        "fallbackPoolIds": []
+        "fallbackPoolIds": [],
+        "episodeMidroll": {
+          "targetMinutes": [7.5, 15],
+          "searchWindowMinutes": 1.5,
+          "breakMinutes": 2.5,
+          "minimumSegmentMinutes": 2,
+          "tailBufferMinutes": 2
+        }
       },
       {
         "id": "daytime-shows",
@@ -79,7 +86,14 @@
         "days": [],
         "poolIds": ["apartment-4b", "space-neighbors"],
         "kind": "episode",
-        "fallbackPoolIds": []
+        "fallbackPoolIds": [],
+        "episodeMidroll": {
+          "targetMinutes": [7.5, 15],
+          "searchWindowMinutes": 1.5,
+          "breakMinutes": 2.5,
+          "minimumSegmentMinutes": 2,
+          "tailBufferMinutes": 2
+        }
       },
       {
         "id": "evening-shows",
@@ -87,7 +101,14 @@
         "days": [],
         "poolIds": ["apartment-4b", "space-neighbors"],
         "kind": "episode",
-        "fallbackPoolIds": []
+        "fallbackPoolIds": [],
+        "episodeMidroll": {
+          "targetMinutes": [7.5, 15],
+          "searchWindowMinutes": 1.5,
+          "breakMinutes": 2.5,
+          "minimumSegmentMinutes": 2,
+          "tailBufferMinutes": 2
+        }
       },
       {
         "id": "late-night-shows",
@@ -95,7 +116,14 @@
         "days": [],
         "poolIds": ["apartment-4b", "space-neighbors"],
         "kind": "episode",
-        "fallbackPoolIds": []
+        "fallbackPoolIds": [],
+        "episodeMidroll": {
+          "targetMinutes": [7.5, 15],
+          "searchWindowMinutes": 1.5,
+          "breakMinutes": 2.5,
+          "minimumSegmentMinutes": 2,
+          "tailBufferMinutes": 2
+        }
       },
       {
         "id": "overnight-shows",
@@ -103,7 +131,14 @@
         "days": [],
         "poolIds": ["apartment-4b", "space-neighbors"],
         "kind": "episode",
-        "fallbackPoolIds": []
+        "fallbackPoolIds": [],
+        "episodeMidroll": {
+          "targetMinutes": [7.5, 15],
+          "searchWindowMinutes": 1.5,
+          "breakMinutes": 2.5,
+          "minimumSegmentMinutes": 2,
+          "tailBufferMinutes": 2
+        }
       }
     ],
     "breakPolicy": {
