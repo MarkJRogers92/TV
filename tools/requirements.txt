@@ -1,0 +1,18 @@
+# Python packages required by the MarkTV tools in this directory.
+#
+# System dependencies that pip does NOT install -- these must be on PATH:
+#   ffmpeg, ffprobe
+#
+# Only two of the committed scripts need anything beyond the standard library.
+
+# make_contact_sheets.py, make_clip_sample_sheet.py
+Pillow
+
+# transcribe_faster_whisper.py. The first run downloads model weights, so it
+# needs network access and writes to the Hugging Face cache.
+faster-whisper
+
+# Versions are deliberately unpinned: the working set was never measured
+# against a specific resolver run, so naming version bounds here would assert
+# compatibility that has not been verified. Pin them if you want reproducible
+# installs.

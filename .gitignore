@@ -7,3 +7,15 @@ test-results/
 *.marktv.json
 .worktrees/
 .superpowers/
+
+# Local analysis artefacts and generated export bundles
+analysis/
+analysis_signals.json
+exports/
+
+# macOS
+.DS_Store
+
+# Python tooling
+__pycache__/
+*.pyc
