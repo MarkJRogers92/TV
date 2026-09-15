@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
@@ -76,24 +76,19 @@ describe("downloadJob", () => {
     const parent = await mkdtemp(join(tmpdir(), "marktv-download-"));
     const inbox = join(parent, "inbox");
     await mkdir(inbox);
-    const inboxIdentity = await captureManagedDirectory(inbox);
+    // Production inboxes carry an identity token, so a same-path replacement is
+    // caught even when ext4 hands the freed inode number straight back.
+    const inboxIdentity = await captureManagedDirectory(inbox, { sentinel: true });
     const target = join(parent, "outside");
     await mkdir(target);
     const error = await rejectedDownload(downloadJob(job, provider, "secret", { inbox, inboxIdentity }, undefined, {
       dnsLookup: async () => ["8.8.8.8"],
       transport: async () => {
-        if (kind === "symlink") {
-          await rm(inbox, { recursive: true });
-          await symlink(target, inbox);
-        } else {
-          // Allocate the replacement before removing the original so the inode
-          // cannot be recycled in place; see replaceManagedDirectory in
-          // paths.test.ts for why ext4 requires this.
-          const replacement = join(parent, "inbox-replacement");
-          await mkdir(replacement);
-          await rm(inbox, { recursive: true });
-          await rename(replacement, inbox);
-        }
+        // The replacement carries no identity token, so detection no longer
+        // depends on the allocator declining to reuse the freed inode.
+        await rm(inbox, { recursive: true });
+        if (kind === "symlink") await symlink(target, inbox);
+        else await mkdir(inbox);
         return response(200, "test", { "content-length": "4" });
       },
     }));
