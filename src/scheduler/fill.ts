@@ -122,6 +122,7 @@ export function fillToBoundary(input: FillInput): FillResult {
       kind: item.kind,
       title: item.title,
       mediaId: item.id,
+      path: item.path,
       source: input.source,
     });
     at += durationMs;

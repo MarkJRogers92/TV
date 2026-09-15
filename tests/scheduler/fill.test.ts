@@ -95,3 +95,10 @@ test('selects an exact 60-minute item before capped sparse search',()=>{
   expect(result.entries.map(entry=>entry.mediaId)).toEqual(['exact-hour']);
   expect(result.stats.exploredStates).toBeLessThanOrEqual(50_000);
 });
+
+test('preserves the absolute path of an eligible local commercial',()=>{
+  const local: MediaItem = { ...item('local-commercial', 'commercial', 480_000), source: 'local-folder', path: '/media/spots/acme-15s.mp4' };
+  const result = fill({ items: [local] });
+  expect(result.entries.map((entry) => entry.mediaId)).toEqual(['local-commercial']);
+  expect(result.entries[0].path).toBe('/media/spots/acme-15s.mp4');
+});

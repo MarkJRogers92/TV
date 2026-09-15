@@ -144,7 +144,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
       torbox: new TorBoxProvider(),
     } satisfies Record<ProviderName, AcquisitionProvider>);
   assertValidProviderMap(providers);
-  const app = Fastify({ logger: false });
+  // Local-folder media IDs are absolute paths encoded with base64url, so they
+  // routinely exceed find-my-way's 100-character default and would be rejected
+  // with a 414 before the media route runs. Allow generous headroom for real
+  // paths while keeping the value bounded.
+  const app = Fastify({
+    logger: false,
+    routerOptions: { maxParamLength: 2048 },
+  });
   // This is registered before every route: binding to loopback is necessary,
   // but Host/Origin checks also prevent DNS rebinding and hostile browser tabs
   // from reaching local credential or acquisition controls.

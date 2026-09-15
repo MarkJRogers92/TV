@@ -146,6 +146,41 @@ test("persists, scans, and removes explicit read-only media roots with safe erro
   await app.close();
 });
 
+test("updates a local-folder media item whose base64url ID exceeds 100 characters", async () => {
+  const app = await buildApp({
+    dataDir: await temporaryDirectory("marktv-api-"),
+  });
+  const path = `/media/library/Example Show/Season 01/Example Show S01E01 ${"Long ".repeat(
+    6,
+  )}Title.mp4`;
+  const id = `local-${Buffer.from(path).toString("base64url")}`;
+  // Local IDs are absolute paths encoded with base64url, so they routinely
+  // exceed find-my-way's default 100-character parameter limit.
+  expect(id.length).toBeGreaterThan(100);
+  const response = await app.inject({
+    method: "PUT",
+    url: `/api/v1/media/${id}`,
+    payload: {
+      id,
+      source: "local-folder",
+      path,
+      kind: "episode",
+      title: "Example Show S01E01",
+      durationMs: 1_800_000,
+      durationStatus: "ok",
+      available: true,
+      tags: [],
+    },
+  });
+  expect(response.statusCode).toBe(200);
+  expect(
+    (await app.inject("/api/v1/media"))
+      .json()
+      .find((item: { id: string }) => item.id === id),
+  ).toMatchObject({ id, title: "Example Show S01E01" });
+  await app.close();
+});
+
 test("returns stable not-found, ID mismatch, and validation errors", async () => {
   const app = await buildApp({
     dataDir: await temporaryDirectory("marktv-api-"),
