@@ -441,3 +441,41 @@ test("a completed Season 1 import reaches the schedule with its canonical local 
   expect(repositories.schedules.latest(ENROLLMENT_CHANNEL_ID)).toEqual(stored);
   expect(repositories.schedules.list(ENROLLMENT_CHANNEL_ID)).toHaveLength(1);
 });
+
+test("reuses a pool that already holds the series even when its name differs", async () => {
+  const repositories = await setup();
+  // The shape found in real data: the pool is named by hand, while the episode
+  // showTitles come from filenames and carry a year or different casing.
+  const first = importEpisode(repositories, {
+    series: "Home Improvement (1991)",
+    episode: 1,
+  });
+  repositories.pools.put({
+    id: "home-improvement",
+    name: "Home Improvement",
+    kinds: ["episode"],
+    mediaIds: [first.media.id],
+    mode: "chronological",
+    noRepeatMinutes: 720,
+    weight: 1,
+  });
+  const second = importEpisode(repositories, {
+    series: "Home Improvement (1991)",
+    episode: 2,
+  });
+  reconcileImportedSeries(repositories);
+
+  // Reused, not cloned: a name-only match would have created
+  // "home-improvement-1991" holding the same episodes.
+  expect(repositories.pools.list().map((pool) => pool.id)).not.toContain(
+    "home-improvement-1991",
+  );
+  expect(repositories.pools.get("home-improvement")).toMatchObject({
+    name: "Home Improvement",
+    noRepeatMinutes: 720,
+    mediaIds: [first.media.id, second.media.id],
+  });
+  expect(
+    repositories.pools.list().filter((pool) => pool.kinds.includes("episode")),
+  ).toHaveLength(3); // the demo's two plus this one
+});

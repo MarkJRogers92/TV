@@ -65,12 +65,38 @@ export function seriesPoolId(pools: Pool[], normalized: string): string {
   return candidate;
 }
 
-/** An existing pool already serving this series, if there is one. */
-function compatiblePool(pools: Pool[], normalized: string): Pool | undefined {
-  return pools.find(
+/**
+ * An existing pool already serving this series, if there is one.
+ *
+ * Matching the pool's *name* alone is not enough. A pool is named by hand while
+ * an episode's `showTitle` comes from the filename, so the two routinely
+ * disagree -- "Home Improvement" holding media whose showTitle is "Home
+ * Improvement (1991)", or "Roseanne Season 1" holding "roseanne". Name-only
+ * matching finds no pool in those cases and creates a second one containing the
+ * same episodes, which then doubles that series' share of every slot that
+ * references both. Checking membership first is what prevents that.
+ */
+function compatiblePool(
+  repositories: Repositories,
+  pools: Pool[],
+  normalized: string,
+): Pool | undefined {
+  const byName = pools.find(
     (pool) =>
       pool.kinds.includes("episode") &&
       normalizedSeriesTitle(pool.name) === normalized,
+  );
+  if (byName) return byName;
+  return pools.find(
+    (pool) =>
+      pool.kinds.includes("episode") &&
+      pool.mediaIds.some((mediaId) => {
+        const member = repositories.media.get(mediaId);
+        return (
+          member !== undefined &&
+          normalizedSeriesTitle(member.showTitle ?? member.title) === normalized
+        );
+      }),
   );
 }
 
@@ -99,7 +125,7 @@ export function enrollImportedEpisode(
 
   return repositories.transaction(() => {
     const pools = repositories.pools.list();
-    const existing = compatiblePool(pools, normalized);
+    const existing = compatiblePool(repositories, pools, normalized);
     const pool: Pool = existing ?? {
       id: seriesPoolId(pools, normalized),
       name: series,
