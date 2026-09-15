@@ -8,6 +8,8 @@ import { createRepositories } from "../../src/db/repositories.js";
 import { initializeManagedPaths } from "../../src/acquisition/paths.js";
 import { DownloadError, downloadJob } from "../../src/acquisition/downloader.js";
 import { ProviderError } from "../../src/integrations/acquisition/provider.js";
+import { seedDemoIfEmpty } from "../../src/demo/marktvLaughs.js";
+import { ENROLLMENT_CHANNEL_ID } from "../../src/media/seriesEnrollment.js";
 import type { AcquisitionProvider } from "../../src/integrations/acquisition/provider.js";
 import type { AcquisitionJob, AcquisitionReview, CompletedImport } from "../../src/acquisition/models.js";
 import type { RemoteItem } from "../../src/acquisition/providerTypes.js";
@@ -244,6 +246,43 @@ test("persists downloading progress, verifying, placing, then one atomic importe
   await coordinator.pollOnce();
   expect(seen).toEqual(["downloading", "verifying", "placing", "imported"]);
   expect(repositories.acquisitions.jobs.get("job")?.state).toBe("imported"); expect(repositories.acquisitions.imports.list()).toHaveLength(1); expect(repositories.media.get("media")).toBeDefined(); expect(repositories.acquisitions.wanted.get("wanted")).toBeUndefined();
+  repositories.close();
+});
+
+test("enrols a completed import into its series pool and the channel episode slots", async () => {
+  const { repositories, coordinator, paths } = await setup(undefined, undefined, undefined, {
+    download: async (job: any, _provider: any, _token: any, hooks: any) => {
+      await writeFile(join(paths.inbox, `${job.id}.part`), "verified media");
+      await hooks.onProgress(14, 14);
+      return join(paths.inbox, `${job.id}.part`);
+    },
+    importEpisode: async (job: any, wanted: any, partPath: string, context: any) => {
+      const destinationPath = join(paths.library, "A Show - S01E02 - Pilot.mkv");
+      const placing = { ...repositories.acquisitions.jobs.get(job.id)!, state: "placing", partPath, destinationPath, verifiedSha256: "c72e699827ff7920e04d95d3e18a88a6495efa172f45864f6cfaaee1b484447b", updatedAt: "2026-09-14T00:00:00.000Z" };
+      await context.persistPlacing(placing);
+      const media = { id: "media", source: "local-folder" as const, path: destinationPath, kind: "episode" as const, title: "Pilot", showTitle: "A Show", season: 1, episode: 2, durationMs: 1_000, durationStatus: "ok" as const, available: true, tags: [] };
+      const completed = { id: "import", wantedId: wanted.id, episodeKey: job.episodeKey, provider: job.provider, remoteItemId: job.remoteItemId, remoteFileId: job.remoteFileId, mediaId: media.id, canonicalName: "A Show - S01E02 - Pilot.mkv", destinationPath, importedAt: "2026-09-14T00:00:00.000Z" };
+      context.finalize(media, completed, { ...placing, state: "imported" });
+      return { media, completedImport: completed, destinationPath, recovered: false };
+    },
+  });
+  seedDemoIfEmpty(repositories, "America/Chicago");
+
+  await coordinator.pollOnce();
+
+  // No enrolment call was made by the test: completion did it.
+  const pool = repositories.pools.list().find((candidate) => candidate.name === "A Show");
+  expect(pool).toEqual({
+    id: "a-show", name: "A Show", kinds: ["episode"], mediaIds: ["media"],
+    mode: "chronological", noRepeatMinutes: 720, weight: 1,
+  });
+  const channel = repositories.channels.get(ENROLLMENT_CHANNEL_ID)!;
+  const episodeSlots = channel.slots.filter((slot) => slot.kind === "episode");
+  expect(episodeSlots).toHaveLength(5);
+  for (const slot of episodeSlots) expect(slot.poolIds).toContain("a-show");
+  for (const slot of channel.slots.filter((slot) => slot.kind !== "episode"))
+    expect(slot.poolIds).not.toContain("a-show");
+  expect(channel.breakPolicy.poolIds).not.toContain("a-show");
   repositories.close();
 });
 test("start uses the default unreferenced sixty-second timer and stop clears it", async () => {

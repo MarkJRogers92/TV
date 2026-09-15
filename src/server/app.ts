@@ -12,6 +12,7 @@ import { RealDebridProvider } from "../integrations/acquisition/realDebrid.js";
 import { TorBoxProvider } from "../integrations/acquisition/torBox.js";
 import type { AcquisitionProvider } from "../integrations/acquisition/provider.js";
 import { pinRegisteredMediaRoots, registerManagedLibrary } from "../media/roots.js";
+import { reconcileImportedSeries } from "../media/seriesEnrollment.js";
 import { KeychainCredentialStore } from "../security/keychain.js";
 import type { CredentialStore } from "../security/credentialStore.js";
 import type { ServerContext } from "./context.js";
@@ -176,6 +177,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
   // Hold every registered root open so the inode comparisons the scanner relies
   // on cannot be defeated by a recycled inode, including roots from earlier runs.
   await pinRegisteredMediaRoots(repositories);
+  // Enrol episodes that earlier runs imported. Enrolment is idempotent, so this
+  // also re-attaches anything whose enrolment was skipped while the channel was
+  // missing, and it closes the window after an import whose enrolment never ran.
+  reconcileImportedSeries(repositories, { now: now() });
   // One coordinator for the whole process. It reuses the validated provider map
   // and credential store the integration routes use, so a token, locator, or
   // command can never be routed through a second, unvalidated stack.

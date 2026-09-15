@@ -9,6 +9,10 @@ import {
 } from "../integrations/acquisition/provider.js";
 import type { ProbeResult } from "../media/adapter.js";
 import { LocalFolderAdapter } from "../media/localFolder.js";
+import {
+  reconcileImportedSeries,
+  recordEnrollmentFailure,
+} from "../media/seriesEnrollment.js";
 import type { CredentialStore } from "../security/credentialStore.js";
 import {
   downloadJob,
@@ -602,6 +606,23 @@ export class AcquisitionCoordinator {
       reviewId: null,
       seasonPackReviewId: null,
     };
+  }
+
+  /**
+   * Makes an imported episode schedulable by enrolling its series.
+   *
+   * Deliberately outside the completion transaction: a scheduling-configuration
+   * problem must never roll back or corrupt an otherwise valid import. Nothing
+   * here can fail the acquisition -- a failure is recorded as an actionable
+   * diagnostic instead -- and reconciliation repeats at startup, so an episode
+   * whose enrolment was skipped is never permanently forgotten.
+   */
+  private enrollImportedSeries(): void {
+    try {
+      reconcileImportedSeries(this.repositories, { now: this.now() });
+    } catch (error) {
+      recordEnrollmentFailure(this.repositories, error, this.now());
+    }
   }
 
   /**
@@ -1305,13 +1326,17 @@ export class AcquisitionCoordinator {
           throw new ImportVerificationError("Acquisition was cancelled before finalization");
         }
         this.repositories.completeAcquisitionImport({ media, completedImport, importedJob });
+        this.enrollImportedSeries();
       }),
     };
     try {
       await this.importEpisode(activeJob, wanted, partPath, context);
       const after = await this.freshJob(activeJob.id);
       if (after && after.state !== "imported" && this.ledgerFor(activeJob)) {
-        await this.enqueue(() => this.reconcileImportedJob(activeJob.id));
+        await this.enqueue(() => {
+          this.reconcileImportedJob(activeJob.id);
+          this.enrollImportedSeries();
+        });
       }
     } catch (error) {
       const current = await this.freshJob(activeJob.id);
@@ -1323,7 +1348,10 @@ export class AcquisitionCoordinator {
         // or retry can reconcile the already-published final without another
         // download. In particular, a racing cancel must not turn it cancelled.
         if (this.ledgerFor(activeJob)) {
-          await this.enqueue(() => this.reconcileImportedJob(activeJob.id));
+          await this.enqueue(() => {
+            this.reconcileImportedJob(activeJob.id);
+            this.enrollImportedSeries();
+          });
         }
         return;
       }
