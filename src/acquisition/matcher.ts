@@ -139,6 +139,15 @@ function preferred(candidates: Candidate[]): Candidate[] {
   return pool.filter((c) => c.parsed.resolutionHeight === score).sort((a, b) => order(a.parsed, b.parsed));
 }
 
+/** One reviewed file per episode, selected by the stable provider identity order. */
+function oneFilePerEpisode(files: readonly ParsedVideoCandidate[]): readonly ParsedVideoCandidate[] {
+  const selected = new Map<number, ParsedVideoCandidate>();
+  for (const file of [...files].sort((left, right) => order(left, right))) {
+    if (!selected.has(file.episode)) selected.set(file.episode, file);
+  }
+  return [...selected.values()].sort((left, right) => left.episode - right.episode || order(left, right));
+}
+
 /**
  * Finds manually selectable requested-season slices in completed collections
  * that contain more than one season. We require exact parsed filenames for
@@ -175,12 +184,10 @@ function fullSeriesSeasonOffers(
         completeSeasons.set(file.season, episodes);
       }
       if ([...completeSeasons.values()].filter((episodes) => episodes.size >= 3).length < 2) continue;
-      const requested = matchingSeries
+      const requested = oneFilePerEpisode(matchingSeries
         .filter((file) => file.season === entry.season)
-        .filter((file) => !doneRemote.has(`${file.provider}\0${file.remoteItemId}\0${file.remoteFileId}`))
-        .sort((left, right) => order(left, right));
-      const uniqueEpisodes = new Set(requested.map((file) => file.episode));
-      if (uniqueEpisodes.size < 3 || !uniqueEpisodes.has(entry.episode)) continue;
+        .filter((file) => !doneRemote.has(`${file.provider}\0${file.remoteItemId}\0${file.remoteFileId}`)));
+      if (requested.length < 3 || !requested.some((file) => file.episode === entry.episode)) continue;
       const totalBytes = requested.some((file) => file.bytes === null)
         ? null
         : requested.reduce((sum, file) => sum + (file.bytes ?? 0), 0);
@@ -192,7 +199,7 @@ function fullSeriesSeasonOffers(
           remoteItemId: item.remoteItemId,
           seriesTitle: entry.seriesTitle,
           season: entry.season,
-          recognizedEpisodeCount: uniqueEpisodes.size,
+          recognizedEpisodeCount: requested.length,
           totalBytes,
           fileLocators: requested.map(packLocator),
         },
@@ -222,15 +229,17 @@ export function matchCompletedFiles(wanted: readonly WantedEpisode[], remoteItem
     .filter(completedItem)
     .flatMap((item) => item.files.map((file) => ({ item, parsed: parseVideoCandidate(file) })).filter((value): value is { item: RemoteItem; parsed: ParsedVideoCandidate } => value.parsed !== null));
   const collectionOffers = fullSeriesSeasonOffers(wanted, parsed, doneKeys, doneRemote);
-  const collectionSeasonKeys = new Set(
-    collectionOffers.map((offer) => `${normalizedSeriesTitle(offer.packPreview.seriesTitle)}\0${offer.packPreview.season}`),
+  const collectionEpisodeKeys = new Set(
+    collectionOffers.flatMap((offer) => offer.packPreview.fileLocators
+      .filter((locator) => locator.episode !== null)
+      .map((locator) => `${normalizedSeriesTitle(offer.packPreview.seriesTitle)}\0${offer.packPreview.season}\0${locator.episode}`)),
   );
   const selectionList: MatchSelection[] = [];
   const reviews: Array<{ rank: number; reason: "ambiguous" | "multi-episode" | "uncertain-title"; wantedId: string; episodeKey: string; candidates: ReviewCandidate[] }> = [];
   for (const entry of [...wanted].sort((a, b) => episodeKey(a.seriesTitle,a.season,a.episode).localeCompare(episodeKey(b.seriesTitle,b.season,b.episode)))) {
     const key = episodeKey(entry.seriesTitle, entry.season, entry.episode);
     if (doneKeys.has(key)) continue;
-    if (collectionSeasonKeys.has(`${normalizedSeriesTitle(entry.seriesTitle)}\0${entry.season}`)) continue;
+    if (collectionEpisodeKeys.has(`${normalizedSeriesTitle(entry.seriesTitle)}\0${entry.season}\0${entry.episode}`)) continue;
     const candidates = parsed.map(({ item, parsed }) => candidateFor(item, parsed, entry)).filter((candidate): candidate is Candidate => candidate !== null).filter((candidate) => !doneRemote.has(`${candidate.parsed.provider}\0${candidate.parsed.remoteItemId}\0${candidate.parsed.remoteFileId}`));
     const multi = candidates.filter((c) => c.parsed.multiEpisode);
     if (multi.length) { reviews.push({ rank: 3, reason: "multi-episode", wantedId: entry.id, episodeKey: key, candidates: multi.map((c) => reviewCandidate(c, entry)).sort(order) }); continue; }
@@ -251,7 +260,7 @@ export function matchCompletedFiles(wanted: readonly WantedEpisode[], remoteItem
   const selections = selectionList.sort((a,b) => a.episodeKey.localeCompare(b.episodeKey) || order(a,b));
   if (collectionOffers.length) {
     const coveredWantedIds = [...wanted]
-      .filter((entry) => collectionSeasonKeys.has(`${normalizedSeriesTitle(entry.seriesTitle)}\0${entry.season}`))
+      .filter((entry) => collectionEpisodeKeys.has(`${normalizedSeriesTitle(entry.seriesTitle)}\0${entry.season}\0${entry.episode}`))
       .map((entry) => entry.id)
       .sort();
     return { kind: "season-packs", offers: collectionOffers, coveredWantedIds, selections, review };

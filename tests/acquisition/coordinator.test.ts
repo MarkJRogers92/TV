@@ -458,6 +458,20 @@ test("importSeason schedules an unchanged revalidated season offer and consumes 
   repositories.close();
 });
 
+test("importSeason consumes sibling collection offers for the same series and season", async () => {
+  const { repositories, coordinator } = await setup(async () => [item]);
+  repositories.acquisitions.reviews.save(seasonOffer());
+  repositories.acquisitions.reviews.save({ ...seasonOffer(), id: "sibling-offer" });
+  repositories.acquisitions.reviews.save({ ...seasonOffer(), id: "other-season-offer", packSeason: 2 });
+
+  await expect(coordinator.importSeason("season-offer")).resolves.toMatchObject({ kind: "scheduled" });
+
+  expect(repositories.acquisitions.reviews.get("season-offer")).toBeUndefined();
+  expect(repositories.acquisitions.reviews.get("sibling-offer")).toBeUndefined();
+  expect(repositories.acquisitions.reviews.get("other-season-offer")).toBeDefined();
+  repositories.close();
+});
+
 test("importSeason does not schedule when its durable offer is deleted while provider listing is blocked", async () => {
   let release!: (items: readonly RemoteItem[]) => void;
   const listing = new Promise<readonly RemoteItem[]>((resolve) => { release = resolve; });

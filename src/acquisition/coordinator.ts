@@ -1745,7 +1745,21 @@ export class AcquisitionCoordinator {
         wantedIds.push(wanted.id);
         jobIds.push(job.id);
       }
-      repository.reviews.remove(offer.id);
+      // Once this collection is committed for a season, the other displayed
+      // collections are no longer actionable alternatives: their files would
+      // collide with the just-reserved episode identities. Remove only the
+      // same normalized series/season; a later failed import can be surfaced
+      // again by the next provider poll.
+      for (const review of repository.reviews.list()) {
+        if (
+          review.kind === "season-pack" &&
+          review.packSeason === season &&
+          review.packSeriesTitle !== null &&
+          normalizedSeriesTitle(review.packSeriesTitle) === normalizedSeriesTitle(seriesTitle)
+        ) {
+          repository.reviews.remove(review.id);
+        }
+      }
     });
     if (offerChanged) return { kind: "stale", provider, reason: "changed-pack" };
     return { kind: "scheduled", wantedIds, jobIds, alreadyImported, alreadyScheduled };

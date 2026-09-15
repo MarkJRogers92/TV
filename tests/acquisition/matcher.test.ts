@@ -850,6 +850,51 @@ describe("matchCompletedFiles season packs", () => {
     ]);
   });
 
+  test("does not suppress a same-season Wanted episode that is absent from a collection offer", () => {
+    const collectionFiles = (season: number) => Array.from({ length: 3 }, (_, index) => file({
+      remoteItemId: "collection", remoteFileId: `collection-s${season}e${index + 1}`,
+      originalFilename: `Severance.S${String(season).padStart(2, "0")}E${String(index + 1).padStart(2, "0")}.720p.mkv`,
+      bytes: 700_000_000,
+    }));
+    const plan = matchCompletedFiles(
+      [wanted({ id: "wanted-s1e1", episode: 1 }), wanted({ id: "wanted-s1e4", episode: 4 })],
+      [
+        item([...collectionFiles(1), ...collectionFiles(2)], { remoteItemId: "collection", originalName: "Severance.Complete.Series" }),
+        item([file({ remoteItemId: "single-e4", remoteFileId: "single-e4", originalFilename: "Severance.S01E04.720p.mkv", bytes: 700_000_000 })], { remoteItemId: "single-e4" }),
+      ],
+      [],
+    );
+
+    expect(plan).toMatchObject({ kind: "season-packs", coveredWantedIds: ["wanted-s1e1"] });
+    expect((plan as Extract<MatchPlan, { kind: "season-packs" }>).selections).toMatchObject([
+      { wantedId: "wanted-s1e4", remoteItemId: "single-e4", remoteFileId: "single-e4" },
+    ]);
+  });
+
+  test("uses one deterministic file per requested-season episode in a collection offer", () => {
+    const seasonFiles = (season: number) => Array.from({ length: 3 }, (_, index) => file({
+      remoteItemId: "collection", remoteFileId: `collection-s${season}e${index + 1}`,
+      originalFilename: `Severance.S${String(season).padStart(2, "0")}E${String(index + 1).padStart(2, "0")}.720p.mkv`,
+      bytes: 700_000_000,
+    }));
+    const duplicate = file({
+      remoteItemId: "collection", remoteFileId: "000-e1",
+      originalFilename: "Severance.S01E01.720p.alt.mkv", bytes: 600_000_000,
+    });
+    const plan = matchCompletedFiles(
+      [wanted({ id: "wanted-s1e1", episode: 1 })],
+      [item([duplicate, ...seasonFiles(1), ...seasonFiles(2)], { remoteItemId: "collection", originalName: "Severance.Complete.Series" })],
+      [],
+    );
+
+    const offer = (plan as Extract<MatchPlan, { kind: "season-packs" }>).offers[0]!;
+    expect(offer.packPreview.fileLocators).toHaveLength(3);
+    expect(offer.packPreview.fileLocators.map((locator) => locator.remoteFileId)).toEqual([
+      "000-e1", "collection-s1e2", "collection-s1e3",
+    ]);
+    expect(offer.packPreview.totalBytes).toBe(2_000_000_000);
+  });
+
   /** The whole recognized pack as persist-safe locators, in deterministic order. */
   function packLocatorFor(remoteFile: RemoteFile): Record<string, unknown> {
     const episode = Number(remoteFile.remoteFileId.slice("file-e".length));
