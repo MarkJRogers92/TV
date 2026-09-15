@@ -1,4 +1,5 @@
-import { chmod, lstat, mkdir, realpath } from "node:fs/promises";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { chmod, lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { videoExtensions } from "./filename.js";
 
@@ -23,6 +24,43 @@ export interface ManagedDirectoryIdentity {
   readonly path: string;
   readonly dev: number;
   readonly ino: number;
+  /**
+   * Random token stored inside the directory itself. Inode numbers are freed
+   * the moment an entry is unlinked and ext4 hands the recycled number straight
+   * back to the next mkdir, so dev+ino alone cannot detect a same-path
+   * replacement. Set only for the staging inbox; the library keeps dev+ino
+   * because external media scanners read it and must not meet stray files.
+   */
+  readonly token?: string;
+}
+
+const sentinelName = ".marktv-identity";
+const sentinelPattern = /^[0-9a-f]{32}$/;
+
+/** Reads a directory's identity token, minting one the first time it is needed. */
+async function ensureSentinel(directory: string): Promise<string> {
+  const file = join(directory, sentinelName);
+  let existing: string | undefined;
+  try {
+    existing = (await readFile(file, "utf8")).trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new ManagedPathError("Unable to read managed identity");
+  }
+  if (existing !== undefined) {
+    if (!sentinelPattern.test(existing)) throw new ManagedPathError("Managed identity is malformed");
+    return existing;
+  }
+  const token = randomBytes(16).toString("hex");
+  try {
+    // `wx` never truncates an existing token, so a second process cannot rotate it.
+    await writeFile(file, token, { mode: 0o600, flag: "wx" });
+    return token;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw new ManagedPathError("Unable to create managed identity");
+    const raced = (await readFile(file, "utf8")).trim();
+    if (!sentinelPattern.test(raced)) throw new ManagedPathError("Managed identity is malformed");
+    return raced;
+  }
 }
 
 function assertSafeComponent(value: string, field: string): string {
@@ -85,22 +123,37 @@ async function ensureDirectory(path: string): Promise<string> {
 
 export async function captureManagedDirectory(
   path: string,
+  options: { sentinel?: boolean } = {},
 ): Promise<ManagedDirectoryIdentity> {
   const resolved = await realpath(path);
   const entry = await lstat(path);
   const target = await lstat(resolved);
   if (entry.isSymbolicLink() || !target.isDirectory())
     throw new ManagedPathError("Managed directory is not a real directory");
-  return { path: resolved, dev: target.dev, ino: target.ino };
+  const identity = { path: resolved, dev: target.dev, ino: target.ino };
+  return options.sentinel ? { ...identity, token: await ensureSentinel(resolved) } : identity;
 }
 
-/** Revalidate path, realpath, and inode immediately before sensitive work. */
+/** Constant-time token compare; a length mismatch is simply a mismatch. */
+async function sentinelMatches(directory: string, expected: string): Promise<boolean> {
+  try {
+    const left = Buffer.from((await readFile(join(directory, sentinelName), "utf8")).trim());
+    const right = Buffer.from(expected);
+    return left.length === right.length && timingSafeEqual(left, right);
+  } catch {
+    return false;
+  }
+}
+
+/** Revalidate path, realpath, inode, and identity token immediately before sensitive work. */
 export async function assertManagedDirectory(
   identity: ManagedDirectoryIdentity,
 ): Promise<void> {
   const resolved = await realpath(identity.path);
   const entry = await lstat(identity.path);
   if (entry.isSymbolicLink() || resolved !== identity.path || !entry.isDirectory() || entry.dev !== identity.dev || entry.ino !== identity.ino)
+    throw new ManagedPathError("Managed directory was replaced");
+  if (identity.token !== undefined && !(await sentinelMatches(identity.path, identity.token)))
     throw new ManagedPathError("Managed directory was replaced");
 }
 
@@ -112,7 +165,7 @@ export async function initializeManagedPaths(dataDir: string): Promise<ManagedPa
   return {
     inbox,
     library,
-    inboxIdentity: await captureManagedDirectory(inbox),
+    inboxIdentity: await captureManagedDirectory(inbox, { sentinel: true }),
     libraryIdentity: await captureManagedDirectory(library),
   };
 }

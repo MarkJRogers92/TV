@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -68,5 +68,44 @@ describe("initializeManagedPaths", () => {
     await expect(assertManagedDirectory(paths.inboxIdentity)).rejects.toThrow(/replaced/i);
     await replaceManagedDirectory(paths.library);
     await expect(assertManagedDirectory(paths.libraryIdentity)).rejects.toThrow(/replaced/i);
+  });
+});
+
+describe("managed identity token", () => {
+  test("rejects a replacement even when dev and ino still match", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "marktv-paths-"));
+    const paths = await initializeManagedPaths(dataDir);
+    // Models the ext4 case exactly: the replacement directory was handed the
+    // freed inode number, so both inode checks pass and only the token can
+    // catch it. Path, dev and ino are deliberately all genuine.
+    await expect(assertManagedDirectory({ ...paths.inboxIdentity, token: "0".repeat(32) })).rejects.toThrow(/replaced/i);
+  });
+
+  test("accepts an unchanged inbox", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "marktv-paths-"));
+    const paths = await initializeManagedPaths(dataDir);
+    await expect(assertManagedDirectory(paths.inboxIdentity)).resolves.toBeUndefined();
+  });
+
+  test.each(["", "0".repeat(32), "not-a-token", "f".repeat(31)])(
+    "rejects an inbox whose identity token is %s",
+    async (value) => {
+      const dataDir = await mkdtemp(join(tmpdir(), "marktv-paths-"));
+      const paths = await initializeManagedPaths(dataDir);
+      await writeFile(join(paths.inbox, ".marktv-identity"), value);
+      await expect(assertManagedDirectory(paths.inboxIdentity)).rejects.toThrow(/replaced/i);
+    },
+  );
+
+  test("reuses one token across initializations and keeps the library free of stray files", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "marktv-paths-"));
+    const first = await initializeManagedPaths(dataDir);
+    const second = await initializeManagedPaths(dataDir);
+    expect(first.inboxIdentity.token).toMatch(/^[0-9a-f]{32}$/);
+    expect(second.inboxIdentity.token).toBe(first.inboxIdentity.token);
+    // The library is read by external media scanners, so it must gain no files.
+    expect(first.libraryIdentity.token).toBeUndefined();
+    expect(await readdir(first.library)).toEqual([]);
+    expect(await readdir(first.inbox)).toEqual([".marktv-identity"]);
   });
 });
