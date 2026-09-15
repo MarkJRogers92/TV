@@ -72,6 +72,72 @@ test("provider failures are isolated and leave eligible Wanted waiting", async (
   expect(repositories.acquisitions.wanted.get("wanted")).toMatchObject({ status: "waiting-provider" });
   expect(repositories.acquisitions.jobs.list()).toEqual([]); repositories.close();
 });
+test("offers competing full-series collections for one requested season without reserving any other-season jobs", async () => {
+  const seasonFiles = (remoteItemId: string, season: number) => Array.from({ length: 3 }, (_, index) => ({
+    provider: "real-debrid" as const,
+    itemType: "torrent" as const,
+    remoteItemId,
+    remoteFileId: `${remoteItemId}-s${season}e${index + 1}`,
+    originalFilename: `Roseanne.S${String(season).padStart(2, "0")}E${String(index + 1).padStart(2, "0")}.720p.mkv`,
+    remotePath: `Roseanne.S${String(season).padStart(2, "0")}E${String(index + 1).padStart(2, "0")}.720p.mkv`,
+    bytes: 60_000_000,
+  }));
+  const collections: RemoteItem[] = ["collection-a", "collection-b"].map((remoteItemId, index) => ({
+    provider: "real-debrid",
+    itemType: "torrent",
+    remoteItemId,
+    originalName: `Roseanne.Complete.Series.${index + 1}`,
+    completedAt: "2026-09-14T00:00:00.000Z",
+    files: [...seasonFiles(remoteItemId, 1), ...seasonFiles(remoteItemId, 2)],
+  }));
+  const { repositories, coordinator } = await setup(async () => collections);
+  repositories.acquisitions.wanted.remove("wanted");
+  repositories.acquisitions.wanted.create({ id: "roseanne-s1e1", seriesTitle: "Roseanne", season: 1, episode: 1, episodeTitle: null, status: "needs-review", statusDetail: "Multiple files match", createdAt: "2026-09-14T00:00:00.000Z", updatedAt: "2026-09-14T00:00:00.000Z" });
+  repositories.acquisitions.reviews.save({ id: "old-episode-review", wantedId: "roseanne-s1e1", kind: "ambiguous", message: "Multiple files match", candidates: [], packEpisodeCount: null, packTotalBytes: null, packSeriesTitle: null, packSeason: null, createdAt: "2026-09-14T00:00:00.000Z", updatedAt: "2026-09-14T00:00:00.000Z" });
+
+  const outcome = await coordinator.pollOnce();
+
+  expect(outcome.reservedJobIds).toEqual([]);
+  expect(outcome.reviewId).toBeNull();
+  expect(outcome.seasonPackReviewId).toEqual(expect.any(String));
+  const offers = repositories.acquisitions.reviews.list().filter((review) => review.kind === "season-pack");
+  expect(offers).toHaveLength(2);
+  expect(offers.map((offer) => ({
+    item: offer.candidates[0]?.remoteItemId,
+    season: offer.packSeason,
+    episodes: offer.candidates.map((candidate) => candidate.season),
+  }))).toEqual([
+    { item: "collection-a", season: 1, episodes: [1, 1, 1] },
+    { item: "collection-b", season: 1, episodes: [1, 1, 1] },
+  ]);
+  expect(repositories.acquisitions.reviews.get("old-episode-review")).toBeUndefined();
+  expect(repositories.acquisitions.wanted.get("roseanne-s1e1")).toMatchObject({ status: "waiting-provider", statusDetail: null });
+  expect(repositories.acquisitions.jobs.list()).toEqual([]);
+  repositories.close();
+});
+test("keeps an unrelated exact Wanted episode moving while a collection choice waits", async () => {
+  const seasonFiles = (season: number) => Array.from({ length: 3 }, (_, index) => ({
+    provider: "real-debrid" as const, itemType: "torrent" as const, remoteItemId: "roseanne-collection",
+    remoteFileId: `roseanne-s${season}e${index + 1}`,
+    originalFilename: `Roseanne.S${String(season).padStart(2, "0")}E${String(index + 1).padStart(2, "0")}.720p.mkv`,
+    remotePath: `Roseanne.S${String(season).padStart(2, "0")}E${String(index + 1).padStart(2, "0")}.720p.mkv`, bytes: 60_000_000,
+  }));
+  const { repositories, coordinator } = await setup(async () => [
+    item,
+    { provider: "real-debrid", itemType: "torrent", remoteItemId: "roseanne-collection", originalName: "Roseanne.Complete.Series", completedAt: "2026-09-14T00:00:00.000Z", files: [...seasonFiles(1), ...seasonFiles(2)] },
+  ]);
+  repositories.acquisitions.wanted.create({ id: "roseanne-s1e1", seriesTitle: "Roseanne", season: 1, episode: 1, episodeTitle: null, status: "wanted", statusDetail: null, createdAt: "2026-09-14T00:00:00.000Z", updatedAt: "2026-09-14T00:00:00.000Z" });
+
+  const outcome = await coordinator.pollOnce();
+
+  expect(outcome.reservedJobIds).toEqual(["job"]);
+  expect(outcome.reviewId).toBeNull();
+  expect(outcome.seasonPackReviewId).toEqual(expect.any(String));
+  expect(repositories.acquisitions.reviews.list().filter((review) => review.kind === "season-pack")).toHaveLength(1);
+  expect(repositories.acquisitions.wanted.get("wanted")).toMatchObject({ status: "needs-review" });
+  expect(repositories.acquisitions.wanted.get("roseanne-s1e1")).toMatchObject({ status: "waiting-provider" });
+  repositories.close();
+});
 test.each([
   ["CANCELLED", false, "cancelled"], ["INSUFFICIENT_SPACE", true, "needs-review"],
   ["CAPABILITY_EXPIRED", false, "retry-wait"], ["TEMPORARY_SERVICE_FAILURE", false, "retry-wait"],

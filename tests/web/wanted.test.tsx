@@ -146,7 +146,24 @@ test("season packs show count, bytes, status, and import action", async () => {
   expect(await screen.findByText(/1 season pack offer/)).toBeVisible();
   expect(screen.getByText(/2 episode\(s\)/)).toBeVisible();
   expect(screen.getByText("Imported")).toBeVisible();
-  expect(screen.getByRole("button", { name: "Import season" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Import Season 1" })).toBeVisible();
+});
+
+test("competing collections require an explicit requested-season import choice", async () => {
+  const importSeason = vi.fn(async () => ({ status: "scheduled", wantedIds: ["w-1"], jobIds: ["j-1"], alreadyImported: 0, alreadyScheduled: 0 }));
+  render(<Wanted client={stubClient({
+    importSeason,
+    listSeasonPacks: async () => [
+      { ...pack, id: "collection-a", seriesTitle: "Roseanne", season: 1, message: "Season collection A" },
+      { ...pack, id: "collection-b", seriesTitle: "Roseanne", season: 1, message: "Season collection B" },
+    ],
+  }) as never} />);
+
+  expect(await screen.findByText(/Choose one Roseanne collection for Season 1/i)).toBeVisible();
+  const buttons = screen.getAllByRole("button", { name: "Import Season 1" });
+  expect(buttons).toHaveLength(2);
+  fireEvent.click(buttons[1]!);
+  await waitFor(() => expect(importSeason).toHaveBeenCalledWith("collection-b"));
 });
 
 test("add form submits human metadata and remove reports conflicts safely", async () => {
@@ -177,7 +194,7 @@ test("retry and import actions refresh safely and never render tokens or paths",
   fireEvent.click(screen.getByRole("button", { name: "Retry job" }));
   await screen.findByText(/Retry queued/);
   expect(retryJob).toHaveBeenCalledWith("job-1");
-  fireEvent.click(screen.getByRole("button", { name: "Import season" }));
+  fireEvent.click(screen.getByRole("button", { name: "Import Season 1" }));
   await screen.findByText(/Season import scheduled/);
   expect(importSeason).toHaveBeenCalledWith("pack-1");
   expect(container.innerHTML).not.toMatch(/token|downloadUrl|signedUrl|partPath|destinationPath|bearer/i);

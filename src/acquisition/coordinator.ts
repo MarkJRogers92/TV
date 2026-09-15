@@ -222,7 +222,7 @@ interface RecognizedPackFile {
 }
 
 const providerNames = ["real-debrid", "torbox"] as const satisfies readonly ProviderName[];
-const excludedWantedStatuses = new Set(["needs-review", "cancelled", "imported"]);
+const excludedWantedStatuses = new Set(["cancelled", "imported"]);
 const terminalStates = new Set(["imported", "cancelled"]);
 
 function isCompletedItem(item: RemoteItem): boolean {
@@ -688,6 +688,44 @@ export class AcquisitionCoordinator {
       repository.transaction(() => repository.reviews.save(offer));
       seasonPackReviewId = offer.id;
       selections = plan.wantedSelections;
+    } else if (plan.kind === "season-packs") {
+      // A multi-season collection is deliberately never auto-selected. Each
+      // durable offer retains only the requested season, allowing the UI to
+      // present the competing collections and require an explicit Import
+      // Season action for the chosen one.
+      const offers = plan.offers.map((offer) =>
+        this.buildSeasonPackOfferFromPreview(offer.wantedId, offer.packPreview),
+      );
+      repository.transaction(() => {
+        for (const wantedId of plan.coveredWantedIds) {
+          // Replace a prior single-episode ambiguity with the safer collection
+          // choice. A completed multi-season collection is only actionable by
+          // an explicit Import Season click, never an automatic reservation.
+          for (const review of repository.reviews.listByWanted(wantedId)) {
+            if (review.kind !== "season-pack") repository.reviews.remove(review.id);
+          }
+          repository.wanted.setStatus(wantedId, "waiting-provider", {
+            detail: null,
+            now: this.isoNow(),
+          });
+        }
+        for (const offer of offers) repository.reviews.save(offer);
+      });
+      seasonPackReviewId = offers[0]?.id ?? null;
+      if (plan.review) {
+        const nextReview = this.buildReview(plan.review);
+        if (repository.wanted.get(plan.review.wantedId)) {
+          repository.transaction(() => repository.reviews.save(nextReview));
+          repository.wanted.setStatus(plan.review.wantedId, "needs-review", {
+            detail: nextReview.message,
+            now: this.isoNow(),
+          });
+          reviewId = nextReview.id;
+          handled.add(plan.review.wantedId);
+        }
+      } else {
+        selections = plan.selections;
+      }
     } else if (plan.kind === "automatic") {
       selections = plan.selections;
     }
@@ -746,7 +784,13 @@ export class AcquisitionCoordinator {
   }
 
   private buildSeasonPackOffer(plan: Extract<MatchPlan, { kind: "season-pack" }>): AcquisitionReview {
-    const preview = plan.packPreview;
+    return this.buildSeasonPackOfferFromPreview(plan.wantedSelections[0]!.wantedId, plan.packPreview);
+  }
+
+  private buildSeasonPackOfferFromPreview(
+    wantedId: string,
+    preview: Extract<MatchPlan, { kind: "season-pack" }>['packPreview'],
+  ): AcquisitionReview {
     const id = seasonPackReviewId(
       preview.provider,
       preview.itemType,
@@ -760,7 +804,7 @@ export class AcquisitionCoordinator {
       id,
       // The anchor is only the episode that surfaced the pack; the offer
       // survives that episode being imported or removed.
-      wantedId: plan.wantedSelections[0].wantedId,
+      wantedId,
       kind: "season-pack",
       message: `Season pack with ${preview.recognizedEpisodeCount} recognized episodes`,
       candidates: preview.fileLocators.map((locator) => ({

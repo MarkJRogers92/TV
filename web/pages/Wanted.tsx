@@ -15,6 +15,16 @@ function hasNonterminalAcquisition(wanted: readonly WantedView[]): boolean {
   );
 }
 
+function hasCompetingCollection(
+  packs: readonly SeasonPackView[],
+  pack: SeasonPackView,
+): boolean {
+  return pack.seriesTitle !== null && pack.season !== null && packs.filter(
+    (candidate) =>
+      candidate.seriesTitle === pack.seriesTitle && candidate.season === pack.season,
+  ).length > 1;
+}
+
 export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
   const [wanted, setWanted] = useState<WantedView[]>([]);
   const [packs, setPacks] = useState<SeasonPackView[]>([]);
@@ -350,6 +360,11 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
         <p>No season pack offers.</p>
       ) : (
         <div className="cards">
+          {packs.some((pack) => hasCompetingCollection(packs, pack)) ? (
+            <p>
+              Choose one {packs.find((pack) => hasCompetingCollection(packs, pack))?.seriesTitle} collection for Season {packs.find((pack) => hasCompetingCollection(packs, pack))?.season}. Only that season will be imported.
+            </p>
+          ) : null}
           {packs.map((pack) => (
             <article key={pack.id}>
               <h4>
@@ -378,7 +393,7 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
                 ))}
               </ul>
               <button onClick={() => void importSeason(pack.id)}>
-                Import season
+                {pack.season !== null ? `Import Season ${pack.season}` : "Import season"}
               </button>
             </article>
           ))}

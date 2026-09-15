@@ -816,6 +816,40 @@ describe("matchCompletedFiles season packs", () => {
     originalName: "Severance.S03.1080p.WEB-DL.x264-GROUP",
   });
 
+  test("offers each full-series collection for the requested season without selecting a competing bundle", () => {
+    const seasonFiles = (remoteItemId: string, season: number) => Array.from(
+      { length: 3 },
+      (_, index) => file({
+        remoteItemId,
+        remoteFileId: `${remoteItemId}-s${season}e${index + 1}`,
+        originalFilename: `Severance.S${String(season).padStart(2, "0")}E${String(index + 1).padStart(2, "0")}.720p.mkv`,
+        bytes: 700_000_000,
+      }),
+    );
+    const plan = matchCompletedFiles(
+      [wanted({ id: "wanted-s1e1", season: 1, episode: 1 })],
+      [
+        item([...seasonFiles("collection-a", 1), ...seasonFiles("collection-a", 2)], { remoteItemId: "collection-a", originalName: "Severance.Complete.Series.A" }),
+        item([...seasonFiles("collection-b", 1), ...seasonFiles("collection-b", 3)], { remoteItemId: "collection-b", originalName: "Severance.Complete.Series.B" }),
+      ],
+      [],
+    );
+
+    expect(plan).toMatchObject({ kind: "season-packs" });
+    const offers = (plan as Extract<MatchPlan, { kind: "season-packs" }>).offers;
+    expect(offers).toHaveLength(2);
+    expect(offers.map((offer) => ({
+      wantedId: offer.wantedId,
+      remoteItemId: offer.packPreview.remoteItemId,
+      season: offer.packPreview.season,
+      recognizedEpisodeCount: offer.packPreview.recognizedEpisodeCount,
+      seasons: [...new Set(offer.packPreview.fileLocators.map((file) => file.season))],
+    }))).toEqual([
+      { wantedId: "wanted-s1e1", remoteItemId: "collection-a", season: 1, recognizedEpisodeCount: 3, seasons: [1] },
+      { wantedId: "wanted-s1e1", remoteItemId: "collection-b", season: 1, recognizedEpisodeCount: 3, seasons: [1] },
+    ]);
+  });
+
   /** The whole recognized pack as persist-safe locators, in deterministic order. */
   function packLocatorFor(remoteFile: RemoteFile): Record<string, unknown> {
     const episode = Number(remoteFile.remoteFileId.slice("file-e".length));
