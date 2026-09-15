@@ -19,12 +19,12 @@ const item: RemoteItem = { provider: "real-debrid", itemType: "torrent", remoteI
 function provider(name: "real-debrid" | "torbox", list: (signal?: AbortSignal) => Promise<readonly RemoteItem[]>): AcquisitionProvider {
   return { provider: name, testAuthentication: async () => ({ label: name }), listCompletedItems: (_token, signal) => list(signal), requestDownloadUrl: async () => "https://example.invalid/file" };
 }
-async function setup(list = async (signal?: AbortSignal): Promise<readonly RemoteItem[]> => { void signal; return [item]; }, failure: unknown = new DownloadError("PERMANENT_REJECTION", "no download", false), credentialGet: (name: "real-debrid" | "torbox") => Promise<string | null> = async (name) => name === "real-debrid" ? "token" : null, options: { download?: any; importEpisode?: any; scanLibrary?: any; probe?: any; hasFreeBytes?: any; randomId?: () => string } = {}) {
+async function setup(list = async (signal?: AbortSignal): Promise<readonly RemoteItem[]> => { void signal; return [item]; }, failure: unknown = new DownloadError("PERMANENT_REJECTION", "no download", false), credentialGet: (name: "real-debrid" | "torbox") => Promise<string | null> = async (name) => name === "real-debrid" ? "token" : null, options: { download?: any; importEpisode?: any; scanLibrary?: any; probe?: any; hasFreeBytes?: any; randomId?: () => string; now?: () => Date } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "marktv-coordinator-")); dirs.push(dir);
   const repositories = createRepositories(openDatabase(dir)); const paths = await initializeManagedPaths(dir);
   repositories.acquisitions.wanted.create({ id: "wanted", seriesTitle: "A Show", season: 1, episode: 2, episodeTitle: "Pilot", status: "wanted", statusDetail: null, createdAt: "2026-09-14T00:00:00.000Z", updatedAt: "2026-09-14T00:00:00.000Z" });
   const rd = vi.fn(list); const torbox = vi.fn(async (): Promise<readonly RemoteItem[]> => []);
-  const coordinator = new AcquisitionCoordinator({ repositories, paths, credentials: { get: credentialGet, set: async () => {}, remove: async () => {} }, providers: { "real-debrid": provider("real-debrid", rd), torbox: provider("torbox", torbox) }, download: options.download ?? (async () => { throw failure; }), ...(options.importEpisode ? { importEpisode: options.importEpisode } : {}), ...(options.scanLibrary ? { scanLibrary: options.scanLibrary } : {}), ...(options.probe ? { probe: options.probe } : {}), ...(options.hasFreeBytes ? { hasFreeBytes: options.hasFreeBytes } : {}), now: () => new Date("2026-09-14T00:00:00.000Z"), randomId: options.randomId ?? (() => "job") });
+  const coordinator = new AcquisitionCoordinator({ repositories, paths, credentials: { get: credentialGet, set: async () => {}, remove: async () => {} }, providers: { "real-debrid": provider("real-debrid", rd), torbox: provider("torbox", torbox) }, download: options.download ?? (async () => { throw failure; }), ...(options.importEpisode ? { importEpisode: options.importEpisode } : {}), ...(options.scanLibrary ? { scanLibrary: options.scanLibrary } : {}), ...(options.probe ? { probe: options.probe } : {}), ...(options.hasFreeBytes ? { hasFreeBytes: options.hasFreeBytes } : {}), now: options.now ?? (() => new Date("2026-09-14T00:00:00.000Z")), randomId: options.randomId ?? (() => "job") });
   return { repositories, coordinator, rd, torbox, paths };
 }
 
@@ -71,6 +71,52 @@ test("provider failures are isolated and leave eligible Wanted waiting", async (
   expect(outcome.providers).toContainEqual(expect.objectContaining({ provider: "real-debrid", state: "error" }));
   expect(repositories.acquisitions.wanted.get("wanted")).toMatchObject({ status: "waiting-provider" });
   expect(repositories.acquisitions.jobs.list()).toEqual([]); repositories.close();
+});
+test("keeps an unchanged unresolved review version stable across provider polls", async () => {
+  let timestamp = "2026-09-14T00:00:00.000Z";
+  const ambiguous: RemoteItem = {
+    ...item,
+    files: [
+      { ...file, remoteFileId: "candidate-a" },
+      { ...file, remoteFileId: "candidate-b", originalFilename: "A.Show.S01E02.720p.alt.mkv" },
+    ],
+  };
+  const { repositories, coordinator } = await setup(async () => [ambiguous], undefined, undefined, {
+    now: () => new Date(timestamp),
+  });
+
+  await coordinator.pollOnce();
+  const first = repositories.acquisitions.reviews.get("review:ambiguous:wanted")!;
+  timestamp = "2026-09-14T00:05:00.000Z";
+  await coordinator.pollOnce();
+
+  expect(repositories.acquisitions.reviews.get("review:ambiguous:wanted")).toEqual(first);
+  repositories.close();
+});
+test("advances an unresolved review version when provider candidates change", async () => {
+  let timestamp = "2026-09-14T00:00:00.000Z";
+  let files = [
+    { ...file, remoteFileId: "candidate-a" },
+    { ...file, remoteFileId: "candidate-b", originalFilename: "A.Show.S01E02.720p.alt.mkv" },
+  ];
+  const { repositories, coordinator } = await setup(async () => [{ ...item, files }], undefined, undefined, {
+    now: () => new Date(timestamp),
+  });
+
+  await coordinator.pollOnce();
+  const first = repositories.acquisitions.reviews.get("review:ambiguous:wanted")!;
+  timestamp = "2026-09-14T00:05:00.000Z";
+  files = [
+    { ...file, remoteFileId: "candidate-a" },
+    { ...file, remoteFileId: "candidate-c", originalFilename: "A.Show.S01E02.720p.replacement.mkv" },
+  ];
+  await coordinator.pollOnce();
+  const next = repositories.acquisitions.reviews.get("review:ambiguous:wanted")!;
+
+  expect(next.updatedAt).toBe("2026-09-14T00:05:00.000Z");
+  expect(next.updatedAt).not.toBe(first.updatedAt);
+  expect(next.candidates.map((candidate) => candidate.remoteFileId)).toEqual(["candidate-a", "candidate-c"]);
+  repositories.close();
 });
 test("offers competing full-series collections for one requested season without reserving any other-season jobs", async () => {
   const seasonFiles = (remoteItemId: string, season: number) => Array.from({ length: 3 }, (_, index) => ({

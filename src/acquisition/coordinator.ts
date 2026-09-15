@@ -758,7 +758,7 @@ export class AcquisitionCoordinator {
     const id = `review:${plan.reason}:${plan.wantedId}`;
     const existing = this.repositories.acquisitions.reviews.get(id);
     const timestamp = this.isoNow();
-    return {
+    const next: AcquisitionReview = {
       id,
       wantedId: plan.wantedId,
       kind: plan.reason,
@@ -781,6 +781,10 @@ export class AcquisitionCoordinator {
       createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
     };
+    // Re-polling an unchanged ambiguity must not invalidate a deliberate UI
+    // selection. The review version advances only when a provider-visible,
+    // selection-relevant fact actually changes.
+    return existing && sameEpisodeReview(existing, next) ? existing : next;
   }
 
   private buildSeasonPackOffer(plan: Extract<MatchPlan, { kind: "season-pack" }>): AcquisitionReview {
@@ -1804,6 +1808,26 @@ function sameReviewCandidate(
     left.remoteItemId === right.remoteItemId && left.remoteFileId === right.remoteFileId &&
     left.filename === right.filename && left.sizeBytes === right.sizeBytes &&
     left.resolution === right.resolution && left.season === right.season && left.episode === right.episode;
+}
+
+/** Compares an episode review without its mutable timestamps. */
+function sameEpisodeReview(
+  current: AcquisitionReview,
+  expected: AcquisitionReview,
+): boolean {
+  return current.kind !== "season-pack" && expected.kind !== "season-pack" &&
+    current.id === expected.id &&
+    current.wantedId === expected.wantedId &&
+    current.kind === expected.kind &&
+    current.message === expected.message &&
+    current.packEpisodeCount === expected.packEpisodeCount &&
+    current.packTotalBytes === expected.packTotalBytes &&
+    current.packSeriesTitle === expected.packSeriesTitle &&
+    current.packSeason === expected.packSeason &&
+    current.candidates.length === expected.candidates.length &&
+    current.candidates.every((candidate, index) =>
+      sameReviewCandidate(candidate, expected.candidates[index]!),
+    );
 }
 
 function isRunnable(job: AcquisitionJob, nowMs: number): boolean {
