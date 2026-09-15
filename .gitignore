@@ -19,3 +19,9 @@ exports/
 # Python tooling
 __pycache__/
 *.pyc
+
+# Per-reel segmentation tables for tools/ (selected with tools/*.py --data).
+# Hand-curated answer keys for specific source reels, supplied locally rather
+# than published. Stated explicitly instead of relying on the "data/" rule
+# above happening to match this path.
+tools/data/
