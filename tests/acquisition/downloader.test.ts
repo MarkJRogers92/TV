@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
@@ -82,9 +82,18 @@ describe("downloadJob", () => {
     const error = await rejectedDownload(downloadJob(job, provider, "secret", { inbox, inboxIdentity }, undefined, {
       dnsLookup: async () => ["8.8.8.8"],
       transport: async () => {
-        await rm(inbox, { recursive: true });
-        if (kind === "symlink") await symlink(target, inbox);
-        else await mkdir(inbox);
+        if (kind === "symlink") {
+          await rm(inbox, { recursive: true });
+          await symlink(target, inbox);
+        } else {
+          // Allocate the replacement before removing the original so the inode
+          // cannot be recycled in place; see replaceManagedDirectory in
+          // paths.test.ts for why ext4 requires this.
+          const replacement = join(parent, "inbox-replacement");
+          await mkdir(replacement);
+          await rm(inbox, { recursive: true });
+          await rename(replacement, inbox);
+        }
         return response(200, "test", { "content-length": "4" });
       },
     }));
