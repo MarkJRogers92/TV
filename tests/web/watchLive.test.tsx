@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const hlsMock = vi.hoisted(() => ({
@@ -60,6 +60,11 @@ test("loads the selected channel in a browser player and offers a VLC fallback",
   expect(screen.getByRole("heading", { name: "Watch Live" })).toBeVisible();
   const video = screen.getByLabelText("MarkTV live channel");
   expect(video).toHaveAttribute("controls");
+  const playerFrame = video.parentElement;
+  expect(playerFrame).not.toBeNull();
+  expect(
+    within(playerFrame as HTMLElement).getByLabelText("MarkTV watermark"),
+  ).toHaveTextContent("MarkTV");
   await waitFor(() =>
     expect(createPlayer).toHaveBeenCalledWith(
       video,

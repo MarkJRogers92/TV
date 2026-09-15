@@ -88,6 +88,10 @@ export function WatchLive({
           playsInline
           ref={videoRef}
         />
+        <div aria-label="MarkTV watermark" className="marktv-watermark" role="img">
+          <span aria-hidden="true">Mark</span>
+          <strong aria-hidden="true">TV</strong>
+        </div>
       </div>
       {status === "connecting" ? <p role="status">Connecting to live TV…</p> : null}
       {status === "live" ? <p className="live-status">● Live</p> : null}
