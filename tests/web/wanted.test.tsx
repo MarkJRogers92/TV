@@ -32,6 +32,10 @@ const wantedEntry = {
     kind: "ambiguous",
     message: "Multiple files match this episode.",
     candidateCount: 2,
+    candidates: [
+      { candidateIndex: 0, provider: "real-debrid", filename: "A.Show.S01E02.720p.candidate-a.mkv", sizeBytes: 1000, resolution: "720p" },
+      { candidateIndex: 1, provider: "real-debrid", filename: "A.Show.S01E02.720p.candidate-b.mkv", sizeBytes: 1200, resolution: "720p" },
+    ],
     createdAt: "2026-09-14T00:00:00.000Z",
     updatedAt: "2026-09-14T00:00:00.000Z",
   },
@@ -77,6 +81,32 @@ test("wanted list shows status, progress, review, exact Stremio link, and job ac
   expect(screen.getByRole("button", { name: "Retry job" })).toBeVisible();
   expect(screen.getByRole("button", { name: "Cancel job" })).toBeVisible();
   expect(screen.getByRole("button", { name: "Remove episode" })).toBeVisible();
+});
+
+test("candidate choices remain unselected until the user deliberately selects one and sends its review version", async () => {
+  const selectCandidate = vi.fn(async () => ({ status: "scheduled", job: wantedEntry.job }));
+  render(<Wanted client={stubClient({ selectCandidate }) as never} />);
+  await screen.findByText("Wanted episodes (1)");
+  expect(screen.getByLabelText("Select A.Show.S01E02.720p.candidate-a.mkv")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Use selected candidate" })).toBeDisabled();
+  fireEvent.click(screen.getByLabelText("Select A.Show.S01E02.720p.candidate-b.mkv"));
+  fireEvent.click(screen.getByRole("button", { name: "Use selected candidate" }));
+  await screen.findByText(/Candidate selected/);
+  expect(selectCandidate).toHaveBeenCalledWith("review-1", {
+    candidateIndex: 1,
+    reviewUpdatedAt: "2026-09-14T00:00:00.000Z",
+  });
+});
+
+test("does not turn blank season or episode inputs into episode zero", async () => {
+  const addWanted = vi.fn(async () => ({ ...wantedEntry, id: "wanted-blank" }));
+  render(<Wanted client={stubClient({ addWanted }) as never} />);
+  await screen.findByText("Wanted episodes (1)");
+  fireEvent.change(screen.getByLabelText("Series title"), { target: { value: "New Show" } });
+  fireEvent.change(screen.getByLabelText("Season"), { target: { value: "1" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add episode" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Enter a series title, season, and episode.");
+  expect(addWanted).not.toHaveBeenCalled();
 });
 
 test("season packs show count, bytes, status, and import action", async () => {

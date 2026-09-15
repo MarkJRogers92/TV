@@ -26,6 +26,7 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
   const [episode, setEpisode] = useState("");
   const [episodeTitle, setEpisodeTitle] = useState("");
   const [busy, setBusy] = useState(false);
+  const [selectedCandidates, setSelectedCandidates] = useState<Record<string, number | undefined>>({});
 
   useEffect(() => {
     Promise.all([client.listWanted(), client.listSeasonPacks()])
@@ -82,9 +83,11 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
   const add = async () => {
     setActionError("");
     setNotice("");
-    const seasonNumber = Number(season);
-    const episodeNumber = Number(episode);
-    if (!seriesTitle.trim() || !Number.isInteger(seasonNumber) || !Number.isInteger(episodeNumber)) {
+    const seasonValue = season.trim();
+    const episodeValue = episode.trim();
+    const seasonNumber = Number(seasonValue);
+    const episodeNumber = Number(episodeValue);
+    if (!seriesTitle.trim() || !seasonValue || !episodeValue || !Number.isInteger(seasonNumber) || !Number.isInteger(episodeNumber)) {
       setActionError("Enter a series title, season, and episode.");
       return;
     }
@@ -153,6 +156,20 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
       setNotice(
         `Season import scheduled for ${result.wantedIds.length} episode(s).`,
       );
+      await refresh();
+    } catch (caught) {
+      setActionError((caught as ApiError).message);
+    }
+  };
+
+  const selectCandidate = async (reviewId: string, reviewUpdatedAt: string) => {
+    const candidateIndex = selectedCandidates[reviewId];
+    if (candidateIndex === undefined) return;
+    setActionError("");
+    setNotice("");
+    try {
+      await client.selectCandidate(reviewId, { candidateIndex, reviewUpdatedAt });
+      setNotice("Candidate selected and acquisition scheduled.");
       await refresh();
     } catch (caught) {
       setActionError((caught as ApiError).message);
@@ -244,12 +261,42 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
                 <p>No acquisition job yet.</p>
               )}
               {entry.review ? (
-                <p>
-                  Needs review: {entry.review.message}
-                  {entry.review.candidateCount > 0
-                    ? ` (${entry.review.candidateCount} candidate(s))`
-                    : null}
-                </p>
+                <div>
+                  <p>
+                    Needs review: {entry.review.message}
+                    {entry.review.candidateCount > 0
+                      ? ` (${entry.review.candidateCount} candidate(s))`
+                      : null}
+                  </p>
+                  {entry.review.candidates.length > 0 ? (
+                    <fieldset>
+                      <legend>Choose a file deliberately</legend>
+                      {entry.review.candidates.map((candidate) => (
+                        <label key={candidate.candidateIndex}>
+                          <input
+                            type="radio"
+                            name={`candidate-${entry.review?.id}`}
+                            aria-label={`Select ${candidate.filename}`}
+                            checked={selectedCandidates[entry.review!.id] === candidate.candidateIndex}
+                            onChange={() => setSelectedCandidates((current) => ({
+                              ...current,
+                              [entry.review!.id]: candidate.candidateIndex,
+                            }))}
+                          />
+                          {candidate.filename} · {candidate.provider}
+                          {candidate.resolution ? ` · ${candidate.resolution}` : ""}
+                          {candidate.sizeBytes !== null ? ` · ${formatBytes(candidate.sizeBytes)}` : ""}
+                        </label>
+                      ))}
+                      <button
+                        disabled={selectedCandidates[entry.review.id] === undefined}
+                        onClick={() => void selectCandidate(entry.review!.id, entry.review!.updatedAt)}
+                      >
+                        Use selected candidate
+                      </button>
+                    </fieldset>
+                  ) : null}
+                </div>
               ) : null}
               <p>
                 <a href={entry.stremioUrl}>Open in Stremio</a>

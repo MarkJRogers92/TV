@@ -39,6 +39,8 @@ const retryUrl = (id: string) => `/api/v1/acquisitions/jobs/${id}/retry`;
 const cancelUrl = (id: string) => `/api/v1/acquisitions/jobs/${id}/cancel`;
 const importSeasonUrl = (id: string) =>
   `/api/v1/acquisitions/reviews/${id}/import-season`;
+const selectCandidateUrl = (id: string) =>
+  `/api/v1/acquisitions/reviews/${id}/select-candidate`;
 
 const NOW = "2026-09-14T10:00:00.000Z";
 const UUID_V4 =
@@ -245,6 +247,37 @@ function packOffer(
   });
 }
 
+function episodeCandidate(remoteFileId = "candidate-a"): AcquisitionReviewCandidate {
+  return {
+    provider: "real-debrid",
+    itemType: "torrent",
+    remoteItemId: "item-1",
+    remoteFileId,
+    filename: `A.Show.S01E02.720p.${remoteFileId}.mkv`,
+    sizeBytes: PACK_BYTES,
+    resolution: "720p",
+    season: 1,
+    episode: 2,
+  };
+}
+
+function episodeReview(
+  overrides: Partial<AcquisitionReview> & { id: string; wantedId: string },
+): AcquisitionReview {
+  return acquisitionReviewSchema.parse({
+    kind: "ambiguous",
+    message: "More than one equally good file matches this episode",
+    candidates: [episodeCandidate("candidate-a"), episodeCandidate("candidate-b")],
+    packEpisodeCount: null,
+    packTotalBytes: null,
+    packSeriesTitle: null,
+    packSeason: null,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  });
+}
+
 function packItem(files: number[], remoteItemId = "pack-1"): RemoteItem {
   return {
     provider: "real-debrid",
@@ -289,7 +322,6 @@ const FORBIDDEN_LOCATOR_KEYS = [
   "remoteFileId",
   "originalFilename",
   "lastError",
-  "candidates",
   "mediaId",
   "canonicalName",
 ];
@@ -559,6 +591,137 @@ describe("GET/POST /api/v1/acquisitions/wanted", () => {
         "More than one equally good file matches this episode",
       );
       expectNoLeaks(listed);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("projects only safe metadata for selectable episode candidates", async () => {
+    const { app } = await rig();
+    const database = directDatabase();
+    database.acquisitions.wanted.create(wantedRecord("wanted-e2", 2, "needs-review"));
+    database.acquisitions.reviews.save(episodeReview({ id: "review-candidates", wantedId: "wanted-e2" }));
+    database.close();
+    try {
+      const listed = (await app.inject(WANTED_URL)).json();
+      expect(listed[0].review).toMatchObject({
+        id: "review-candidates",
+        candidates: [
+          { candidateIndex: 0, provider: "real-debrid", filename: "A.Show.S01E02.720p.candidate-a.mkv", sizeBytes: PACK_BYTES, resolution: "720p" },
+          { candidateIndex: 1, provider: "real-debrid", filename: "A.Show.S01E02.720p.candidate-b.mkv", sizeBytes: PACK_BYTES, resolution: "720p" },
+        ],
+      });
+      expect(JSON.stringify(listed[0].review)).not.toMatch(/remote(Item|File)Id|path|token|url/i);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe("POST /api/v1/acquisitions/reviews/:id/select-candidate", () => {
+  test("validates a strict fresh selection and reserves exactly the chosen matching file", async () => {
+    const selected = episodeCandidate("candidate-b");
+    const { app } = await rig({
+      items: [{
+        provider: "real-debrid",
+        itemType: "torrent",
+        remoteItemId: selected.remoteItemId,
+        originalName: "A Show S01E02 720p",
+        completedAt: NOW,
+        files: [{
+          provider: selected.provider,
+          itemType: selected.itemType,
+          remoteItemId: selected.remoteItemId,
+          remoteFileId: selected.remoteFileId,
+          originalFilename: selected.filename,
+          remotePath: "safe-provider-display-name",
+          bytes: selected.sizeBytes,
+        }],
+      }],
+    });
+    const database = directDatabase();
+    database.acquisitions.wanted.create(wantedRecord("wanted-e2", 2, "needs-review"));
+    database.acquisitions.reviews.save(episodeReview({ id: "review-select", wantedId: "wanted-e2" }));
+    database.close();
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: selectCandidateUrl("review-select"),
+        payload: { candidateIndex: 1, reviewUpdatedAt: NOW },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ status: "scheduled" });
+      const after = directDatabase();
+      expect(after.acquisitions.reviews.get("review-select")).toBeUndefined();
+      expect(after.acquisitions.wanted.get("wanted-e2")).toMatchObject({ status: "match-found" });
+      expect(after.acquisitions.jobs.listByWanted("wanted-e2")).toMatchObject([
+        { provider: "real-debrid", remoteItemId: "item-1", remoteFileId: "candidate-b", originalFilename: selected.filename, state: "match-found" },
+      ]);
+      after.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("rejects stale timestamps, invalid selection indexes, and missing provider files without consuming the review", async () => {
+    const { app } = await rig();
+    const database = directDatabase();
+    database.acquisitions.wanted.create(wantedRecord("wanted-e2", 2, "needs-review"));
+    database.acquisitions.reviews.save(episodeReview({ id: "review-stale", wantedId: "wanted-e2", updatedAt: "2026-09-14T10:01:00.000Z" }));
+    database.close();
+    try {
+      const stale = await app.inject({ method: "POST", url: selectCandidateUrl("review-stale"), payload: { candidateIndex: 0, reviewUpdatedAt: NOW } });
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json()).toMatchObject({ code: "STALE_REVIEW" });
+      const invalid = await app.inject({ method: "POST", url: selectCandidateUrl("review-stale"), payload: { candidateIndex: -1, reviewUpdatedAt: "2026-09-14T10:01:00.000Z" } });
+      expect(invalid.statusCode).toBe(422);
+      const missing = await app.inject({ method: "POST", url: selectCandidateUrl("review-stale"), payload: { candidateIndex: 0, reviewUpdatedAt: "2026-09-14T10:01:00.000Z" } });
+      expect(missing.statusCode).toBe(409);
+      expect(missing.json()).toMatchObject({ code: "STALE_CANDIDATE" });
+      expect(directDatabase().acquisitions.reviews.get("review-stale")).toBeDefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("keeps a review when credentials are absent, a candidate changes, or an active job conflicts", async () => {
+    const selected = episodeCandidate("candidate-a");
+    const { app, store, realDebrid } = await rig({ credentials: {} });
+    const database = directDatabase();
+    database.acquisitions.wanted.create(wantedRecord("wanted-e2", 2, "needs-review"));
+    database.acquisitions.reviews.save(episodeReview({ id: "review-guarded", wantedId: "wanted-e2" }));
+    database.close();
+    try {
+      const noCredential = await app.inject({ method: "POST", url: selectCandidateUrl("review-guarded"), payload: { candidateIndex: 0, reviewUpdatedAt: NOW } });
+      expect(noCredential.statusCode).toBe(409);
+      expect(noCredential.json()).toMatchObject({ code: "NO_CREDENTIAL", provider: "real-debrid" });
+      await store.set("real-debrid", TOKEN);
+      realDebrid.behavior = {
+        kind: "ok",
+        items: [{
+          provider: "real-debrid", itemType: "torrent", remoteItemId: "item-1", originalName: "A Show S01E02 720p", completedAt: NOW,
+          files: [{ provider: "real-debrid", itemType: "torrent", remoteItemId: "item-1", remoteFileId: selected.remoteFileId, originalFilename: "A.Show.S01E02.1080p.changed.mkv", remotePath: "display", bytes: PACK_BYTES }],
+        }],
+      };
+      const changed = await app.inject({ method: "POST", url: selectCandidateUrl("review-guarded"), payload: { candidateIndex: 0, reviewUpdatedAt: NOW } });
+      expect(changed.statusCode).toBe(409);
+      expect(changed.json()).toMatchObject({ code: "STALE_CANDIDATE" });
+      const afterChanged = directDatabase();
+      afterChanged.acquisitions.jobs.save(jobRecord({ id: "job-active", wantedId: "wanted-e2", state: "downloading", remoteFileId: "other-file" }));
+      afterChanged.close();
+      realDebrid.behavior = {
+        kind: "ok",
+        items: [{
+          provider: "real-debrid", itemType: "torrent", remoteItemId: "item-1", originalName: "A Show S01E02 720p", completedAt: NOW,
+          files: [{ provider: selected.provider, itemType: selected.itemType, remoteItemId: selected.remoteItemId, remoteFileId: selected.remoteFileId, originalFilename: selected.filename, remotePath: "display", bytes: selected.sizeBytes }],
+        }],
+      };
+      const conflict = await app.inject({ method: "POST", url: selectCandidateUrl("review-guarded"), payload: { candidateIndex: 0, reviewUpdatedAt: NOW } });
+      expect(conflict.statusCode).toBe(409);
+      expect(conflict.json()).toMatchObject({ code: "SELECTION_CONFLICT" });
+      const final = directDatabase();
+      expect(final.acquisitions.reviews.get("review-guarded")).toBeDefined();
+      final.close();
     } finally {
       await app.close();
     }

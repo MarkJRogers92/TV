@@ -177,6 +177,22 @@ export type SeasonImportOutcome =
       readonly neededBytes: number;
     };
 
+export type CandidateSelectionOutcome =
+  | { readonly kind: "scheduled"; readonly job: AcquisitionJob }
+  | { readonly kind: "not-found" }
+  | { readonly kind: "invalid-review" }
+  | { readonly kind: "stale-review" }
+  | { readonly kind: "invalid-candidate" }
+  | { readonly kind: "no-credential"; readonly provider: AcquisitionProviderId }
+  | {
+      readonly kind: "provider-error";
+      readonly provider: AcquisitionProviderId;
+      readonly code: ProviderErrorCode;
+      readonly retryable: boolean;
+    }
+  | { readonly kind: "stale-candidate"; readonly provider: AcquisitionProviderId }
+  | { readonly kind: "conflict" };
+
 export class CoordinatorConfigurationError extends Error {
   readonly name = "CoordinatorConfigurationError";
 }
@@ -208,6 +224,10 @@ interface RecognizedPackFile {
 const providerNames = ["real-debrid", "torbox"] as const satisfies readonly ProviderName[];
 const excludedWantedStatuses = new Set(["needs-review", "cancelled", "imported"]);
 const terminalStates = new Set(["imported", "cancelled"]);
+
+function isCompletedItem(item: RemoteItem): boolean {
+  return typeof item.completedAt === "string" && item.completedAt.trim().length > 0 && Number.isFinite(Date.parse(item.completedAt));
+}
 
 const providerFailureDetails: Record<ProviderErrorCode, string> = {
   AUTHENTICATION: "Provider authentication failed",
@@ -490,6 +510,65 @@ export class AcquisitionCoordinator {
   }
 
   /**
+   * Revalidates and reserves one consciously selected, single-episode review
+   * candidate. Provider I/O is outside the durable queue; the final mutation
+   * rechecks the review version before it creates a job and consumes the row.
+   */
+  async selectCandidate(
+    reviewId: string,
+    candidateIndex: number,
+    reviewUpdatedAt: string,
+  ): Promise<CandidateSelectionOutcome> {
+    const review = await this.enqueue(() => this.repositories.acquisitions.reviews.get(reviewId));
+    if (!review) return { kind: "not-found" };
+    if (review.kind === "season-pack" || review.kind === "multi-episode") return { kind: "invalid-review" };
+    if (review.updatedAt !== reviewUpdatedAt) return { kind: "stale-review" };
+    const locator = review.candidates[candidateIndex];
+    if (!locator || locator.season === null || locator.episode === null) return { kind: "invalid-candidate" };
+    const wanted = await this.enqueue(() => this.repositories.acquisitions.wanted.get(review.wantedId));
+    if (!wanted || locator.season !== wanted.season || locator.episode !== wanted.episode) {
+      return { kind: "stale-candidate", provider: locator.provider };
+    }
+    let token: string | null;
+    try {
+      token = await this.credentials.get(locator.provider);
+    } catch {
+      return { kind: "provider-error", provider: locator.provider, code: "UNAVAILABLE", retryable: true };
+    }
+    if (!token) return { kind: "no-credential", provider: locator.provider };
+    let items: readonly RemoteItem[];
+    try {
+      items = await this.providers[locator.provider].listCompletedItems(token);
+    } catch (error) {
+      if (error instanceof ProviderError) return { kind: "provider-error", provider: locator.provider, code: error.code, retryable: error.retryable };
+      return { kind: "provider-error", provider: locator.provider, code: "UNAVAILABLE", retryable: true };
+    }
+    const item = items.find((candidate) =>
+      candidate.provider === locator.provider &&
+      candidate.itemType === locator.itemType &&
+      candidate.remoteItemId === locator.remoteItemId,
+    );
+    if (!item || !isCompletedItem(item)) return { kind: "stale-candidate", provider: locator.provider };
+    const currentFile = item.files.find((file) =>
+      file.provider === locator.provider && file.itemType === locator.itemType &&
+      file.remoteItemId === locator.remoteItemId && file.remoteFileId === locator.remoteFileId,
+    );
+    const parsed = currentFile ? parseVideoCandidate(currentFile) : null;
+    if (
+      !parsed || parsed.multiEpisode || parsed.provider !== locator.provider ||
+      parsed.itemType !== locator.itemType || parsed.remoteItemId !== locator.remoteItemId ||
+      parsed.remoteFileId !== locator.remoteFileId || parsed.originalFilename !== locator.filename ||
+      parsed.bytes !== locator.sizeBytes || parsed.resolution !== locator.resolution ||
+      parsed.season !== wanted.season || parsed.episode !== wanted.episode || parsed.episodeEnd !== null
+    ) return { kind: "stale-candidate", provider: locator.provider };
+    const outcome = await this.enqueue(() =>
+      this.reserveSelectedCandidate(review, candidateIndex, reviewUpdatedAt, wanted, locator),
+    );
+    if (outcome.kind === "scheduled") this.startOwnedJobLoop();
+    return outcome;
+  }
+
+  /**
    * Starts the coordinator-owned job loop without awaiting blocked transfers,
    * so a command that only scheduled work can return its durable result while
    * the download continues in the background. The loop is still registered as
@@ -758,6 +837,44 @@ export class AcquisitionCoordinator {
         reserved.push({ wantedId: wanted.id, jobId: job.id });
       }
       return reserved;
+    });
+  }
+
+  private reserveSelectedCandidate(
+    expectedReview: AcquisitionReview,
+    candidateIndex: number,
+    reviewUpdatedAt: string,
+    expectedWanted: WantedEpisode,
+    locator: AcquisitionReviewCandidate,
+  ): CandidateSelectionOutcome {
+    const repository = this.repositories.acquisitions;
+    return this.repositories.transaction(() => {
+      const review = repository.reviews.get(expectedReview.id);
+      if (!review) return { kind: "not-found" };
+      if (review.kind === "season-pack" || review.kind === "multi-episode") return { kind: "invalid-review" };
+      if (review.updatedAt !== reviewUpdatedAt) return { kind: "stale-review" };
+      const currentLocator = review.candidates[candidateIndex];
+      if (!currentLocator || !sameReviewCandidate(currentLocator, locator)) return { kind: "stale-review" };
+      const wanted = repository.wanted.get(expectedWanted.id);
+      if (!wanted || wanted.status !== "needs-review" || wanted.season !== locator.season || wanted.episode !== locator.episode) return { kind: "conflict" };
+      if (repository.jobs.listByWanted(wanted.id).some((job) => !isTerminal(job.state))) return { kind: "conflict" };
+      if (repository.imports.findByEpisode(wanted.seriesTitle, wanted.season, wanted.episode)) return { kind: "conflict" };
+      if (repository.jobs.findRemote(locator.provider, locator.remoteItemId, locator.remoteFileId)) return { kind: "conflict" };
+      if (repository.imports.findByRemote(locator.provider, locator.remoteItemId, locator.remoteFileId)) return { kind: "conflict" };
+      const timestamp = this.isoNow();
+      const job: AcquisitionJob = {
+        id: this.randomId(), wantedId: wanted.id,
+        episodeKey: episodeKey(wanted.seriesTitle, wanted.season, wanted.episode),
+        provider: locator.provider, remoteItemId: locator.remoteItemId, remoteFileId: locator.remoteFileId,
+        originalFilename: locator.filename, expectedBytes: locator.sizeBytes, receivedBytes: 0,
+        state: "match-found", attempt: 0, maxAttempts: defaultMaxAttempts, retryAfterMs: null,
+        cancelRequested: false, partPath: null, destinationPath: null, verifiedSha256: null,
+        lastError: null, createdAt: timestamp, updatedAt: timestamp,
+      };
+      repository.jobs.save(job);
+      repository.wanted.setStatus(wanted.id, "match-found", { detail: null, now: timestamp });
+      repository.reviews.remove(review.id);
+      return { kind: "scheduled", job };
     });
   }
 
@@ -1615,6 +1732,16 @@ function sameSeasonPackOffer(
     ].map((value) => String(value)).join("\u0000");
   return current.candidates.length === expected.candidates.length &&
     current.candidates.map(key).sort().every((value, index) => value === expected.candidates.map(key).sort()[index]);
+}
+
+function sameReviewCandidate(
+  left: AcquisitionReviewCandidate,
+  right: AcquisitionReviewCandidate,
+): boolean {
+  return left.provider === right.provider && left.itemType === right.itemType &&
+    left.remoteItemId === right.remoteItemId && left.remoteFileId === right.remoteFileId &&
+    left.filename === right.filename && left.sizeBytes === right.sizeBytes &&
+    left.resolution === right.resolution && left.season === right.season && left.episode === right.episode;
 }
 
 function isRunnable(job: AcquisitionJob, nowMs: number): boolean {

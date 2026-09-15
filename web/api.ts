@@ -90,6 +90,11 @@ export const markTvApi = {
     api<JobActionResult>(`/acquisitions/jobs/${id}/retry`, body({})),
   cancelJob: (id: string) =>
     api<JobActionResult>(`/acquisitions/jobs/${id}/cancel`, body({})),
+  selectCandidate: (id: string, input: { candidateIndex: number; reviewUpdatedAt: string }) =>
+    api<JobActionResult>(
+      `/acquisitions/reviews/${encodeURIComponent(id)}/select-candidate`,
+      body(input),
+    ),
   importSeason: (id: string) =>
     api<ImportSeasonResult>(
       `/acquisitions/reviews/${encodeURIComponent(id)}/import-season`,

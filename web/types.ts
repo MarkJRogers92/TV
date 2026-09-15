@@ -57,6 +57,13 @@ export type WantedReviewView = {
   kind: string;
   message: string;
   candidateCount: number;
+  candidates: Array<{
+    candidateIndex: number;
+    provider: AcquisitionProviderId;
+    filename: string;
+    sizeBytes: number | null;
+    resolution: string | null;
+  }>;
   createdAt: string;
   updatedAt: string;
 };

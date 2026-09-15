@@ -33,6 +33,18 @@ const createWantedSchema = z.strictObject({
   episode: z.number().int().nonnegative(),
   episodeTitle: z.string().trim().min(1).nullable().optional(),
 });
+const selectCandidateSchema = z.strictObject({
+  candidateIndex: z.number().int().nonnegative(),
+  reviewUpdatedAt: z.string().datetime({ offset: true }),
+});
+
+type ReviewCandidateView = {
+  candidateIndex: number;
+  provider: AcquisitionProviderId;
+  filename: string;
+  sizeBytes: number | null;
+  resolution: string | null;
+};
 
 /**
  * Safe projection of one acquisition job. Local paths, remote locators, the
@@ -61,6 +73,7 @@ type ReviewView = {
   kind: AcquisitionReviewKind;
   message: string;
   candidateCount: number;
+  candidates: ReviewCandidateView[];
   createdAt: string;
   updatedAt: string;
 };
@@ -118,6 +131,13 @@ function reviewView(review: AcquisitionReview): ReviewView {
     kind: review.kind,
     message: review.message,
     candidateCount: review.candidates.length,
+    candidates: review.kind === "season-pack" ? [] : review.candidates.map((candidate, candidateIndex) => ({
+      candidateIndex,
+      provider: candidate.provider,
+      filename: candidate.filename,
+      sizeBytes: candidate.sizeBytes,
+      resolution: candidate.resolution,
+    })),
     createdAt: review.createdAt,
     updatedAt: review.updatedAt,
   };
@@ -453,6 +473,37 @@ export async function registerAcquisitionRoutes(
           message: "This episode was already imported",
           job: jobView(outcome.job),
         });
+    }
+  });
+
+  app.post("/api/v1/acquisitions/reviews/:id/select-candidate", async (request, reply) => {
+    let input: z.infer<typeof selectCandidateSchema>;
+    try {
+      input = selectCandidateSchema.parse(request.body);
+    } catch (error) {
+      return validationError(reply, error);
+    }
+    const id = (request.params as { id: string }).id;
+    const outcome = await coordinator.selectCandidate(id, input.candidateIndex, input.reviewUpdatedAt);
+    switch (outcome.kind) {
+      case "scheduled":
+        return reply.code(200).send({ status: "scheduled", job: jobView(outcome.job) });
+      case "not-found":
+        return notFound(reply, "Acquisition review");
+      case "invalid-review":
+        return reply.code(409).send({ code: "INVALID_REVIEW_KIND", message: "This review cannot select a single episode candidate" });
+      case "stale-review":
+        return reply.code(409).send({ code: "STALE_REVIEW", message: "This review changed; refresh and choose again" });
+      case "invalid-candidate":
+        return reply.code(409).send({ code: "INVALID_CANDIDATE", message: "That candidate cannot be safely selected" });
+      case "no-credential":
+        return reply.code(409).send({ code: "NO_CREDENTIAL", provider: outcome.provider, message: "No token saved for this provider. Save a token in Integrations first." });
+      case "provider-error":
+        return reply.code(502).send({ code: outcome.code, provider: outcome.provider, retryable: outcome.retryable, message: PROVIDER_MESSAGES[outcome.code] });
+      case "stale-candidate":
+        return reply.code(409).send({ code: "STALE_CANDIDATE", provider: outcome.provider, message: "The selected provider file changed or is no longer completed" });
+      case "conflict":
+        return reply.code(409).send({ code: "SELECTION_CONFLICT", message: "This episode can no longer reserve the selected candidate" });
     }
   });
 
