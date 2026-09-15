@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Repositories } from "../db/repositories.js";
-import { initializeManagedPaths, type ManagedDirectoryIdentity, type ManagedPaths } from "../acquisition/paths.js";
+import { initializeManagedPaths, pinManagedDirectory, type ManagedDirectoryIdentity, type ManagedPaths } from "../acquisition/paths.js";
 
 export type MediaRootRecord = {
   id: string;
@@ -16,6 +16,30 @@ const settingPrefix = "media-root:";
 /** A stable ID means the same resolved directory is only registered once. */
 export function mediaRootId(path: string): string {
   return createHash("sha256").update(path).digest("hex").slice(0, 16);
+}
+
+/** Pin ownership key for a registered root, shared by the route handlers. */
+export function mediaRootOwner(id: string): string {
+  return `media-root:${id}`;
+}
+
+/**
+ * Pins every registered root for the lifetime of the process.
+ *
+ * Roots persisted by an earlier run carry an identity but no descriptor, so
+ * without this they stay vulnerable to inode recycling until the first scan --
+ * and an attacker who swaps the directory before that scan is never detected.
+ */
+export async function pinRegisteredMediaRoots(repositories: Repositories): Promise<void> {
+  for (const root of listMediaRoots(repositories)) {
+    if (!root.directoryIdentity) continue;
+    try {
+      await pinManagedDirectory(root.directoryIdentity.path, mediaRootOwner(root.id));
+    } catch {
+      // A root can be temporarily absent, e.g. an unmounted volume. Scanning
+      // reports that through assertManagedDirectory, so this is not fatal.
+    }
+  }
 }
 
 export function listMediaRoots(repositories: Repositories): MediaRootRecord[] {

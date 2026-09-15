@@ -2,7 +2,14 @@ import { lstat, mkdtemp, mkdir, readdir, realpath, rename, rm, symlink, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { assertManagedDirectory, canonicalVideoName, initializeManagedPaths } from "../../src/acquisition/paths.js";
+import {
+  assertManagedDirectory,
+  canonicalVideoName,
+  initializeManagedPaths,
+  pinManagedDirectory,
+  pinOwners,
+  unpinManagedDirectory,
+} from "../../src/acquisition/paths.js";
 
 describe("canonicalVideoName", () => {
   test("creates a contained canonical episode filename", () => {
@@ -132,5 +139,42 @@ describe("inode pinning", () => {
     const second = await initializeManagedPaths(dataDir);
     expect(second.inboxIdentity.ino).toBe(first.inboxIdentity.ino);
     expect(second.libraryIdentity.ino).toBe(first.libraryIdentity.ino);
+    expect(pinOwners(first.libraryIdentity.path)).toEqual(["managed-paths"]);
+  });
+});
+
+describe("pin ownership", () => {
+  test("keeps a shared directory pinned until the last owner releases it", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "marktv-paths-"));
+    const paths = await initializeManagedPaths(dataDir);
+    const library = paths.libraryIdentity.path;
+    expect(pinOwners(library)).toEqual(["managed-paths"]);
+
+    await pinManagedDirectory(library, "media-root:abc");
+    expect([...pinOwners(library)].sort()).toEqual(["managed-paths", "media-root:abc"]);
+
+    // The managed library is itself registered as a media root, so deleting that
+    // root must not release the pin acquisition depends on.
+    await unpinManagedDirectory(library, "media-root:abc");
+    expect(pinOwners(library)).toEqual(["managed-paths"]);
+  });
+
+  test("releases the last owner and allows the path to be pinned again", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "marktv-paths-"));
+    const paths = await initializeManagedPaths(dataDir);
+    await unpinManagedDirectory(paths.inbox, "managed-paths");
+    expect(pinOwners(paths.inbox)).toEqual([]);
+
+    await pinManagedDirectory(paths.inbox, "managed-paths");
+    expect(pinOwners(paths.inbox)).toEqual(["managed-paths"]);
+  });
+
+  test("ignores unknown owners and unknown paths instead of throwing", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "marktv-paths-"));
+    const paths = await initializeManagedPaths(dataDir);
+    await unpinManagedDirectory(paths.inbox, "never-pinned");
+    await unpinManagedDirectory(join(dataDir, "absent"), "managed-paths");
+    expect(pinOwners(paths.inbox)).toEqual(["managed-paths"]);
+    expect(pinOwners(join(dataDir, "absent"))).toEqual([]);
   });
 });

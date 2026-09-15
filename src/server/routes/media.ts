@@ -11,10 +11,15 @@ import {
   getMediaRoot,
   listMediaRoots,
   mediaRootId,
+  mediaRootOwner,
   putMediaRoot,
   removeMediaRoot,
 } from "../../media/roots.js";
-import { assertManagedDirectory, captureManagedDirectory } from "../../acquisition/paths.js";
+import {
+  assertManagedDirectory,
+  captureManagedDirectory,
+  unpinManagedDirectory,
+} from "../../acquisition/paths.js";
 import type { MediaRootRecord, ServerContext } from "../context.js";
 import { notFound, validationError } from "../errors.js";
 
@@ -67,12 +72,13 @@ export async function registerMediaRoutes(
     try {
       const { path } = rootSchema.parse(request.body);
       const resolved = await validateMediaRoot(path);
+      const id = mediaRootId(resolved);
       const root: MediaRootRecord = {
-        id: mediaRootId(resolved),
+        id,
         path: resolved,
         lastScannedAt: null,
         diagnostics: [],
-        directoryIdentity: await captureManagedDirectory(resolved),
+        directoryIdentity: await captureManagedDirectory(resolved, { pin: mediaRootOwner(id) }),
       };
       putMediaRoot(repositories, root);
       return reply.code(201).send(root);
@@ -82,8 +88,12 @@ export async function registerMediaRoutes(
   });
   app.delete("/api/v1/media/roots/:id", async (request, reply) => {
     const id = (request.params as { id: string }).id;
-    if (!removeMediaRoot(repositories, id))
+    const stored = getMediaRoot(repositories, id);
+    if (!stored || !removeMediaRoot(repositories, id))
       return notFound(reply, "Media root");
+    // Releases only this root's pin; the managed library holds its own, so
+    // deleting the root registered for it cannot unpin acquisition.
+    await unpinManagedDirectory(stored.directoryIdentity?.path ?? stored.path, mediaRootOwner(id));
     return reply.code(204).send();
   });
   app.post("/api/v1/media/roots/:id/scan", async (request, reply) => {

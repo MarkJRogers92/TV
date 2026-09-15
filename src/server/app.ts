@@ -11,7 +11,7 @@ import { seedDemoIfEmpty } from "../demo/marktvLaughs.js";
 import { RealDebridProvider } from "../integrations/acquisition/realDebrid.js";
 import { TorBoxProvider } from "../integrations/acquisition/torBox.js";
 import type { AcquisitionProvider } from "../integrations/acquisition/provider.js";
-import { registerManagedLibrary } from "../media/roots.js";
+import { pinRegisteredMediaRoots, registerManagedLibrary } from "../media/roots.js";
 import { KeychainCredentialStore } from "../security/keychain.js";
 import type { CredentialStore } from "../security/credentialStore.js";
 import type { ServerContext } from "./context.js";
@@ -173,6 +173,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
   // library root exactly once so acquisition writes and the media scanner share
   // one root however often the app starts against the same data dir.
   const managedPaths = await registerManagedLibrary(repositories, dataDir);
+  // Hold every registered root open so the inode comparisons the scanner relies
+  // on cannot be defeated by a recycled inode, including roots from earlier runs.
+  await pinRegisteredMediaRoots(repositories);
   // One coordinator for the whole process. It reuses the validated provider map
   // and credential store the integration routes use, so a token, locator, or
   // command can never be routed through a second, unvalidated stack.

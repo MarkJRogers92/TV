@@ -51,12 +51,38 @@ const sentinelPattern = /^[0-9a-f]{32}$/;
  * This is what remains of fd pinning now that `openat` is unavailable: Node
  * exposes no fd-relative open, so writes cannot be made relative to the
  * directory, but the inode can still be kept from being recycled.
+ *
+ * Pins are counted per owner rather than per path because the managed library is
+ * itself registered as a media root: without ownership, deleting that root would
+ * close the descriptor acquisition depends on.
  */
-const pinnedDirectories = new Map<string, FileHandle>();
+const pinnedDirectories = new Map<string, { handle: FileHandle; owners: Set<string> }>();
 
-async function pinDirectory(resolved: string): Promise<void> {
-  if (pinnedDirectories.has(resolved)) return;
-  pinnedDirectories.set(resolved, await open(resolved, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW));
+/** Holds a directory open on behalf of `owner`. `resolvedPath` must already be resolved. */
+export async function pinManagedDirectory(resolvedPath: string, owner: string): Promise<void> {
+  const pin = pinnedDirectories.get(resolvedPath);
+  if (pin) {
+    pin.owners.add(owner);
+    return;
+  }
+  pinnedDirectories.set(resolvedPath, {
+    handle: await open(resolvedPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW),
+    owners: new Set([owner]),
+  });
+}
+
+/** Releases one owner's pin; the descriptor closes only when the last owner leaves. */
+export async function unpinManagedDirectory(resolvedPath: string, owner: string): Promise<void> {
+  const pin = pinnedDirectories.get(resolvedPath);
+  if (!pin || !pin.owners.delete(owner)) return;
+  if (pin.owners.size > 0) return;
+  pinnedDirectories.delete(resolvedPath);
+  await pin.handle.close();
+}
+
+/** Exposed so tests can assert pin lifetimes without reaching into module state. */
+export function pinOwners(resolvedPath: string): readonly string[] {
+  return [...(pinnedDirectories.get(resolvedPath)?.owners ?? [])];
 }
 
 /** Reads a directory's identity token, minting one the first time it is needed. */
@@ -145,14 +171,14 @@ async function ensureDirectory(path: string): Promise<string> {
 
 export async function captureManagedDirectory(
   path: string,
-  options: { sentinel?: boolean; pin?: boolean } = {},
+  options: { sentinel?: boolean; pin?: string } = {},
 ): Promise<ManagedDirectoryIdentity> {
   const resolved = await realpath(path);
   const entry = await lstat(path);
   const target = await lstat(resolved);
   if (entry.isSymbolicLink() || !target.isDirectory())
     throw new ManagedPathError("Managed directory is not a real directory");
-  if (options.pin) await pinDirectory(resolved);
+  if (options.pin !== undefined) await pinManagedDirectory(resolved, options.pin);
   const identity = { path: resolved, dev: target.dev, ino: target.ino };
   return options.sentinel ? { ...identity, token: await ensureSentinel(resolved) } : identity;
 }
@@ -188,7 +214,7 @@ export async function initializeManagedPaths(dataDir: string): Promise<ManagedPa
   return {
     inbox,
     library,
-    inboxIdentity: await captureManagedDirectory(inbox, { sentinel: true, pin: true }),
-    libraryIdentity: await captureManagedDirectory(library, { pin: true }),
+    inboxIdentity: await captureManagedDirectory(inbox, { sentinel: true, pin: "managed-paths" }),
+    libraryIdentity: await captureManagedDirectory(library, { pin: "managed-paths" }),
   };
 }

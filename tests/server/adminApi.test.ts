@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { buildApp } from "../../src/server/app.js";
+import { pinOwners } from "../../src/acquisition/paths.js";
 import { writeScheduleExport } from "../../src/export/marktvJson.js";
 import type { ExportSchedule } from "../../src/server/scheduleService.js";
 
@@ -143,6 +144,32 @@ test("persists, scans, and removes explicit read-only media roots with safe erro
       })
     ).statusCode,
   ).toBe(204);
+  await app.close();
+});
+
+test("removing the root registered for the managed library leaves acquisition pinned", async () => {
+  const dataDir = await temporaryDirectory("marktv-api-");
+  const app = await buildApp({ dataDir });
+  const roots = (await app.inject("/api/v1/media/roots")).json() as Array<{
+    id: string;
+    path: string;
+  }>;
+  // The app registers the managed acquisition library as a root at startup, and
+  // startup pinning covers it under the root's own owner as well.
+  const library = roots.find((root) => root.path.endsWith("library"));
+  expect(library).toBeDefined();
+  const libraryPath = library?.path ?? "";
+  expect(pinOwners(libraryPath)).toContain("managed-paths");
+
+  const removed = await app.inject({
+    method: "DELETE",
+    url: `/api/v1/media/roots/${library?.id}`,
+  });
+  expect(removed.statusCode).toBe(204);
+
+  // The root's pin is released, but the descriptor acquisition depends on must
+  // survive: same directory, two independent owners.
+  expect(pinOwners(libraryPath)).toEqual(["managed-paths"]);
   await app.close();
 });
 
