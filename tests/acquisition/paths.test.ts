@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -107,5 +107,30 @@ describe("managed identity token", () => {
     expect(first.libraryIdentity.token).toBeUndefined();
     expect(await readdir(first.library)).toEqual([]);
     expect(await readdir(first.inbox)).toEqual([".marktv-identity"]);
+  });
+});
+
+describe("inode pinning", () => {
+  test("a replacement cannot reuse a pinned managed directory's inode", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "marktv-paths-"));
+    const paths = await initializeManagedPaths(dataDir);
+    for (const identity of [paths.inboxIdentity, paths.libraryIdentity]) {
+      // Measured on ext4: without the held descriptor this rm+mkdir returns the
+      // freed inode number 30/30 times, which is precisely the collision that
+      // made the guard pass on CI while it passed locally on APFS. On macOS this
+      // assertion holds with or without pinning, so it only has teeth on Linux.
+      await rm(identity.path, { recursive: true });
+      await mkdir(identity.path);
+      expect((await lstat(identity.path)).ino).not.toBe(identity.ino);
+      await expect(assertManagedDirectory(identity)).rejects.toThrow(/replaced/i);
+    }
+  });
+
+  test("reinitializing does not accumulate pinned descriptors", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "marktv-paths-"));
+    const first = await initializeManagedPaths(dataDir);
+    const second = await initializeManagedPaths(dataDir);
+    expect(second.inboxIdentity.ino).toBe(first.inboxIdentity.ino);
+    expect(second.libraryIdentity.ino).toBe(first.libraryIdentity.ino);
   });
 });
