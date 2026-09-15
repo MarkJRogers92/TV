@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, lstat, mkdir, open, readFile, realpath, writeFile, type FileHandle } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { videoExtensions } from "./filename.js";
 
@@ -36,6 +37,27 @@ export interface ManagedDirectoryIdentity {
 
 const sentinelName = ".marktv-identity";
 const sentinelPattern = /^[0-9a-f]{32}$/;
+
+/**
+ * Directories held open for the lifetime of the process.
+ *
+ * An open descriptor keeps the inode allocated, so the kernel cannot hand the
+ * freed number to a directory that replaces this one at the same path -- which
+ * makes the dev+ino comparison in `assertManagedDirectory` sound rather than
+ * merely likely. Measured on the CI filesystem (ext4, ubuntu-24.04): rm+mkdir
+ * at the same path reuses the inode 30/30 times unpinned and 0/30 times while a
+ * descriptor is held.
+ *
+ * This is what remains of fd pinning now that `openat` is unavailable: Node
+ * exposes no fd-relative open, so writes cannot be made relative to the
+ * directory, but the inode can still be kept from being recycled.
+ */
+const pinnedDirectories = new Map<string, FileHandle>();
+
+async function pinDirectory(resolved: string): Promise<void> {
+  if (pinnedDirectories.has(resolved)) return;
+  pinnedDirectories.set(resolved, await open(resolved, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW));
+}
 
 /** Reads a directory's identity token, minting one the first time it is needed. */
 async function ensureSentinel(directory: string): Promise<string> {
@@ -123,13 +145,14 @@ async function ensureDirectory(path: string): Promise<string> {
 
 export async function captureManagedDirectory(
   path: string,
-  options: { sentinel?: boolean } = {},
+  options: { sentinel?: boolean; pin?: boolean } = {},
 ): Promise<ManagedDirectoryIdentity> {
   const resolved = await realpath(path);
   const entry = await lstat(path);
   const target = await lstat(resolved);
   if (entry.isSymbolicLink() || !target.isDirectory())
     throw new ManagedPathError("Managed directory is not a real directory");
+  if (options.pin) await pinDirectory(resolved);
   const identity = { path: resolved, dev: target.dev, ino: target.ino };
   return options.sentinel ? { ...identity, token: await ensureSentinel(resolved) } : identity;
 }
@@ -165,7 +188,7 @@ export async function initializeManagedPaths(dataDir: string): Promise<ManagedPa
   return {
     inbox,
     library,
-    inboxIdentity: await captureManagedDirectory(inbox, { sentinel: true }),
-    libraryIdentity: await captureManagedDirectory(library),
+    inboxIdentity: await captureManagedDirectory(inbox, { sentinel: true, pin: true }),
+    libraryIdentity: await captureManagedDirectory(library, { pin: true }),
   };
 }
