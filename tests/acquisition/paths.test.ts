@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -21,6 +21,23 @@ describe("canonicalVideoName", () => {
     expect(() => canonicalVideoName("Show", 1, 1000, "Title", ".mkv")).toThrow();
   });
 });
+
+/**
+ * Swaps a managed directory for a fresh one at the same path.
+ *
+ * The replacement is allocated *before* the original is removed, so its inode
+ * cannot collide with the original's. Removing first and then calling mkdir at
+ * the same path is not equivalent: ext4 recycles the freed inode number
+ * immediately, which leaves dev+ino unchanged and makes the identity guard
+ * silently pass. macOS allocates inodes monotonically and never hits this, so
+ * only Linux exposes the difference.
+ */
+async function replaceManagedDirectory(path: string): Promise<void> {
+  const replacement = `${path}-replacement`;
+  await mkdir(replacement);
+  await rm(path, { recursive: true });
+  await rename(replacement, path);
+}
 
 describe("initializeManagedPaths", () => {
   test("creates owner-only inbox and library", async () => {
@@ -47,11 +64,9 @@ describe("initializeManagedPaths", () => {
   test("detects an inbox or library replacement after initialization", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "marktv-paths-"));
     const paths = await initializeManagedPaths(dataDir);
-    await rm(paths.inbox, { recursive: true });
-    await mkdir(paths.inbox);
+    await replaceManagedDirectory(paths.inbox);
     await expect(assertManagedDirectory(paths.inboxIdentity)).rejects.toThrow(/replaced/i);
-    await rm(paths.library, { recursive: true });
-    await mkdir(paths.library);
+    await replaceManagedDirectory(paths.library);
     await expect(assertManagedDirectory(paths.libraryIdentity)).rejects.toThrow(/replaced/i);
   });
 });
