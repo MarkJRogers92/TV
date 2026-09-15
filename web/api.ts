@@ -18,8 +18,12 @@ import type {
 } from "./types";
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  // Fastify rejects a JSON content-type with an empty body (FST_ERR_CTP_EMPTY_JSON_BODY),
+  // so only advertise JSON when the caller actually sends one.
+  const jsonHeader =
+    init?.body == null ? {} : { headers: { "content-type": "application/json" } };
   const response = await fetch(`/api/v1${path}`, {
-    headers: { "content-type": "application/json" },
+    ...jsonHeader,
     ...init,
   });
   if (!response.ok) {
