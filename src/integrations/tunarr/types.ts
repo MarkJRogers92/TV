@@ -46,6 +46,8 @@ const remoteLocationSchema = z
 const terminalProgramSchema = z
   .object({
     uuid: z.uuid(),
+    externalId: z.string().optional(),
+    sourceType: z.string().optional(),
     mediaItem: z
       .object({
         locations: z.array(
@@ -199,11 +201,46 @@ export type TunarrSnapshots = {
 };
 export type TunarrMappingInput = {
   libraryId: string;
+  libraryIds?: string[];
   channelId?: string;
   fillerListId?: string;
   createChannel: boolean;
   transcodeConfigId?: string;
 };
+
+export function normalizeLibraryIds(ids: unknown): string[] {
+  const list = Array.isArray(ids) ? ids : ids === undefined || ids === null ? [] : [ids];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of list) {
+    if (typeof raw !== "string") continue;
+    const trimmed = raw.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+export function resolveLibraryIds(
+  input: { libraryId?: unknown; libraryIds?: unknown } | null | undefined,
+): string[] {
+  if (!input || typeof input !== "object") return [];
+  const record = input as { libraryId?: unknown; libraryIds?: unknown };
+  const canonical = normalizeLibraryIds(record.libraryIds);
+  const legacy = normalizeLibraryIds(record.libraryId);
+  if (!canonical.length) return legacy;
+  if (!legacy.length) return canonical;
+  const seen = new Set(canonical);
+  const out = [...canonical];
+  for (const id of legacy) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
+}
 export type TunarrSnapshotResult = {
   capabilities: TunarrCapabilities;
   inventory: TunarrInventory;

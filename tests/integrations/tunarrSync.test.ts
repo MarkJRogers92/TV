@@ -221,3 +221,44 @@ test("maps an unsupported successful mutation response to a safe partial failure
     state: { channelId: "7", fillerListId: undefined },
   });
 });
+
+test("resolves canonical library IDs for snapshot revalidation", async () => {
+  const mod = (await import(
+    "../../src/integrations/tunarr/types.js"
+  )) as unknown as {
+    resolveLibraryIds: (input: unknown) => string[];
+  };
+  expect(typeof mod.resolveLibraryIds).toBe("function");
+  expect(mod.resolveLibraryIds({ libraryIds: [" x ", "x", "y"] })).toEqual([
+    "x",
+    "y",
+  ]);
+  const canonical = mod.resolveLibraryIds({ libraryIds: ["lib-a", "lib-b"] });
+  const canonicalPlan = buildTunarrSyncPlan(
+    schedule,
+    [],
+    capabilities,
+    { libraryId: canonical[0], libraryIds: canonical, channelId: "7", createChannel: false } as never,
+    snapshots,
+  );
+  expect(canonicalPlan.mapping).toMatchObject({
+    libraryId: "lib-a",
+    libraryIds: ["lib-a", "lib-b"],
+  });
+  const seen: unknown[] = [];
+  const client = {
+    snapshot: async (mapping: unknown) => {
+      seen.push(mapping);
+      return { capabilities, inventory: [], snapshots };
+    },
+    putChannel: async () => ({ ok: true, status: 200 }),
+    createChannel: async () => ({ id: "unused" }),
+    createFillerList: async () => ({ id: "unused" }),
+    putFillerList: async () => ({ ok: true, status: 200 }),
+    postProgramming: async () => ({ ok: true, status: 200 }),
+  } as never;
+  await syncTunarrPlan(client, canonicalPlan, schedule);
+  expect(seen[0]).toMatchObject({
+    libraryIds: ["lib-a", "lib-b"],
+  });
+});

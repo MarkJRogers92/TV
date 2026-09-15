@@ -339,3 +339,44 @@ test("blocks a valid HTTP health response that reports an unhealthy subsystem", 
     expect.objectContaining({ code: "TUNARR_UNHEALTHY" }),
   );
 });
+
+test("normalizes library IDs by trimming and deduplicating", async () => {
+  const mod = (await import(
+    "../../src/integrations/tunarr/types.js"
+  )) as unknown as {
+    normalizeLibraryIds: (ids: unknown) => string[];
+    resolveLibraryIds: (input: unknown) => string[];
+  };
+  expect(typeof mod.normalizeLibraryIds).toBe("function");
+  expect(typeof mod.resolveLibraryIds).toBe("function");
+  expect(mod.normalizeLibraryIds([" lib-a ", "lib-a", "lib-b ", "", "  "])).toEqual([
+    "lib-a",
+    "lib-b",
+  ]);
+  expect(mod.resolveLibraryIds({ libraryId: "lib" })).toEqual(["lib"]);
+  expect(mod.resolveLibraryIds({ libraryIds: [" b ", "a", "b"] })).toEqual([
+    "b",
+    "a",
+  ]);
+  expect(
+    mod.resolveLibraryIds({ libraryId: "legacy", libraryIds: ["a", "legacy"] }),
+  ).toEqual(["a", "legacy"]);
+});
+
+test("preserves canonical libraryIds in the sync plan mapping", async () => {
+  const mod = (await import(
+    "../../src/integrations/tunarr/types.js"
+  )) as unknown as {
+    resolveLibraryIds: (input: unknown) => string[];
+  };
+  const canonical = mod.resolveLibraryIds({ libraryIds: ["lib-a", "lib-b"] });
+  const plan = buildTunarrSyncPlan(
+    schedule,
+    inventory,
+    capabilities,
+    { libraryId: canonical[0], libraryIds: canonical, channelId: "7", createChannel: false } as never,
+    snapshots,
+  );
+  expect(plan.mapping).toMatchObject({ libraryIds: ["lib-a", "lib-b"] });
+  expect(plan.syncEligible).toBe(true);
+});

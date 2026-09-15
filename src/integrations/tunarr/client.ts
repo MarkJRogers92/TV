@@ -6,8 +6,10 @@ import {
   fillerListSchema,
   fillerProgramSchema,
   healthSchema,
+  normalizeLibraryIds,
   programSchema,
   programmingSchema,
+  resolveLibraryIds,
   tunarrError,
   transcodeConfigSchema,
   versionSchema,
@@ -71,7 +73,10 @@ export class TunarrClient {
     return parsed.data!;
   }
 
-  async detect(channelId = "", libraryId = ""): Promise<TunarrCapabilities> {
+  async detect(
+    channelId = "",
+    libraryIdOrIds: string | string[] = "",
+  ): Promise<TunarrCapabilities> {
     const health = await this.request("/api/system/health");
     if (!health.ok)
       throw tunarrError("UNREACHABLE", "Tunarr health check failed");
@@ -93,22 +98,17 @@ export class TunarrClient {
         "Tunarr version response is unsupported",
       );
 
-    const [channels, fillers, transcodes, inventory, programming] =
-      await Promise.all([
-        this.request("/api/channels"),
-        this.request("/api/filler-lists"),
-        this.request("/api/transcode_configs"),
-        libraryId
-          ? this.request(
-              `/api/media-libraries/${encodeURIComponent(libraryId)}/programs`,
-            )
-          : undefined,
-        channelId
-          ? this.request(
-              `/api/channels/${encodeURIComponent(channelId)}/programming`,
-            )
-          : undefined,
-      ]);
+    const libraryIds = normalizeLibraryIds(libraryIdOrIds);
+    const [channels, fillers, transcodes, programming] = await Promise.all([
+      this.request("/api/channels"),
+      this.request("/api/filler-lists"),
+      this.request("/api/transcode_configs"),
+      channelId
+        ? this.request(
+            `/api/channels/${encodeURIComponent(channelId)}/programming`,
+          )
+        : undefined,
+    ]);
     const schemaResponse = async (
       value: Response | undefined,
       schema: { safeParse: (body: unknown) => { success: boolean } },
@@ -128,9 +128,23 @@ export class TunarrClient {
       transcodes,
       transcodeConfigSchema.array(),
     );
-    const supportsInventory = libraryId
-      ? await schemaResponse(inventory, programSchema.array())
-      : false;
+    let supportsInventory = false;
+    if (libraryIds.length) {
+      const libraryResponses = await Promise.all(
+        libraryIds.map((id) =>
+          this.request(
+            `/api/media-libraries/${encodeURIComponent(id)}/programs`,
+          ),
+        ),
+      );
+      supportsInventory = true;
+      for (const inventoryResponse of libraryResponses) {
+        if (!(await schemaResponse(inventoryResponse, programSchema.array()))) {
+          supportsInventory = false;
+          break;
+        }
+      }
+    }
     let supportsProgramming = supportsChannels && !channelId;
     if (programming?.ok) {
       const parsed = programmingSchema.safeParse(await programming.json());
@@ -153,32 +167,63 @@ export class TunarrClient {
     };
   }
 
-  async inventory(libraryId: string): Promise<TunarrInventory> {
-    const body = await this.jsonArray<unknown>(
-      `/api/media-libraries/${encodeURIComponent(libraryId)}/programs`,
-      "INVENTORY_UNAVAILABLE",
-      {
-        safeParse: (value) => ({
-          success: Array.isArray(value),
-          data: Array.isArray(value) ? value : undefined,
-        }),
-      },
-    );
+  async inventory(
+    libraryIdOrIds: string | string[],
+  ): Promise<TunarrInventory> {
+    const libraryIds = normalizeLibraryIds(libraryIdOrIds);
+    if (!libraryIds.length)
+      throw tunarrError(
+        "INVENTORY_UNAVAILABLE",
+        "No Tunarr library was requested",
+      );
     const inventory: TunarrInventory = [];
-    for (const entry of body) {
-      const parsed = programSchema.safeParse(entry);
-      if (!parsed.success)
-        throw tunarrError(
-          "UNSUPPORTED_SCHEMA",
-          "Tunarr library response is unsupported",
-        );
-      for (const location of parsed.data.program.mediaItem?.locations ?? []) {
-        if (location.type === "local") {
-          inventory.push({
-            id: parsed.data.id,
-            path: normalizeLocalPath(location.path),
-            program: parsed.data,
-          });
+    for (const libraryId of libraryIds) {
+      const body = await this.jsonArray<unknown>(
+        `/api/media-libraries/${encodeURIComponent(libraryId)}/programs`,
+        "INVENTORY_UNAVAILABLE",
+        {
+          safeParse: (value) => ({
+            success: Array.isArray(value),
+            data: Array.isArray(value) ? value : undefined,
+          }),
+        },
+      );
+      for (const entry of body) {
+        const parsed = programSchema.safeParse(entry);
+        if (!parsed.success)
+          throw tunarrError(
+            "UNSUPPORTED_SCHEMA",
+            "Tunarr library response is unsupported",
+          );
+        const locations = parsed.data.program.mediaItem?.locations;
+        if (locations !== undefined) {
+          for (const location of locations) {
+            if (location.type === "local") {
+              inventory.push({
+                id: parsed.data.id,
+                path: normalizeLocalPath(location.path),
+                program: parsed.data,
+              });
+            }
+          }
+        } else {
+          const externalId = (
+            parsed.data.program as unknown as { externalId?: unknown }
+          ).externalId;
+          const sourceType = (
+            parsed.data.program as unknown as { sourceType?: unknown }
+          ).sourceType;
+          if (
+            sourceType === "local" &&
+            typeof externalId === "string" &&
+            externalId.length
+          ) {
+            inventory.push({
+              id: parsed.data.id,
+              path: normalizeLocalPath(externalId),
+              program: parsed.data,
+            });
+          }
         }
       }
     }
@@ -241,16 +286,14 @@ export class TunarrClient {
   }
 
   async snapshot(mapping: TunarrMappingInput): Promise<TunarrSnapshotResult> {
-    const capabilities = await this.detect(
-      mapping.channelId,
-      mapping.libraryId,
-    );
+    const libraryIds = resolveLibraryIds(mapping);
+    const capabilities = await this.detect(mapping.channelId ?? "", libraryIds);
     const [channels, fillerLists, transcodeConfigs, inventory] =
       await Promise.all([
         capabilities.supportsChannels ? this.getChannels() : [],
         capabilities.supportsFillerLists ? this.getFillerLists() : [],
         capabilities.supportsTranscodeConfigs ? this.getTranscodeConfigs() : [],
-        capabilities.supportsInventory ? this.inventory(mapping.libraryId) : [],
+        capabilities.supportsInventory ? this.inventory(libraryIds) : [],
       ]);
     const fillerPrograms = Object.fromEntries(
       await Promise.all(

@@ -45,7 +45,7 @@ test("shows Test, dry-run, and guarded Sync states without using an untyped resu
   );
   fireEvent.click(screen.getByRole("button", { name: "Dry run" }));
   await waitFor(() => expect(sync).toBeEnabled());
-  fireEvent.change(screen.getByLabelText("Library ID"), {
+  fireEvent.change(screen.getByLabelText(/Library IDs/i), {
     target: { value: "changed" },
   });
   expect(sync).toBeDisabled();
@@ -71,7 +71,7 @@ test("sends channel creation inputs and invalidates an eligible dry run on edits
   );
   vi.stubGlobal("fetch", fetcher);
   render(<Tunarr />);
-  fireEvent.change(screen.getByLabelText("Library ID"), {
+  fireEvent.change(screen.getByLabelText(/Library IDs/i), {
     target: { value: "lib" },
   });
   fireEvent.click(screen.getByLabelText("Create a new Tunarr channel"));
@@ -85,7 +85,7 @@ test("sends channel creation inputs and invalidates an eligible dry run on edits
       expect.objectContaining({
         body: JSON.stringify({
           url: "http://127.0.0.1:8000",
-          libraryId: "lib",
+          libraryIds: ["lib"],
           channelId: "",
           createChannel: true,
           transcodeConfigId: "transcode-id",
@@ -100,5 +100,113 @@ test("sends channel creation inputs and invalidates an eligible dry run on edits
   fireEvent.change(screen.getByLabelText("Transcode configuration ID"), {
     target: { value: "changed" },
   });
+  expect(screen.getByRole("button", { name: "Sync" })).toBeDisabled();
+});
+
+test("accepts multiple library IDs one per line, trims/dedupes, and submits libraryIds", async () => {
+  const fetcher = vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        url: "http://fake",
+        version: "1",
+        supportsProgramming: true,
+        supportsInventory: true,
+      }),
+      { status: 200 },
+    ),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  render(<Tunarr />);
+  const input = screen.getByLabelText(/Library IDs/i);
+  expect(input.tagName.toLowerCase()).toBe("textarea");
+  fireEvent.change(input, { target: { value: " lib-a \nlib-b\n lib-a \n\n" } });
+  fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+  await waitFor(() =>
+    expect(fetcher).toHaveBeenLastCalledWith(
+      "/api/v1/tunarr/test",
+      expect.objectContaining({
+        body: JSON.stringify({
+          url: "http://127.0.0.1:8000",
+          libraryIds: ["lib-a", "lib-b"],
+          channelId: "",
+        }),
+      }),
+    ),
+  );
+});
+
+test("invalidates the prior dry run when library IDs are edited", async () => {
+  const fetcher = vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        syncEligible: true,
+        capabilities: { version: "1" },
+        blockingErrors: [],
+        warnings: [],
+        matchCounts: { matched: 1, unmatched: 0, ambiguous: 0, placeholder: 0 },
+        operations: [{ type: "programming" }],
+      }),
+      { status: 200 },
+    ),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  render(<Tunarr />);
+  fireEvent.change(screen.getByLabelText(/Library IDs/i), {
+    target: { value: "lib-a" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Dry run" }));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Sync" })).toBeEnabled(),
+  );
+  fireEvent.change(screen.getByLabelText(/Library IDs/i), {
+    target: { value: "lib-a\nlib-b" },
+  });
+  expect(screen.getByRole("button", { name: "Sync" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Dry run" }));
+  await waitFor(() =>
+    expect(fetcher).toHaveBeenLastCalledWith(
+      "/api/v1/tunarr/dry-run",
+      expect.objectContaining({
+        body: expect.stringContaining('"libraryIds":["lib-a","lib-b"]'),
+      }),
+    ),
+  );
+});
+
+test("ignores an eligible dry run that finishes after library IDs change", async () => {
+  let finishDryRun: ((response: Response) => void) | undefined;
+  const fetcher = vi.fn().mockImplementation(
+    () =>
+      new Promise<Response>((resolve) => {
+        finishDryRun = resolve;
+      }),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  render(<Tunarr />);
+
+  fireEvent.change(screen.getByLabelText(/Library IDs/i), {
+    target: { value: "lib-a" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Dry run" }));
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+
+  fireEvent.change(screen.getByLabelText(/Library IDs/i), {
+    target: { value: "lib-b" },
+  });
+  finishDryRun?.(
+    new Response(
+      JSON.stringify({
+        syncEligible: true,
+        capabilities: { version: "1" },
+        blockingErrors: [],
+        warnings: [],
+        matchCounts: { matched: 1, unmatched: 0, ambiguous: 0, placeholder: 0 },
+        operations: [{ type: "programming" }],
+      }),
+      { status: 200 },
+    ),
+  );
+
+  await waitFor(() => expect(finishDryRun).toBeDefined());
   expect(screen.getByRole("button", { name: "Sync" })).toBeDisabled();
 });

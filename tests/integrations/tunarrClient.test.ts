@@ -489,4 +489,234 @@ describe("TunarrClient local contract", () => {
       new TunarrClient(server.url).inventory("lib"),
     ).rejects.toMatchObject({ code: "RELATIVE_MEDIA_PATH" });
   });
+
+  test("recognizes absolute externalId for local sourceType when locations are absent", async () => {
+    const fetcher = (async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith("/api/media-libraries/lib/programs"))
+        return new Response(
+          JSON.stringify([
+            {
+              type: "content",
+              id: "local-external",
+              duration: 60_000,
+              program: {
+                uuid: "11111111-1111-4111-8111-111111111111",
+                sourceType: "local",
+                externalId: "/media/B.mkv",
+              },
+            },
+          ]),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ error: "missing" }), {
+        status: 404,
+      });
+    }) as typeof fetch;
+    await expect(
+      new TunarrClient("http://fake", fetcher).inventory("lib"),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: "local-external", path: "/media/B.mkv" }),
+    ]);
+  });
+
+  test("ignores remote externalId and preserves locations precedence", async () => {
+    const fetcher = (async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith("/api/media-libraries/lib/programs"))
+        return new Response(
+          JSON.stringify([
+            {
+              type: "content",
+              id: "remote-external",
+              duration: 60_000,
+              program: {
+                uuid: "22222222-2222-4222-8222-222222222222",
+                sourceType: "remote",
+                externalId: "/media/C.mkv",
+              },
+            },
+            {
+              type: "content",
+              id: "locations-win",
+              duration: 60_000,
+              program: {
+                uuid: "33333333-3333-4333-8333-333333333333",
+                sourceType: "local",
+                externalId: "/media/ignored.mkv",
+                mediaItem: {
+                  locations: [{ type: "local", path: "/media/D.mkv" }],
+                },
+              },
+            },
+            {
+              type: "content",
+              id: "empty-locations",
+              duration: 60_000,
+              program: {
+                uuid: "44444444-4444-4444-8444-444444444444",
+                sourceType: "local",
+                externalId: "/media/E.mkv",
+                mediaItem: { locations: [] },
+              },
+            },
+          ]),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ error: "missing" }), {
+        status: 404,
+      });
+    }) as typeof fetch;
+    await expect(
+      new TunarrClient("http://fake", fetcher).inventory("lib"),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: "locations-win", path: "/media/D.mkv" }),
+    ]);
+  });
+
+  test("rejects relative externalId paths instead of resolving against cwd", async () => {
+    const fetcher = (async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith("/api/media-libraries/lib/programs"))
+        return new Response(
+          JSON.stringify([
+            {
+              type: "content",
+              id: "relative-external",
+              duration: 60_000,
+              program: {
+                uuid: "55555555-5555-4555-8555-555555555555",
+                sourceType: "local",
+                externalId: "media/rel.mkv",
+              },
+            },
+          ]),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ error: "missing" }), {
+        status: 404,
+      });
+    }) as typeof fetch;
+    await expect(
+      new TunarrClient("http://fake", fetcher).inventory("lib"),
+    ).rejects.toMatchObject({ code: "RELATIVE_MEDIA_PATH" });
+  });
+
+  test("aggregates inventory across multiple library IDs", async () => {
+    const fetcher = (async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith("/api/media-libraries/lib-a/programs"))
+        return new Response(
+          JSON.stringify([
+            {
+              type: "content",
+              id: "a1",
+              duration: 60_000,
+              program: {
+                uuid: "11111111-1111-4111-8111-111111111111",
+                mediaItem: {
+                  locations: [{ type: "local", path: "/media/A.mkv" }],
+                },
+              },
+            },
+          ]),
+          { status: 200 },
+        );
+      if (target.endsWith("/api/media-libraries/lib-b/programs"))
+        return new Response(
+          JSON.stringify([
+            {
+              type: "content",
+              id: "b1",
+              duration: 60_000,
+              program: {
+                uuid: "22222222-2222-4222-8222-222222222222",
+                sourceType: "local",
+                externalId: "/media/B.mkv",
+              },
+            },
+          ]),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ error: "missing" }), {
+        status: 404,
+      });
+    }) as typeof fetch;
+    const client = new TunarrClient("http://fake", fetcher);
+    const inventory = await (client as unknown as {
+      inventory: (ids: string[]) => Promise<Array<{ id: string; path: string }>>;
+    }).inventory(["lib-a", "lib-b"]);
+    expect(inventory.map((item) => item.id).sort()).toEqual(["a1", "b1"]);
+    expect(inventory.map((item) => item.path).sort()).toEqual([
+      "/media/A.mkv",
+      "/media/B.mkv",
+    ]);
+  });
+
+  test("fails closed without partial inventory when any library is invalid", async () => {
+    const fetcher = (async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith("/api/media-libraries/good/programs"))
+        return new Response(
+          JSON.stringify([
+            {
+              type: "content",
+              id: "good1",
+              duration: 60_000,
+              program: {
+                uuid: "11111111-1111-4111-8111-111111111111",
+                mediaItem: {
+                  locations: [{ type: "local", path: "/media/Good.mkv" }],
+                },
+              },
+            },
+          ]),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ error: "missing" }), {
+        status: 404,
+      });
+    }) as typeof fetch;
+    const client = new TunarrClient("http://fake", fetcher);
+    await expect(
+      (client as unknown as {
+        inventory: (ids: string[]) => Promise<unknown>;
+      }).inventory(["good", "missing"]),
+    ).rejects.toMatchObject({ code: "INVENTORY_UNAVAILABLE" });
+  });
+
+  test("requires every library endpoint for inventory capability", async () => {
+    const fetcher = (async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith("/api/system/health"))
+        return new Response(JSON.stringify({ database: { type: "healthy" } }), {
+          status: 200,
+        });
+      if (target.endsWith("/api/version"))
+        return new Response(
+          JSON.stringify({ tunarr: "1.3.14", ffmpeg: "7", nodejs: "22" }),
+          { status: 200 },
+        );
+      if (target.endsWith("/api/channels"))
+        return new Response(JSON.stringify([]), { status: 200 });
+      if (target.endsWith("/api/filler-lists"))
+        return new Response(JSON.stringify([]), { status: 200 });
+      if (target.endsWith("/api/transcode_configs"))
+        return new Response(JSON.stringify([]), { status: 200 });
+      if (target.endsWith("/api/media-libraries/good/programs"))
+        return new Response(JSON.stringify([]), { status: 200 });
+      return new Response(JSON.stringify({ error: "missing" }), {
+        status: 404,
+      });
+    }) as typeof fetch;
+    const client = new TunarrClient("http://fake", fetcher);
+    const both = await (client as unknown as {
+      detect: (channel: string, libs: string[]) => Promise<{ supportsInventory: boolean }>;
+    }).detect("", ["good", "missing"]);
+    expect(both.supportsInventory).toBe(false);
+    const single = await (client as unknown as {
+      detect: (channel: string, libs: string[]) => Promise<{ supportsInventory: boolean }>;
+    }).detect("", ["good"]);
+    expect(single.supportsInventory).toBe(true);
+  });
 });

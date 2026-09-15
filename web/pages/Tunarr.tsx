@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { api } from "../api";
 
 type Connection = {
@@ -31,30 +31,45 @@ const isPlan = (result: Result | undefined): result is Plan =>
 const isError = (result: Result | undefined): result is { error: string } =>
   !!result && "error" in result;
 
+export function parseLibraryIdsText(text: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of text.split(/\r?\n/)) {
+    const trimmed = part.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
 export function Tunarr() {
   const [url, setUrl] = useState("http://127.0.0.1:8000");
-  const [libraryId, setLibraryId] = useState("");
+  const [libraryIdsText, setLibraryIdsText] = useState("");
   const [channelId, setChannelId] = useState("");
   const [createChannel, setCreateChannel] = useState(false);
   const [transcodeConfigId, setTranscodeConfigId] = useState("");
   const [result, setResult] = useState<Result>();
+  const requestGeneration = useRef(0);
   const request = async <T,>(path: string, body?: unknown) => {
+    const generation = ++requestGeneration.current;
     try {
-      setResult(
-        (await api<T>(path, {
-          method: "POST",
-          body: body ? JSON.stringify(body) : undefined,
-        })) as Result,
-      );
+      const nextResult = (await api<T>(path, {
+        method: "POST",
+        body: body ? JSON.stringify(body) : undefined,
+      })) as Result;
+      if (generation === requestGeneration.current) setResult(nextResult);
     } catch {
-      setResult({
-        error:
-          "The Tunarr request failed. Check the connection and dry-run details.",
-      });
+      if (generation === requestGeneration.current)
+        setResult({
+          error:
+            "The Tunarr request failed. Check the connection and dry-run details.",
+        });
     }
   };
   const change = (set: (value: string) => void) => (value: string) => {
     set(value);
+    requestGeneration.current += 1;
     setResult(undefined);
   };
   return (
@@ -72,10 +87,12 @@ export function Tunarr() {
         />
       </label>
       <label>
-        Library ID
-        <input
-          value={libraryId}
-          onChange={(event) => change(setLibraryId)(event.target.value)}
+        Library IDs (one per line)
+        <textarea
+          value={libraryIdsText}
+          onChange={(event) =>
+            change(setLibraryIdsText)(event.target.value)
+          }
         />
       </label>
       <label>
@@ -91,6 +108,7 @@ export function Tunarr() {
           checked={createChannel}
           onChange={(event) => {
             setCreateChannel(event.target.checked);
+            requestGeneration.current += 1;
             setResult(undefined);
           }}
         />{" "}
@@ -111,7 +129,7 @@ export function Tunarr() {
         onClick={() =>
           request<Connection>("/tunarr/test", {
             url,
-            libraryId,
+            libraryIds: parseLibraryIdsText(libraryIdsText),
             channelId,
           })
         }
@@ -122,7 +140,7 @@ export function Tunarr() {
         onClick={() =>
           request<Plan>("/tunarr/dry-run", {
             url,
-            libraryId,
+            libraryIds: parseLibraryIdsText(libraryIdsText),
             channelId,
             createChannel,
             transcodeConfigId,

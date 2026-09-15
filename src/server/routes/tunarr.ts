@@ -6,20 +6,37 @@ import {
   type TunarrSyncPlan,
 } from "../../integrations/tunarr/plan.js";
 import { syncTunarrPlan } from "../../integrations/tunarr/sync.js";
-import type { TunarrMappingInput } from "../../integrations/tunarr/types.js";
+import {
+  resolveLibraryIds,
+  type TunarrMappingInput,
+} from "../../integrations/tunarr/types.js";
 import type { ServerContext } from "../context.js";
 
 const testSchema = z.object({
   url: z.string().url(),
   channelId: z.string().default(""),
   libraryId: z.string().default(""),
+  libraryIds: z.array(z.string()).optional(),
 });
-const dryRunSchema = testSchema.extend({
-  libraryId: z.string().min(1),
-  marktvChannelId: z.string().min(1).default("marktv-laughs"),
-  createChannel: z.boolean().default(false),
-  transcodeConfigId: z.string().optional(),
-});
+const dryRunSchema = z
+  .object({
+    url: z.string().url(),
+    channelId: z.string().default(""),
+    libraryId: z.string().optional(),
+    libraryIds: z.array(z.string()).optional(),
+    marktvChannelId: z.string().min(1).default("marktv-laughs"),
+    createChannel: z.boolean().default(false),
+    transcodeConfigId: z.string().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (!resolveLibraryIds(value).length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "At least one library ID is required",
+        path: ["libraryIds"],
+      });
+    }
+  });
 type StoredMapping = TunarrMappingInput & {
   url: string;
   marktvChannelId: string;
@@ -45,7 +62,7 @@ export async function registerTunarrRoutes(
       const input = testSchema.parse(request.body);
       return await new TunarrClient(input.url).detect(
         input.channelId,
-        input.libraryId,
+        resolveLibraryIds(input),
       );
     } catch (error) {
       return safeTunarrError(
@@ -66,8 +83,10 @@ export async function registerTunarrRoutes(
           code: "NO_SCHEDULE",
           message: "Generate a MarkTV schedule before requesting a dry run",
         });
+      const libraryIds = resolveLibraryIds(input);
       const mapping: TunarrMappingInput = {
-        libraryId: input.libraryId,
+        libraryId: libraryIds[0],
+        libraryIds,
         channelId: input.channelId || undefined,
         createChannel: input.createChannel,
         transcodeConfigId: input.transcodeConfigId || undefined,
