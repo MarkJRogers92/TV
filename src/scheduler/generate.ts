@@ -268,6 +268,9 @@ export function generateSchedule(
   const history = [...(input.history ?? [])];
   const diagnostics: ScheduleDiagnostic[] = [];
   let at: DateTime = dayStart;
+  // The pool that filled the previous episode or movie slot, so the same series
+  // is not scheduled twice running when something else could have taken it.
+  let previousPoolId: string | undefined;
 
   while (at < dayEnd) {
     const daypart = activeDaypart(input.channel, at);
@@ -308,16 +311,25 @@ export function generateSchedule(
         });
       }
     }
-    let selectedPool = primaryCandidates[0];
-    if (primaryCandidates.length > 1) {
-      const totalWeight = primaryCandidates.reduce(
+    // A pool that filled the previous slot is only reconsidered when it is the
+    // sole option, so a series cannot run for hours merely because the seeded
+    // choice kept landing on it. Weights decide among what remains.
+    const contenders =
+      new Set(primaryCandidates.map((candidate) => candidate.pool.id)).size > 1
+        ? primaryCandidates.filter(
+            (candidate) => candidate.pool.id !== previousPoolId,
+          )
+        : primaryCandidates;
+    let selectedPool = contenders[0];
+    if (contenders.length > 1) {
+      const totalWeight = contenders.reduce(
         (total, candidate) => total + candidate.pool.weight,
         0,
       );
       let choice =
         createSeededRandom(`${seed}:${at.toMillis()}:pool-choice`)() *
         totalWeight;
-      selectedPool = primaryCandidates.find((candidate) => {
+      selectedPool = contenders.find((candidate) => {
         choice -= candidate.pool.weight;
         return choice < 0;
       })!;
@@ -348,6 +360,7 @@ export function generateSchedule(
     const chosen = selectedPool?.item;
     const chosenPoolId = selectedPool?.pool.id;
     const cooldownRelaxed = selectedPool?.relaxed ?? false;
+    if (chosenPoolId) previousPoolId = chosenPoolId;
 
     if (chosenPoolId && slot.fallbackPoolIds.includes(chosenPoolId)) {
       diagnostics.push({
