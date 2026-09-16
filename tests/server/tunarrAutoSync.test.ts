@@ -59,14 +59,34 @@ function tunarrChannel(id: string) {
 /** Stubs Tunarr: an inventory per library, and 200s for everything a sync touches. */
 function stubTunarr(
   programsByLibrary: Record<string, unknown>,
-  options: { fail?: boolean; record?: string[] } = {},
+  options: {
+    fail?: boolean;
+    record?: string[];
+    /** Inventory served once a scan has been requested, modelling a stale scan. */
+    rescanTo?: Record<string, unknown>;
+    /** Set false to model a Tunarr that exposes no scannable source. */
+    offerScan?: boolean;
+  } = {},
 ) {
+  let rescanned = false;
   const stub = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     options.record?.push(`${init?.method ?? "GET"} ${url}`);
     if (options.fail) throw new TypeError("fetch failed");
     const ok = (body: unknown = {}) =>
       new Response(JSON.stringify(body), { status: 200 });
+    if (url.endsWith("/api/media-sources"))
+      return ok(
+        options.offerScan === false
+          ? []
+          : [{ id: "source-a", libraries: [{ id: "lib-a" }] }],
+      );
+    if (/\/libraries\/[^/]+\/scan$/.test(url)) {
+      rescanned = true;
+      return new Response("", { status: 202 });
+    }
+    if (/\/api\/media-sources\/[^/]+\/[^/]+\/status$/.test(url))
+      return ok({ state: "not_scanning" });
     if (url.endsWith("/api/system/health")) return ok({ database: { type: "healthy" } });
     if (url.endsWith("/api/version")) return ok({ tunarr: "1.3.14", ffmpeg: "7", nodejs: "22" });
     // Creates must answer with an id -- the sync reads created.id, and an array
@@ -89,7 +109,9 @@ function stubTunarr(
     const match = url.match(/\/api\/media-libraries\/([^/]+)\/programs$/);
     if (match) {
       const id = decodeURIComponent(match[1]);
-      if (id in programsByLibrary) return ok(programsByLibrary[id]);
+      const source =
+        rescanned && options.rescanTo ? options.rescanTo : programsByLibrary;
+      if (id in source) return ok(source[id]);
       return new Response(JSON.stringify({ error: "missing" }), { status: 404 });
     }
     return ok();
@@ -217,10 +239,11 @@ test("refuses a lineup with media Tunarr cannot resolve, and applies nothing", a
   const fixture = setup();
   const repositories = await repositoriesWithSchedule(fixture);
   const calls: string[] = [];
-  // Inventory deliberately missing one scheduled item.
+  // Inventory deliberately missing one scheduled item, and no scannable source,
+  // so the rescan cannot rescue it and the refusal has to stand.
   stubTunarr(
     { "lib-a": fixture.items.slice(1).map((item) => localProgram(item.id, item.path!, item.durationMs ?? 60_000)) },
-    { record: calls },
+    { record: calls, offerScan: false },
   );
 
   const outcome = await autoSyncTunarr(repositories, {
@@ -292,3 +315,29 @@ test("automatic sync can be turned off without losing the mapping", async () => 
   expect(stored?.autoSync).toBe(false);
   repositories.close();
 });
+
+test("rescans Tunarr and retries once when a stale inventory blocks the plan", async () => {
+  const fixture = setup();
+  const repositories = await repositoriesWithSchedule(fixture);
+  const calls: string[] = [];
+  const complete = fixture.items.map((item) =>
+    localProgram(item.id, item.path!, item.durationMs ?? 60_000),
+  );
+  stubTunarr(
+    // Stale, exactly as a library scanned before the newest files were added.
+    { "lib-a": complete.slice(1) },
+    { record: calls, rescanTo: { "lib-a": complete } },
+  );
+
+  const outcome = await autoSyncTunarr(repositories, {
+    channelId: fixture.channel.id,
+    now,
+  });
+
+  expect(outcome.status).toBe("synced");
+  expect(
+    calls.some((call) => call.startsWith("POST") && call.endsWith("/scan")),
+  ).toBe(true);
+  repositories.close();
+}, 30_000);
+

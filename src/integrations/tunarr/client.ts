@@ -73,6 +73,40 @@ export class TunarrClient {
     return parsed.data!;
   }
 
+  /**
+   * Media sources, used to find which source owns a library. A library id is
+   * not enough to scan it: Tunarr's scan route is addressed by source then
+   * library, and only the source knows it holds the library.
+   */
+  async mediaSources(): Promise<Array<{ id: string; libraries?: Array<{ id: string }> }>> {
+    const response = await this.request("/api/media-sources");
+    if (!response.ok)
+      throw tunarrError("UNREACHABLE", "Unable to read Tunarr media sources");
+    const body: unknown = await response.json();
+    return Array.isArray(body)
+      ? (body as Array<{ id: string; libraries?: Array<{ id: string }> }>)
+      : [];
+  }
+
+  /** Asks Tunarr to rescan one library. The scan itself runs asynchronously. */
+  async scanLibrary(mediaSourceId: string, libraryId: string): Promise<boolean> {
+    const response = await this.request(
+      `/api/media-sources/${encodeURIComponent(mediaSourceId)}/libraries/${encodeURIComponent(libraryId)}/scan`,
+      { method: "POST" },
+    );
+    return response.ok;
+  }
+
+  /** Whether Tunarr is still working through a library scan. */
+  async isScanning(mediaSourceId: string, libraryId: string): Promise<boolean> {
+    const response = await this.request(
+      `/api/media-sources/${encodeURIComponent(mediaSourceId)}/${encodeURIComponent(libraryId)}/status`,
+    );
+    if (!response.ok) return false;
+    const body = (await response.json()) as { state?: string };
+    return body.state !== undefined && body.state !== "not_scanning";
+  }
+
   async detect(
     channelId = "",
     libraryIdOrIds: string | string[] = "",

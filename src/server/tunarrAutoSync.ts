@@ -5,7 +5,10 @@ import {
   type TunarrSyncPlan,
 } from "../integrations/tunarr/plan.js";
 import { syncTunarrPlan } from "../integrations/tunarr/sync.js";
-import type { TunarrMappingInput } from "../integrations/tunarr/types.js";
+import {
+  normalizeLibraryIds,
+  type TunarrMappingInput,
+} from "../integrations/tunarr/types.js";
 
 /**
  * Pushes a freshly generated schedule to Tunarr without a manual dry-run/sync.
@@ -75,6 +78,34 @@ function persist(
   return outcome;
 }
 
+/**
+ * Asks Tunarr to rescan the mapped libraries and waits for it to settle.
+ *
+ * A blocked plan almost always means Tunarr was scanned before the newest files
+ * were added, which otherwise strands the sync until someone runs a scan by
+ * hand. The status endpoint does not reliably report a scan that has only just
+ * been accepted, so callers re-check the plan rather than trusting one poll.
+ */
+async function rescanTunarrLibraries(
+  client: TunarrClient,
+  mapping: TunarrMappingInput,
+): Promise<boolean> {
+  const libraryIds = normalizeLibraryIds(mapping.libraryIds ?? mapping.libraryId);
+  if (!libraryIds.length) return false;
+  const sources = await client.mediaSources();
+  let requested = false;
+  for (const libraryId of libraryIds) {
+    const source = sources.find((candidate) =>
+      candidate.libraries?.some((library) => library.id === libraryId),
+    );
+    if (!source) continue;
+    if (!(await client.scanLibrary(source.id, libraryId))) continue;
+    requested = true;
+  }
+  if (requested) await new Promise((resolve) => setTimeout(resolve, 3_000));
+  return requested;
+}
+
 function reason(error: unknown): string {
   if (error instanceof Error) return error.message;
   const code = (error as { code?: string }).code;
@@ -123,13 +154,30 @@ export async function autoSyncTunarr(
   try {
     const client = new TunarrClient(stored.url);
     const snapshot = await client.snapshot(input);
-    const plan = buildTunarrSyncPlan(
+    let plan = buildTunarrSyncPlan(
       schedule,
       snapshot.inventory,
       snapshot.capabilities,
       input,
       snapshot.snapshots,
     );
+    // A plan that cannot resolve its media usually means Tunarr has not scanned
+    // since those files arrived. Rescanning turns a refusal the user would have
+    // had to clear by hand into one automatic retry, and costs nothing on the
+    // ordinary path where the inventory is already current.
+    if (!plan.syncEligible && (await rescanTunarrLibraries(client, input))) {
+      for (let attempt = 0; attempt < 6 && !plan.syncEligible; attempt += 1) {
+        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 10_000));
+        const refreshed = await client.snapshot(input);
+        plan = buildTunarrSyncPlan(
+          schedule,
+          refreshed.inventory,
+          refreshed.capabilities,
+          input,
+          refreshed.snapshots,
+        );
+      }
+    }
     if (!plan.syncEligible)
       return persist(repositories, { ...stored, plan }, {
         ...base,
