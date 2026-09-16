@@ -106,12 +106,29 @@ function itemSeriesTitle(originalName: string): string | null {
   return normalized || null;
 }
 
+/**
+ * A series title with a trailing year removed, for *matching* only.
+ *
+ * Providers routinely decorate a series with its year -- a wanted "Night court"
+ * arrives as "Night Court (1984)" -- and the year is not part of the identity, so
+ * treating it as significant sent an otherwise exact episode to manual review and
+ * hid its season pack. Deliberately separate from `normalizedSeriesTitle`, which
+ * keys stored episode identity and must not change; anything that is only a year
+ * is left alone so a title like "1923" does not canonicalise to nothing.
+ */
+function canonicalSeriesTitle(title: string): string {
+  const normalized = normalizedSeriesTitle(title);
+  const withoutYear = normalized.replace(/\s+(?:19|20)\d{2}$/, "");
+  return withoutYear || normalized;
+}
+
 function candidateFor(item: RemoteItem, parsed: ParsedVideoCandidate, wanted: WantedEpisode): Candidate | null {
   if (parsed.bytes !== null && parsed.bytes < minimumPlausibleBytes) return null;
   if (parsed.season !== wanted.season || (parsed.episodeEnd === null ? parsed.episode !== wanted.episode : wanted.episode < parsed.episode || wanted.episode > parsed.episodeEnd)) return null;
-  const target = normalizedSeriesTitle(wanted.seriesTitle);
-  const own = parsed.seriesTitle === null ? "" : normalizedSeriesTitle(parsed.seriesTitle);
-  const fallback = itemSeriesTitle(item.originalName);
+  const target = canonicalSeriesTitle(wanted.seriesTitle);
+  const own = parsed.seriesTitle === null ? "" : canonicalSeriesTitle(parsed.seriesTitle);
+  const fallbackTitle = itemSeriesTitle(item.originalName);
+  const fallback = fallbackTitle === null ? "" : canonicalSeriesTitle(fallbackTitle);
   const titleState = own === target || (!own && fallback === target)
     ? "exact"
     : own && (own.includes(target) || target.includes(own))
@@ -171,11 +188,11 @@ function fullSeriesSeasonOffers(
   const offers: Array<{ wantedId: string; packPreview: PackPreview }> = [];
   for (const entry of [...wanted].sort((left, right) => episodeKey(left.seriesTitle, left.season, left.episode).localeCompare(episodeKey(right.seriesTitle, right.season, right.episode)))) {
     if (doneKeys.has(episodeKey(entry.seriesTitle, entry.season, entry.episode))) continue;
-    const target = normalizedSeriesTitle(entry.seriesTitle);
+    const target = canonicalSeriesTitle(entry.seriesTitle);
     for (const { item, files } of byItem.values()) {
       const matchingSeries = files
         .filter((file) => !file.multiEpisode && file.seriesTitle !== null)
-        .filter((file) => normalizedSeriesTitle(file.seriesTitle!) === target)
+        .filter((file) => canonicalSeriesTitle(file.seriesTitle!) === target)
         .filter((file) => file.bytes === null || file.bytes >= minimumPlausibleBytes);
       const completeSeasons = new Map<number, Set<number>>();
       for (const file of matchingSeries) {
@@ -232,14 +249,14 @@ export function matchCompletedFiles(wanted: readonly WantedEpisode[], remoteItem
   const collectionEpisodeKeys = new Set(
     collectionOffers.flatMap((offer) => offer.packPreview.fileLocators
       .filter((locator) => locator.episode !== null)
-      .map((locator) => `${normalizedSeriesTitle(offer.packPreview.seriesTitle)}\0${offer.packPreview.season}\0${locator.episode}`)),
+      .map((locator) => `${canonicalSeriesTitle(offer.packPreview.seriesTitle)}\0${offer.packPreview.season}\0${locator.episode}`)),
   );
   const selectionList: MatchSelection[] = [];
   const reviews: Array<{ rank: number; reason: "ambiguous" | "multi-episode" | "uncertain-title"; wantedId: string; episodeKey: string; candidates: ReviewCandidate[] }> = [];
   for (const entry of [...wanted].sort((a, b) => episodeKey(a.seriesTitle,a.season,a.episode).localeCompare(episodeKey(b.seriesTitle,b.season,b.episode)))) {
     const key = episodeKey(entry.seriesTitle, entry.season, entry.episode);
     if (doneKeys.has(key)) continue;
-    if (collectionEpisodeKeys.has(`${normalizedSeriesTitle(entry.seriesTitle)}\0${entry.season}\0${entry.episode}`)) continue;
+    if (collectionEpisodeKeys.has(`${canonicalSeriesTitle(entry.seriesTitle)}\0${entry.season}\0${entry.episode}`)) continue;
     const candidates = parsed.map(({ item, parsed }) => candidateFor(item, parsed, entry)).filter((candidate): candidate is Candidate => candidate !== null).filter((candidate) => !doneRemote.has(`${candidate.parsed.provider}\0${candidate.parsed.remoteItemId}\0${candidate.parsed.remoteFileId}`));
     const multi = candidates.filter((c) => c.parsed.multiEpisode);
     if (multi.length) { reviews.push({ rank: 3, reason: "multi-episode", wantedId: entry.id, episodeKey: key, candidates: multi.map((c) => reviewCandidate(c, entry)).sort(order) }); continue; }
@@ -260,7 +277,7 @@ export function matchCompletedFiles(wanted: readonly WantedEpisode[], remoteItem
   const selections = selectionList.sort((a,b) => a.episodeKey.localeCompare(b.episodeKey) || order(a,b));
   if (collectionOffers.length) {
     const coveredWantedIds = [...wanted]
-      .filter((entry) => collectionEpisodeKeys.has(`${normalizedSeriesTitle(entry.seriesTitle)}\0${entry.season}\0${entry.episode}`))
+      .filter((entry) => collectionEpisodeKeys.has(`${canonicalSeriesTitle(entry.seriesTitle)}\0${entry.season}\0${entry.episode}`))
       .map((entry) => entry.id)
       .sort();
     return { kind: "season-packs", offers: collectionOffers, coveredWantedIds, selections, review };

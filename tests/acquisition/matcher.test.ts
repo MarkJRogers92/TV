@@ -1171,3 +1171,46 @@ describe("matchCompletedFiles determinism", () => {
     });
   });
 });
+
+  test("matches a series whose provider title carries its year", () => {
+    // A provider decorates the series with its year; the year is not part of the
+    // identity, so this must auto-select rather than land in Needs review.
+    const plan = matchCompletedFiles(
+      [wanted({ seriesTitle: "Night court", season: 1, episode: 6 })],
+      [item([
+        file({
+          remoteFileId: "nc-s1e6",
+          originalFilename: "Night Court (1984) - S01E06 - Death Threat (480p DVD x265 Panda).mkv",
+          bytes: 224 * megabyte,
+        }),
+      ], { remoteItemId: "nc", originalName: "Night Court (1984) - S01E06 - Death Threat" })],
+      [],
+    );
+
+    expect(plan).toMatchObject({ kind: "automatic" });
+    expect((plan as Extract<MatchPlan, { kind: "automatic" }>).selections).toHaveLength(1);
+  });
+
+  test("offers a season pack whose provider title carries its year", () => {
+    const seasonFiles = (season: number, count: number) => Array.from({ length: count }, (_, index) =>
+      file({
+        remoteItemId: "night-court",
+        remoteFileId: `nc-s${season}e${index + 1}`,
+        originalFilename: `Night Court (1984) - S0${season}E0${index + 1} - Episode.mkv`,
+        bytes: 224 * megabyte,
+      }),
+    );
+    const plan = matchCompletedFiles(
+      [wanted({ id: "wanted-nc", seriesTitle: "Night court", season: 1, episode: 6 })],
+      [item([...seasonFiles(1, 6), ...seasonFiles(2, 3)], {
+        remoteItemId: "night-court",
+        originalName: "Night Court (1984) Complete Series",
+      })],
+      [],
+    );
+
+    expect(plan).toMatchObject({ kind: "season-packs" });
+    const offers = (plan as Extract<MatchPlan, { kind: "season-packs" }>).offers;
+    expect(offers).toHaveLength(1);
+    expect(offers[0]!.packPreview).toMatchObject({ remoteItemId: "night-court", season: 1 });
+  });
