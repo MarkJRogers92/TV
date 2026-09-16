@@ -11,6 +11,23 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
+/**
+ * The page reads /tunarr/status on mount so the last sync outcome is visible
+ * without acting. Route that request separately, otherwise it consumes one of
+ * the per-test queued responses the assertions below depend on.
+ */
+function stubTunarrFetch(fetcher: unknown) {
+  vi.stubGlobal(
+    "fetch",
+    (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).includes("/api/v1/tunarr/status")
+        ? Promise.resolve(
+            new Response(JSON.stringify({ configured: false }), { status: 200 }),
+          )
+        : (fetcher as (i: RequestInfo | URL, o?: RequestInit) => Promise<Response>)(input, init),
+  );
+}
+
 test("shows Test, dry-run, and guarded Sync states without using an untyped result", async () => {
   const fetcher = vi.fn().mockResolvedValue(
     new Response(
@@ -22,7 +39,7 @@ test("shows Test, dry-run, and guarded Sync states without using an untyped resu
       { status: 200 },
     ),
   );
-  vi.stubGlobal("fetch", fetcher);
+  stubTunarrFetch(fetcher);
   render(<Tunarr />);
   const sync = screen.getByRole("button", { name: "Sync" });
   expect(sync).toBeDisabled();
@@ -69,7 +86,7 @@ test("sends channel creation inputs and invalidates an eligible dry run on edits
       { status: 200 },
     ),
   );
-  vi.stubGlobal("fetch", fetcher);
+  stubTunarrFetch(fetcher);
   render(<Tunarr />);
   fireEvent.change(screen.getByLabelText(/Library IDs/i), {
     target: { value: "lib" },
@@ -115,7 +132,7 @@ test("accepts multiple library IDs one per line, trims/dedupes, and submits libr
       { status: 200 },
     ),
   );
-  vi.stubGlobal("fetch", fetcher);
+  stubTunarrFetch(fetcher);
   render(<Tunarr />);
   const input = screen.getByLabelText(/Library IDs/i);
   expect(input.tagName.toLowerCase()).toBe("textarea");
@@ -149,7 +166,7 @@ test("invalidates the prior dry run when library IDs are edited", async () => {
       { status: 200 },
     ),
   );
-  vi.stubGlobal("fetch", fetcher);
+  stubTunarrFetch(fetcher);
   render(<Tunarr />);
   fireEvent.change(screen.getByLabelText(/Library IDs/i), {
     target: { value: "lib-a" },
@@ -181,7 +198,7 @@ test("ignores an eligible dry run that finishes after library IDs change", async
         finishDryRun = resolve;
       }),
   );
-  vi.stubGlobal("fetch", fetcher);
+  stubTunarrFetch(fetcher);
   render(<Tunarr />);
 
   fireEvent.change(screen.getByLabelText(/Library IDs/i), {

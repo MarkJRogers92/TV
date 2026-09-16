@@ -1,0 +1,169 @@
+import type { Repositories } from "../db/repositories.js";
+import { TunarrClient } from "../integrations/tunarr/client.js";
+import {
+  buildTunarrSyncPlan,
+  type TunarrSyncPlan,
+} from "../integrations/tunarr/plan.js";
+import { syncTunarrPlan } from "../integrations/tunarr/sync.js";
+import type { TunarrMappingInput } from "../integrations/tunarr/types.js";
+
+/**
+ * Pushes a freshly generated schedule to Tunarr without a manual dry-run/sync.
+ *
+ * The dry-run the Tunarr page performs is not a human approval step -- it is how
+ * the plan gets built and fingerprinted, and its `syncEligible` gate is what
+ * refuses a lineup containing media Tunarr cannot resolve. Running the same
+ * build-and-apply here keeps that gate while removing the click: if any
+ * scheduled path is unmatched the sync is skipped and recorded, never forced.
+ *
+ * Nothing here may fail a schedule generation. Every outcome -- skipped,
+ * blocked, failed, synced -- is written to the mapping as `lastSync` so a sync
+ * that quietly did not happen is visible instead of looking like success.
+ */
+
+export const TUNARR_MAPPING_SETTING = "tunarr-mapping";
+
+export type TunarrAutoSyncOutcome = {
+  status: "synced" | "skipped" | "blocked" | "failed";
+  at: string;
+  marktvChannelId: string;
+  scheduleId?: string;
+  completed?: string[];
+  programCount?: number;
+  blockingErrors?: number;
+  message?: string;
+};
+
+export type StoredTunarrMapping = TunarrMappingInput & {
+  url: string;
+  marktvChannelId: string;
+  /** Automatic sync after a generation. Absent means enabled. */
+  autoSync?: boolean;
+  plan?: TunarrSyncPlan;
+  lastSync?: TunarrAutoSyncOutcome;
+};
+
+export function readTunarrMapping(
+  repositories: Repositories,
+): StoredTunarrMapping | undefined {
+  return repositories.settings.get(TUNARR_MAPPING_SETTING)?.value as
+    | StoredTunarrMapping
+    | undefined;
+}
+
+/** The subset of the stored mapping the plan builder consumes. */
+function mappingInput(stored: StoredTunarrMapping): TunarrMappingInput {
+  return {
+    libraryId: stored.libraryId,
+    libraryIds: stored.libraryIds,
+    channelId: stored.channelId,
+    fillerListId: stored.fillerListId,
+    createChannel: stored.createChannel,
+    transcodeConfigId: stored.transcodeConfigId,
+  };
+}
+
+function persist(
+  repositories: Repositories,
+  mapping: StoredTunarrMapping,
+  outcome: TunarrAutoSyncOutcome,
+): TunarrAutoSyncOutcome {
+  repositories.settings.put(TUNARR_MAPPING_SETTING, {
+    ...mapping,
+    lastSync: outcome,
+  });
+  return outcome;
+}
+
+function reason(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  const code = (error as { code?: string }).code;
+  return code ? String(code) : "Unknown Tunarr error";
+}
+
+export async function autoSyncTunarr(
+  repositories: Repositories,
+  options: { channelId: string; now: () => Date },
+): Promise<TunarrAutoSyncOutcome> {
+  const at = options.now().toISOString();
+  const stored = readTunarrMapping(repositories);
+  if (!stored?.url)
+    return {
+      status: "skipped",
+      at,
+      marktvChannelId: options.channelId,
+      message: "Tunarr has not been configured",
+    };
+
+  const base = { at, marktvChannelId: stored.marktvChannelId };
+  if (stored.autoSync === false)
+    return persist(repositories, stored, {
+      ...base,
+      status: "skipped",
+      message: "Automatic sync is turned off",
+    });
+  // Only the mapped channel is pushed; generating a different one must not
+  // rewrite this channel's programming.
+  if (stored.marktvChannelId !== options.channelId)
+    return persist(repositories, stored, {
+      ...base,
+      status: "skipped",
+      message: `Only ${stored.marktvChannelId} is synced automatically`,
+    });
+
+  const schedule = repositories.schedules.latest(stored.marktvChannelId);
+  if (!schedule)
+    return persist(repositories, stored, {
+      ...base,
+      status: "skipped",
+      message: "There is no schedule to sync",
+    });
+
+  const input = mappingInput(stored);
+  try {
+    const client = new TunarrClient(stored.url);
+    const snapshot = await client.snapshot(input);
+    const plan = buildTunarrSyncPlan(
+      schedule,
+      snapshot.inventory,
+      snapshot.capabilities,
+      input,
+      snapshot.snapshots,
+    );
+    if (!plan.syncEligible)
+      return persist(repositories, { ...stored, plan }, {
+        ...base,
+        status: "blocked",
+        scheduleId: schedule.id,
+        blockingErrors: plan.blockingErrors.length,
+        message: plan.blockingErrors[0]?.message,
+      });
+
+    const result = await syncTunarrPlan(client, plan, schedule);
+    const state = { ...stored, ...result.state, plan };
+    if (result.partialFailure)
+      return persist(repositories, state, {
+        ...base,
+        status: "failed",
+        scheduleId: schedule.id,
+        completed: result.completed,
+        message: result.error,
+      });
+    return persist(repositories, state, {
+      ...base,
+      status: "synced",
+      scheduleId: schedule.id,
+      completed: result.completed,
+      programCount: plan.operations.find(
+        (operation) => operation.type === "programming",
+      )?.payload.length,
+    });
+  } catch (error) {
+    return persist(repositories, stored, {
+      ...base,
+      status: "failed",
+      scheduleId: schedule.id,
+      message: reason(error),
+    });
+  }
+}

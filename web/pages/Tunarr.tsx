@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 
 type Connection = {
@@ -22,6 +22,22 @@ type Plan = {
     placeholder: number;
   };
   operations: { type: string }[];
+};
+type SyncOutcome = {
+  status: "synced" | "skipped" | "blocked" | "failed";
+  at: string;
+  scheduleId?: string;
+  programCount?: number;
+  blockingErrors?: number;
+  message?: string;
+};
+type TunarrStatus = {
+  configured: boolean;
+  url?: string;
+  marktvChannelId?: string;
+  autoSync?: boolean;
+  hasPlan?: boolean;
+  lastSync?: SyncOutcome | null;
 };
 type Result = Connection | Plan | { error: string };
 const isConnection = (result: Result | undefined): result is Connection =>
@@ -50,7 +66,18 @@ export function Tunarr() {
   const [createChannel, setCreateChannel] = useState(false);
   const [transcodeConfigId, setTranscodeConfigId] = useState("");
   const [result, setResult] = useState<Result>();
+  const [status, setStatus] = useState<TunarrStatus>();
   const requestGeneration = useRef(0);
+  const refreshStatus = async () => {
+    try {
+      setStatus(await api<TunarrStatus>("/tunarr/status"));
+    } catch {
+      setStatus(undefined);
+    }
+  };
+  useEffect(() => {
+    void refreshStatus();
+  }, []);
   const request = async <T,>(path: string, body?: unknown) => {
     const generation = ++requestGeneration.current;
     try {
@@ -59,6 +86,8 @@ export function Tunarr() {
         body: body ? JSON.stringify(body) : undefined,
       })) as Result;
       if (generation === requestGeneration.current) setResult(nextResult);
+      // A sync just changed the recorded outcome, so re-read it.
+      void refreshStatus();
     } catch {
       if (generation === requestGeneration.current)
         setResult({
@@ -79,6 +108,29 @@ export function Tunarr() {
         Test a local Tunarr connection, then request a dry run before any
         explicit sync.
       </p>
+      {status?.configured && (
+        <div>
+          <p>
+            Automatic sync is {status.autoSync ? "on" : "off"}: generating a
+            schedule for {status.marktvChannelId} pushes it to Tunarr without a
+            dry run. The same eligibility check still applies, so a lineup with
+            unmatched media is refused rather than forced.
+          </p>
+          {status.lastSync ? (
+            <p>
+              Last sync: <strong>{status.lastSync.status}</strong> at{" "}
+              {new Date(status.lastSync.at).toLocaleString()}
+              {status.lastSync.status === "synced" &&
+              status.lastSync.programCount !== undefined
+                ? ` (${status.lastSync.programCount} programs)`
+                : ""}
+              {status.lastSync.message ? ` — ${status.lastSync.message}` : ""}
+            </p>
+          ) : (
+            <p>No sync has been recorded yet.</p>
+          )}
+        </div>
+      )}
       <label>
         Tunarr URL
         <input

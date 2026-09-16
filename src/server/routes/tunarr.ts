@@ -3,7 +3,6 @@ import { z } from "zod";
 import { TunarrClient } from "../../integrations/tunarr/client.js";
 import {
   buildTunarrSyncPlan,
-  type TunarrSyncPlan,
 } from "../../integrations/tunarr/plan.js";
 import { syncTunarrPlan } from "../../integrations/tunarr/sync.js";
 import {
@@ -11,6 +10,11 @@ import {
   type TunarrMappingInput,
 } from "../../integrations/tunarr/types.js";
 import type { ServerContext } from "../context.js";
+import {
+  readTunarrMapping,
+  TUNARR_MAPPING_SETTING,
+  type StoredTunarrMapping,
+} from "../tunarrAutoSync.js";
 
 const testSchema = z.object({
   url: z.string().url(),
@@ -37,11 +41,7 @@ const dryRunSchema = z
       });
     }
   });
-type StoredMapping = TunarrMappingInput & {
-  url: string;
-  marktvChannelId: string;
-  plan?: TunarrSyncPlan;
-};
+type StoredMapping = StoredTunarrMapping;
 
 function safeTunarrError(reply: FastifyReply, error: unknown, message: string) {
   const code =
@@ -57,6 +57,21 @@ export async function registerTunarrRoutes(
   app: FastifyInstance,
   context: ServerContext,
 ) {
+  app.get("/api/v1/tunarr/status", async () => {
+    const stored = readTunarrMapping(context.repositories);
+    if (!stored) return { configured: false };
+    // Deliberately omits `plan`: it carries the whole 956-entry lineup.
+    return {
+      configured: true,
+      url: stored.url,
+      marktvChannelId: stored.marktvChannelId,
+      channelId: stored.channelId ?? "",
+      libraryIds: stored.libraryIds ?? (stored.libraryId ? [stored.libraryId] : []),
+      autoSync: stored.autoSync !== false,
+      hasPlan: Boolean(stored.plan),
+      lastSync: stored.lastSync ?? null,
+    };
+  });
   app.post("/api/v1/tunarr/test", async (request, reply) => {
     try {
       const input = testSchema.parse(request.body);
@@ -100,7 +115,7 @@ export async function registerTunarrRoutes(
         mapping,
         remote.snapshots,
       );
-      context.repositories.settings.put("tunarr-mapping", {
+      context.repositories.settings.put(TUNARR_MAPPING_SETTING, {
         ...mapping,
         url: input.url,
         marktvChannelId: input.marktvChannelId,
@@ -116,7 +131,7 @@ export async function registerTunarrRoutes(
     }
   });
   app.post("/api/v1/tunarr/sync", async (_request, reply) => {
-    const stored = context.repositories.settings.get("tunarr-mapping")
+    const stored = context.repositories.settings.get(TUNARR_MAPPING_SETTING)
       ?.value as StoredMapping | undefined;
     if (!stored?.plan || !stored.url)
       return reply.code(409).send({ code: "STALE_DRY_RUN" });
@@ -134,7 +149,7 @@ export async function registerTunarrRoutes(
         stored.plan,
         schedule,
       );
-      context.repositories.settings.put("tunarr-mapping", {
+      context.repositories.settings.put(TUNARR_MAPPING_SETTING, {
         ...stored,
         ...result.state,
         plan: undefined,

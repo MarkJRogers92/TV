@@ -5,6 +5,7 @@ import { broadcastDateSchema } from "../../domain/models.js";
 import type { ServerContext } from "../context.js";
 import { notFound, validationError } from "../errors.js";
 import { ScheduleExportError } from "../scheduleService.js";
+import { autoSyncTunarr } from "../tunarrAutoSync.js";
 
 const generateSchema = z.object({
   channelId: z.string().min(1).default("marktv-laughs"),
@@ -35,7 +36,14 @@ export async function registerScheduleRoutes(
         }).toISODate()!;
       const result = await context.schedules.generate(channel, date);
       if (result.ok === false) return reply.code(422).send(result);
-      return { schedule: result.schedule, exportPath: result.exportPath };
+      // A generated schedule is only audible once Tunarr has it. This runs the
+      // same plan-and-apply path the Tunarr page uses, so an unmatched path
+      // still refuses; it can never fail the generation itself.
+      const tunarr = await autoSyncTunarr(repositories, {
+        channelId: channel.id,
+        now: context.now,
+      });
+      return { schedule: result.schedule, exportPath: result.exportPath, tunarr };
     } catch (error) {
       if (error instanceof ScheduleExportError)
         return reply
