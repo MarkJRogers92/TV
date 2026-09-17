@@ -80,6 +80,17 @@ export const RECOVERY_HEALTHY_MS = 30_000;
 /** A forward jump larger than this is reported rather than done silently. */
 export const VISIBLE_RESYNC_SECONDS = 10;
 
+/** hls.js sentinel: start at the live edge rather than at a given position. */
+export const LIVE_EDGE = -1;
+
+/**
+ * How many attempts try to resume where the viewer actually was before giving
+ * up on that position. A live window of ~80s at 4s segments holds only ~20
+ * segments, so a stalled client that cannot reload will fall out of it within
+ * seconds; retrying past this point cannot succeed.
+ */
+export const POSITION_PRESERVE_ATTEMPTS = 3;
+
 export type RecoveryAction =
   | "reload"
   | "recover-media"
@@ -230,8 +241,19 @@ export const createBrowserLivePlayer: LivePlayerFactory = (
         return;
       }
       if (recoveryTimer !== null) return;
+      // Keep the viewer where they were for the first few attempts. But a live
+      // playlist slides on without them, so once the target has left the window
+      // no amount of retrying will load it — that just burns the whole budget on
+      // a position that no longer exists and parks on the error screen. After a
+      // few honest attempts, reload at the live edge and say so.
+      const preserving = attempt < POSITION_PRESERVE_ATTEMPTS;
       const position = video.currentTime;
-      resumeFrom = position;
+      resumeFrom = preserving ? position : null;
+      if (!preserving) {
+        callbacks.onNotice(
+          "Live TV moved past the buffered point. Playback resumed at the live edge.",
+        );
+      }
       breakHealth();
       report("reconnecting");
       const delay = recoveryDelayMs(attempt);
@@ -244,9 +266,9 @@ export const createBrowserLivePlayer: LivePlayerFactory = (
           if (action === "recover-media") {
             hls.recoverMediaError();
           } else {
-            // Reload the playlist but ask to resume where playback actually was,
-            // so a transient fault does not rewind to an older position.
-            hls.startLoad(position);
+            // startLoad(-1) asks hls.js for the live edge; a positive position
+            // asks for exactly where playback was.
+            hls.startLoad(preserving ? position : LIVE_EDGE);
           }
         } catch {
           report("error");

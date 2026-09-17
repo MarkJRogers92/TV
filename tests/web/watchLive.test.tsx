@@ -61,7 +61,9 @@ vi.mock("hls.js", () => {
 
 import {
   createBrowserLivePlayer,
+  LIVE_EDGE,
   livePlayerConfig,
+  POSITION_PRESERVE_ATTEMPTS,
   RECOVERY_BUDGET,
   recoveryActionFor,
   recoveryDelayMs,
@@ -279,6 +281,41 @@ test("repairs a media error with the media-element recovery calls", () => {
   act(() => hlsMock.emit("hlsError", fatal("mediaError")));
   act(() => vi.advanceTimersByTime(recoveryDelayMs(0)));
   expect(hlsMock.recoverMediaError).toHaveBeenCalled();
+  vi.useRealTimers();
+});
+
+test("falls back to the live edge when the saved position cannot be resumed", () => {
+  // A live window slides on without a stalled client. Retrying the position it
+  // was on can never succeed once that position leaves the window, so recovery
+  // must eventually ask for the live edge instead of exhausting the budget on a
+  // position that no longer exists — which parked the player on the error screen
+  // at every programme boundary.
+  vi.useFakeTimers();
+  const video = document.createElement("video");
+  Object.defineProperty(video, "currentTime", {
+    configurable: true,
+    value: 120,
+    writable: true,
+  });
+  const notices: string[] = [];
+  const handle = createBrowserLivePlayer(video, "/live.m3u8", {
+    onNotice: (notice) => notices.push(notice),
+    onStatus: vi.fn(),
+  });
+
+  for (let i = 0; i <= POSITION_PRESERVE_ATTEMPTS; i += 1) {
+    act(() => hlsMock.emit("hlsError", fatal("networkError")));
+    act(() => void vi.advanceTimersByTime(recoveryDelayMs(i) + 10));
+  }
+
+  const targets = hlsMock.startLoad.mock.calls.map((call) => call[0]);
+  expect(targets.slice(0, POSITION_PRESERVE_ATTEMPTS)).toEqual(
+    Array(POSITION_PRESERVE_ATTEMPTS).fill(120),
+  );
+  expect(targets[POSITION_PRESERVE_ATTEMPTS]).toBe(LIVE_EDGE);
+  expect(notices.join(" ")).toMatch(/live edge/i);
+
+  handle.destroy();
   vi.useRealTimers();
 });
 
