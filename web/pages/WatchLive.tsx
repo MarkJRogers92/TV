@@ -268,12 +268,37 @@ export const createBrowserLivePlayer: LivePlayerFactory = (
         if (destroyed) return;
         watchdog.reset(Date.now(), position);
         try {
-          if (action === "recover-media") {
-            hls.recoverMediaError();
-          } else {
-            // startLoad(-1) asks hls.js for the live edge; a positive position
-            // asks for exactly where playback was.
-            hls.startLoad(preserving ? position : LIVE_EDGE);
+          try {
+            // recoverMediaError() re-attaches the media element, which is what
+            // clears a broken decoder state. It also resumes internally at
+            // media.currentTime (recoverMediaError -> startLoad(time)), so on
+            // its own it can never escape a position that has left the live
+            // window -- it has to be followed by the escape below.
+            if (action === "recover-media") {
+              hls.recoverMediaError();
+            }
+            if (!preserving) {
+              // Asking for the live edge needs the second argument, or hls.js
+              // silently overrides it. stream-controller.startLoad() does:
+              //
+              //   if (lastCurrentTime > 0 && startPosition === -1 &&
+              //       !skipSeekToStartPosition && this.initPTS.length)
+              //     startPosition = lastCurrentTime;
+              //
+              // Every one of those conditions holds on a player that has
+              // already been playing -- the only situation this branch runs in.
+              // So `startLoad(-1)` resumes the very position we are abandoning,
+              // and the escalation silently does nothing. Passing true keeps
+              // startPosition at -1, which setStartPosition() then resolves to
+              // liveSyncPosition for a live playlist (getInitialLiveFragment).
+              hls.startLoad(LIVE_EDGE, true);
+            } else if (action !== "recover-media") {
+              // A positive position asks for exactly where playback was.
+              // (recoverMediaError() has already resumed at that position.)
+              hls.startLoad(position);
+            }
+          } catch {
+            report("error");
           }
         } catch {
           report("error");

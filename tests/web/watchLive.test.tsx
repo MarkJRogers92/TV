@@ -308,11 +308,54 @@ test("falls back to the live edge when the saved position cannot be resumed", ()
     act(() => void vi.advanceTimersByTime(recoveryDelayMs(i) + 10));
   }
 
-  const targets = hlsMock.startLoad.mock.calls.map((call) => call[0]);
+  const calls = hlsMock.startLoad.mock.calls;
+  const targets = calls.map((call) => call[0]);
   expect(targets.slice(0, POSITION_PRESERVE_ATTEMPTS)).toEqual(
     Array(POSITION_PRESERVE_ATTEMPTS).fill(120),
   );
   expect(targets[POSITION_PRESERVE_ATTEMPTS]).toBe(LIVE_EDGE);
+  // Asserting the requested target alone is not enough. hls.js replaces a -1
+  // startPosition with lastCurrentTime unless skipSeekToStartPosition is set
+  // (stream-controller.startLoad: `lastCurrentTime > 0 && startPosition === -1
+  // && !skipSeekToStartPosition && this.initPTS.length`), which would resume the
+  // abandoned position instead of escaping to the live edge. The flag is what
+  // makes the escape real.
+  expect(calls[POSITION_PRESERVE_ATTEMPTS][1]).toBe(true);
+  expect(notices.join(" ")).toMatch(/live edge/i);
+
+  handle.destroy();
+  vi.useRealTimers();
+});
+
+test("escalates a media error to the live edge once the position budget is spent", () => {
+  // recoverMediaError() resumes internally at media.currentTime
+  // (recoverMediaError -> startLoad(time)), so on its own it can never escape a
+  // position that has left the live window. Without the follow-up escape the
+  // notice above it would announce the live edge while playback resumed the
+  // very position it was trying to abandon.
+  vi.useFakeTimers();
+  const video = document.createElement("video");
+  Object.defineProperty(video, "currentTime", {
+    configurable: true,
+    value: 120,
+    writable: true,
+  });
+  const notices: string[] = [];
+  const handle = createBrowserLivePlayer(video, "/live.m3u8", {
+    onNotice: (notice) => notices.push(notice),
+    onStatus: vi.fn(),
+  });
+
+  for (let i = 0; i <= POSITION_PRESERVE_ATTEMPTS; i += 1) {
+    act(() => hlsMock.emit("hlsError", fatal("mediaError")));
+    act(() => void vi.advanceTimersByTime(recoveryDelayMs(i) + 10));
+  }
+
+  expect(hlsMock.recoverMediaError).toHaveBeenCalled();
+  const calls = hlsMock.startLoad.mock.calls;
+  const escape = calls[calls.length - 1];
+  expect(escape[0]).toBe(LIVE_EDGE);
+  expect(escape[1]).toBe(true);
   expect(notices.join(" ")).toMatch(/live edge/i);
 
   handle.destroy();
