@@ -59,6 +59,12 @@ test("guards the only shipped listen call in the server entrypoint", async () =>
   const listen = source.indexOf("app.listen({ host, port })");
   expect(guard).toBeGreaterThanOrEqual(0);
   expect(listen).toBeGreaterThan(guard);
+  // The duplicate-instance pre-flight also binds a socket, so it must sit behind
+  // the same guard and ahead of the real bind — otherwise it would be a second,
+  // unguarded bind path inside this file.
+  const probe = source.indexOf("probe.listen({ host, port })");
+  expect(probe).toBeGreaterThan(guard);
+  expect(probe).toBeLessThan(listen);
   // Evidence for the "no concrete bypass" ruling: the guard receives the same
   // `host` binding that is handed to Fastify, and no other shipped source file
   // opens a listener, so there is no alternate bind path to guard.
