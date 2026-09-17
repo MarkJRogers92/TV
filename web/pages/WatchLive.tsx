@@ -60,6 +60,11 @@ export const livePlayerConfig = {
   // target to `8 * maxBufferSize / bitrate` first, so leaving this high lets a
   // burst-produced window be swallowed whole, pushing playback a minute or more
   // behind the live edge for no extra resilience.
+  //
+  // Measured, not assumed: raising this to 50s to ride out commercial-break
+  // gaps made continuity WORSE (0.942x -> 0.839x of wall clock) and tripped a
+  // recovery. The producer is the long pole, and a deeper buffer does not make
+  // a slow producer faster — it only adds latency.
   maxBufferLength: 30,
   maxMaxBufferLength: 30,
   backBufferLength: 30,
