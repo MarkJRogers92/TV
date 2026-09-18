@@ -33,7 +33,12 @@ await new Promise<void>((resolve, reject) => {
   probe.listen({ host, port });
 });
 
-const app = await buildApp();
+const app = await buildApp({
+  // On for the real service. The restart-verification script spawns this entry
+  // point with MARKTV_SCHEDULE_REFRESH=0, because a background generation would
+  // otherwise replace the very schedule that script is asserting survives.
+  scheduleRefresh: process.env.MARKTV_SCHEDULE_REFRESH !== "0",
+});
 if (process.env.MARKTV_DEV !== "1") {
   await registerStaticUi(app, join(process.cwd(), "dist"));
 }

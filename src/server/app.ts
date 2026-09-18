@@ -8,6 +8,11 @@ import type { ProviderName } from "../acquisition/providerTypes.js";
 import { openDatabase } from "../db/database.js";
 import { createRepositories } from "../db/repositories.js";
 import { logError } from "./logging.js";
+import {
+  startScheduleRefresh,
+  type ScheduleRefresh,
+} from "./scheduleRefresh.js";
+import { autoSyncTunarr } from "./tunarrAutoSync.js";
 import { seedDemoIfEmpty } from "../demo/marktvLaughs.js";
 import { RealDebridProvider } from "../integrations/acquisition/realDebrid.js";
 import { TorBoxProvider } from "../integrations/acquisition/torBox.js";
@@ -45,6 +50,14 @@ export type BuildAppOptions = {
   credentials?: CredentialStore;
   providers?: Record<ProviderName, AcquisitionProvider>;
   coordinator?: CoordinatorSeams;
+  /**
+   * Whether to run the background schedule refresh.
+   *
+   * Off by default, and deliberately so: it generates schedules and writes export
+   * files on a timer, so anything that builds an app for a test, a verification
+   * run, or a script must not inherit it. The real service opts in.
+   */
+  scheduleRefresh?: boolean;
 };
 
 const IPV4_LOOPBACK = /^127(?:\.\d{1,3}){3}$/;
@@ -234,7 +247,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
     Intl.DateTimeFormat().resolvedOptions().timeZone,
   );
 
+  // Held out here because the close hook is registered before startup runs, so it
+  // needs something to stop by the time it fires.
+  let scheduleRefresh: ScheduleRefresh | null = null;
   app.addHook("onClose", async () => {
+    scheduleRefresh?.stop();
     // The coordinator owns every durable acquisition write, so stop it
     // (clearing its timer, aborting local transfers, and persisting resumable
     // state) before the database handle is closed.
@@ -257,6 +274,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
   // unreferenced poll timer before the app begins serving.
   try {
     await coordinator.start();
+    if (options.scheduleRefresh) {
+      // Not awaited: a refresh that has to generate takes minutes, and serving must
+      // not wait on it.
+      scheduleRefresh = startScheduleRefresh(context, {
+        syncToTunarr: (channelId, at) =>
+          autoSyncTunarr(repositories, { channelId, now: at }),
+      });
+    }
   } catch (error) {
     // A failed start leaves no app handle to close, so release the coordinator
     // and database here instead of leaking both.

@@ -28,6 +28,10 @@ function startServer() {
       ...process.env,
       MARKTV_DATA_DIR: dataDir,
       MARKTV_PORT: String(port),
+      // The background schedule refresh writes schedules and export files. This
+      // script asserts that a generated schedule survives a restart, so a refresh
+      // running underneath it would replace the schedule under test.
+      MARKTV_SCHEDULE_REFRESH: "0",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
