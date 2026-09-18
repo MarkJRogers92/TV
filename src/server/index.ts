@@ -1,6 +1,8 @@
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { assertLoopbackHost, buildApp } from "./app.js";
+import { logError } from "./logging.js";
+import { installProcessGuards } from "./processGuards.js";
 import { registerStaticUi } from "./staticUi.js";
 
 const host = process.env.MARKTV_HOST ?? "127.0.0.1";
@@ -39,11 +41,22 @@ if (process.env.MARKTV_DEV !== "1") {
 await app.listen({ host, port });
 
 let closing = false;
-const close = async () => {
+const close = async (signal: NodeJS.Signals) => {
   if (closing) return;
   closing = true;
-  await app.close();
-  process.exitCode = 0;
+  try {
+    await app.close();
+    process.exitCode = 0;
+  } catch (error) {
+    // A failed shutdown must not itself become an unhandled rejection: the process
+    // is on its way out, and the only useful thing left is to record why.
+    logError("shutdown", error, { signal });
+    process.exitCode = 1;
+  }
 };
-process.once("SIGINT", close);
-process.once("SIGTERM", close);
+// Wrapped rather than registered directly: `once` ignores the listener's return
+// value, so an async listener would reject into nothing.
+process.once("SIGINT", () => void close("SIGINT"));
+process.once("SIGTERM", () => void close("SIGTERM"));
+
+installProcessGuards();
