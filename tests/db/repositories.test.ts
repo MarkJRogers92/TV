@@ -255,3 +255,24 @@ test("keeps only the most recent generations, so the table cannot grow without l
     scheduleLimits.historyPerChannel = previous;
   }
 });
+
+test("prunes the least recently inserted entries under a prefix", async () => {
+  const repositories = createRepositories(
+    openDatabase(await temporaryDirectory()),
+  );
+  repositories.settings.put("episode-break-analysis:one", 1);
+  repositories.settings.put("episode-break-analysis:two", 2);
+  repositories.settings.put("episode-break-analysis:three", 3);
+  repositories.settings.put("tunarr-mapping", { url: "keep me" });
+
+  repositories.settings.pruneByPrefix("episode-break-analysis:", 2);
+
+  expect(repositories.settings.get("episode-break-analysis:one")).toBeUndefined();
+  expect(repositories.settings.get("episode-break-analysis:two")?.value).toBe(2);
+  expect(repositories.settings.get("episode-break-analysis:three")?.value).toBe(3);
+  // The prefix is a boundary, not a suggestion: unrelated settings must survive.
+  expect(repositories.settings.get("tunarr-mapping")?.value).toEqual({
+    url: "keep me",
+  });
+  repositories.close();
+});

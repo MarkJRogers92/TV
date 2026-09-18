@@ -25,6 +25,16 @@ export class ScheduleExportError extends Error {
   readonly code = "EXPORT_FAILED";
 }
 
+/**
+ * Cap on cached episode-break analyses.
+ *
+ * The cache key is content-derived - path, size, mtime, dev/ino and policy - so a
+ * re-import or an edited file mints a NEW entry rather than refreshing an existing
+ * one. Nothing ever removed them, so the documents table grew with every re-import
+ * and `settings.list()` scanned more rows for every caller.
+ */
+const episodeBreakCacheLimit = 2_000;
+
 export class ScheduleService {
   private readonly inFlight = new Map<string, Promise<PersistedGeneration>>();
   private readonly episodeBreakAnalyzer: {
@@ -102,6 +112,13 @@ export class ScheduleService {
       }
     };
     await Promise.all([worker(), worker()]);
+    // Pruned here rather than inside the cache itself: this runs once per
+    // generation, which is the natural low-frequency point, and the cache has just
+    // been filled above.
+    this.repositories.settings.pruneByPrefix(
+      "episode-break-analysis:",
+      episodeBreakCacheLimit,
+    );
     return analyses;
   }
 

@@ -263,6 +263,36 @@ export function createRepositories(database: MarkTvDatabase) {
         database
           .prepare("DELETE FROM documents WHERE type = ? AND id = ?")
           .run("setting", id),
+      /**
+       * Drops the least recently inserted entries under a prefix.
+       *
+       * The episode-break cache is keyed by content identity - path, size, mtime,
+       * dev/ino and policy - so every re-import or changed file mints a NEW entry,
+       * and nothing ever removed them. An install that re-imports media therefore
+       * grew the `documents` table without bound, and `settings.list()` scans more
+       * rows for every caller.
+       *
+       * Ordered by rowid because `documents` has no timestamp column. For these
+       * entries insertion order is a good enough stand-in for recency precisely
+       * because a changed file produces a new key rather than updating an old one.
+       *
+       * `prefix` is a literal, not a LIKE pattern: it is interpolated with `%`
+       * appended, so it must not contain `%` or `_`.
+       */
+      pruneByPrefix: (prefix: string, keep: number) =>
+        database
+          .prepare(
+            `DELETE FROM documents
+             WHERE type = 'setting'
+               AND id LIKE ?
+               AND rowid NOT IN (
+                 SELECT rowid FROM documents
+                 WHERE type = 'setting' AND id LIKE ?
+                 ORDER BY rowid DESC
+                 LIMIT ?
+               )`,
+          )
+          .run(`${prefix}%`, `${prefix}%`, keep),
     },
     transaction: <T>(operation: () => T): T =>
       database.transaction(operation)(),
