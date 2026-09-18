@@ -37,6 +37,7 @@ function setup(
   options: {
     storedDate?: string;
     generate?: (channel: Channel, date: string) => Promise<PersistedGeneration>;
+    lastSync?: () => { scheduleId?: string; status?: string } | undefined;
   } = {},
 ) {
   const channel = demo().channel;
@@ -59,14 +60,22 @@ function setup(
     repositories: {
       channels: { list: () => [channel] },
       schedules: {
+        // Carries an id, because the service compares it against the last synced
+        // schedule to decide whether a sync is still owed.
         latest: () =>
-          options.storedDate ? { date: options.storedDate } : undefined,
+          options.storedDate ? scheduleStub(options.storedDate) : undefined,
       },
     },
     schedules: { generate },
     now,
   };
-  const refresh = startScheduleRefresh(context, { timers, syncToTunarr, now });
+  const refresh = startScheduleRefresh(context, {
+    timers,
+    syncToTunarr,
+    // Default: nothing has ever been synced, so a sync is always due.
+    lastSync: options.lastSync ?? (() => undefined),
+    now,
+  });
   return { channel, generate, syncToTunarr, timers, refresh };
 }
 
@@ -92,15 +101,34 @@ test("generates today's schedule and pushes it to Tunarr when the stored one is 
   refresh.stop();
 });
 
-test("does nothing when today's schedule already exists", async () => {
-  const { refresh, generate, syncToTunarr } = setup({ storedDate: TODAY });
+test("does nothing when today's schedule already exists and is live", async () => {
+  const { refresh, generate, syncToTunarr } = setup({
+    storedDate: TODAY,
+    lastSync: () => ({ scheduleId: scheduleStub(TODAY).id, status: "synced" }),
+  });
 
   await settle();
 
   // The whole point of the date comparison: a refresh must not regenerate a
-  // schedule that is already correct for today.
+  // schedule that is already correct for today and already broadcast.
   expect(generate).not.toHaveBeenCalled();
   expect(syncToTunarr).not.toHaveBeenCalled();
+  refresh.stop();
+});
+
+test("retries the sync when the previous attempt did not succeed", async () => {
+  // Generating is not broadcasting. The sync's plan-then-apply guard refuses when
+  // the channel state moves between its snapshots, which an active viewer causes,
+  // so a failed sync must be retried rather than assumed done because a schedule
+  // for today exists.
+  const { refresh, generate, syncToTunarr } = setup({
+    storedDate: TODAY,
+    lastSync: () => ({ scheduleId: scheduleStub(TODAY).id, status: "failed" }),
+  });
+
+  await vi.waitFor(() => expect(syncToTunarr).toHaveBeenCalledTimes(1));
+
+  expect(generate).not.toHaveBeenCalled();
   refresh.stop();
 });
 

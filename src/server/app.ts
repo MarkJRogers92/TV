@@ -12,7 +12,7 @@ import {
   startScheduleRefresh,
   type ScheduleRefresh,
 } from "./scheduleRefresh.js";
-import { autoSyncTunarr } from "./tunarrAutoSync.js";
+import { autoSyncTunarr, readTunarrMapping } from "./tunarrAutoSync.js";
 import { seedDemoIfEmpty } from "../demo/marktvLaughs.js";
 import { RealDebridProvider } from "../integrations/acquisition/realDebrid.js";
 import { TorBoxProvider } from "../integrations/acquisition/torBox.js";
@@ -280,6 +280,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       scheduleRefresh = startScheduleRefresh(context, {
         syncToTunarr: (channelId, at) =>
           autoSyncTunarr(repositories, { channelId, now: at }),
+        lastSync: () => readTunarrMapping(repositories)?.lastSync,
       });
     }
   } catch (error) {

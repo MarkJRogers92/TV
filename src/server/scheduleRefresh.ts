@@ -49,7 +49,9 @@ const defaultTimers: ScheduleRefreshTimers = {
 export interface ScheduleRefreshContext {
   readonly repositories: {
     readonly channels: { list: () => Channel[] };
-    readonly schedules: { latest: (channelId: string) => { date: string } | undefined };
+    readonly schedules: {
+      latest: (channelId: string) => { id: string; date: string } | undefined;
+    };
   };
   readonly schedules: {
     generate: (channel: Channel, date: string) => Promise<PersistedGeneration>;
@@ -68,6 +70,13 @@ export interface ScheduleRefreshDependencies {
     channelId: string,
     now: () => Date,
   ) => Promise<{ status: string }>;
+  /**
+   * The most recent recorded Tunarr sync. Reading it is what distinguishes
+   * "generated" from "actually broadcast", so a failed sync gets retried.
+   */
+  readonly lastSync: () =>
+    | { scheduleId?: string; status?: string }
+    | undefined;
 }
 
 export interface ScheduleRefresh {
@@ -96,35 +105,45 @@ export function startScheduleRefresh(
           zone: channel.timezone,
         }).toISODate();
         if (!date) continue;
-        const latest = context.repositories.schedules.latest(channel.id);
-        if (latest?.date === date) continue;
 
-        logInfo("schedule.refresh", "Generating a schedule for today", {
-          channelId: channel.id,
-          date,
-          previousDate: latest?.date ?? null,
-        });
-
-        const generated = await context.schedules.generate(channel, date);
-        if (generated.ok === false) {
-          logWarn("schedule.refresh", "Schedule generation was refused", {
+        let schedule = context.repositories.schedules.latest(channel.id);
+        if (schedule?.date !== date) {
+          logInfo("schedule.refresh", "Generating a schedule for today", {
             channelId: channel.id,
             date,
-            issues: generated.issues.map((issue) =>
-              "code" in issue ? issue.code : "unknown",
-            ),
+            previousDate: schedule?.date ?? null,
           });
+          const generated = await context.schedules.generate(channel, date);
+          if (generated.ok === false) {
+            logWarn("schedule.refresh", "Schedule generation was refused", {
+              channelId: channel.id,
+              date,
+              issues: generated.issues.map((issue) =>
+                "code" in issue ? issue.code : "unknown",
+              ),
+            });
+            continue;
+          }
+          schedule = generated.schedule;
+        }
+
+        // Having a schedule for today does NOT mean Tunarr has it. The sync is a
+        // separate step, and its plan-then-apply guard refuses when the channel's
+        // state moved between its two snapshots - which is exactly what an active
+        // viewer causes. So this keeps retrying until the sync for THIS schedule
+        // is recorded as synced, instead of assuming that generating was enough.
+        // Without that, a single failed sync would strand the lineup until someone
+        // generated the next day's schedule.
+        const synced = dependencies.lastSync();
+        if (synced?.scheduleId === schedule?.id && synced.status === "synced") {
           continue;
         }
 
-        // A schedule nobody has been sent is inaudible, so this runs the same
-        // plan-and-apply path the schedule route uses. Tunarr being down or
-        // unconfigured leaves a good schedule in place rather than failing the
-        // generation, which is why the outcome is logged and not thrown.
         const tunarr = await dependencies.syncToTunarr(channel.id, now);
-        logInfo("schedule.refresh", "Today's schedule is live", {
+        logInfo("schedule.refresh", "Tunarr sync attempted", {
           channelId: channel.id,
           date,
+          scheduleId: schedule?.id,
           tunarr: tunarr.status,
         });
       }
