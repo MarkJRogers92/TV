@@ -58,10 +58,20 @@ function segmentNumbers(playlist: string) {
 function rememberAdvertisedWindow(channelId: string, playlist: string) {
   const numbers = segmentNumbers(playlist);
   if (numbers.length === 0) return;
+  const now = Date.now();
+  // Evicted on write rather than left to accumulate. Entries are keyed by Tunarr
+  // channel id, so a re-created channel or an edited mapping leaves its old key
+  // behind forever, and a stale window is useless anyway - the guard already
+  // refuses to act on one older than the TTL.
+  for (const [key, window] of advertisedWindows) {
+    if (now - window.at > watchProxyLimits.windowGuardTtlMs) {
+      advertisedWindows.delete(key);
+    }
+  }
   advertisedWindows.set(channelId, {
     start: Math.min(...numbers),
     end: Math.max(...numbers),
-    at: Date.now(),
+    at: now,
   });
 }
 
