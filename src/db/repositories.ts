@@ -52,6 +52,23 @@ function collection<T>(
   };
 }
 
+/**
+ * Retention for stored schedule generations.
+ *
+ * Nothing previously ever deleted from `schedule_generations`, and `historyBefore`
+ * reads every row for a channel and parses each one, so an unattended install grew
+ * the table - and the cost of that call - without limit.
+ *
+ * Counted rather than time-based: a count cannot be defeated by the scheduler
+ * running more often than expected, which is exactly the case that would make a
+ * time window grow. The limit is generous (roughly a quarter of daily generations)
+ * because history exists to stop recently-aired content repeating, and pruning too
+ * aggressively would cause that. Mutable so tests can shrink it.
+ */
+export const scheduleLimits = {
+  historyPerChannel: 90,
+};
+
 export function createRepositories(database: MarkTvDatabase) {
   const channels = collection<Channel>(database, "channel", (value) =>
     channelSchema.parse(value),
@@ -209,7 +226,7 @@ export function createRepositories(database: MarkTvDatabase) {
         const validated = scheduleSchema.parse(schedule);
         if (validated.channelId !== channelId)
           throw new Error("Schedule channel does not match repository channel");
-        database.transaction(() =>
+        database.transaction(() => {
           database
             .prepare(
               "INSERT INTO schedule_generations(channel_id, schedule_id, generated_at, json) VALUES (?, ?, ?, ?)",
@@ -219,8 +236,23 @@ export function createRepositories(database: MarkTvDatabase) {
               validated.id,
               validated.generatedAt,
               JSON.stringify(validated),
-            ),
-        )();
+            );
+          // Pruned in the same transaction as the insert, so the table can never
+          // be observed holding more than the limit. Uses the existing
+          // (channel_id, generation_id DESC) index.
+          database
+            .prepare(
+              `DELETE FROM schedule_generations
+               WHERE channel_id = ?
+                 AND generation_id NOT IN (
+                   SELECT generation_id FROM schedule_generations
+                   WHERE channel_id = ?
+                   ORDER BY generation_id DESC
+                   LIMIT ?
+                 )`,
+            )
+            .run(channelId, channelId, scheduleLimits.historyPerChannel);
+        })();
       },
     },
     settings: {

@@ -2,7 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { afterEach, expect, test } from "vitest";
 import { openDatabase } from "../../src/db/database.js";
-import { createRepositories } from "../../src/db/repositories.js";
+import {
+  createRepositories,
+  scheduleLimits,
+} from "../../src/db/repositories.js";
 import { demo } from "../../src/demo/marktvLaughs.js";
 import type { Channel, Schedule } from "../../src/domain/models.js";
 import { generateSchedule } from "../../src/scheduler/generate.js";
@@ -228,4 +231,27 @@ test("migrates legacy document schedules on reopen", async () => {
   expect(repositories.schedules.latest("marktv-laughs")?.id).toBe("legacy");
   expect(repositories.schedules.list("marktv-laughs")).toHaveLength(1);
   repositories.close();
+});
+
+test("keeps only the most recent generations, so the table cannot grow without limit", async () => {
+  const previous = scheduleLimits.historyPerChannel;
+  scheduleLimits.historyPerChannel = 2;
+  try {
+    const repositories = createRepositories(
+      openDatabase(await temporaryDirectory()),
+    );
+    repositories.schedules.replaceSuccessful("marktv-laughs", schedule("a"));
+    repositories.schedules.replaceSuccessful("marktv-laughs", schedule("b"));
+    repositories.schedules.replaceSuccessful("marktv-laughs", schedule("c"));
+
+    // `list` is ordered by generation_id, so the oldest is the one pruned and the
+    // newest is still what `latest` returns.
+    expect(
+      repositories.schedules.list("marktv-laughs").map((entry) => entry.id),
+    ).toEqual(["b", "c"]);
+    expect(repositories.schedules.latest("marktv-laughs")?.id).toBe("c");
+    repositories.close();
+  } finally {
+    scheduleLimits.historyPerChannel = previous;
+  }
 });
