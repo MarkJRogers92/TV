@@ -14,6 +14,7 @@ import {
   recordEnrollmentFailure,
 } from "../media/seriesEnrollment.js";
 import type { CredentialStore } from "../security/credentialStore.js";
+import { logError } from "../server/logging.js";
 import {
   downloadJob,
   DownloadError,
@@ -381,7 +382,12 @@ export class AcquisitionCoordinator {
     if (!this.isActive(epoch)) return;
     this.clearTimer();
     const timer = this.timers.setInterval(() => {
-      void this.pollOnce().catch(() => undefined);
+      // Reported rather than discarded. A poll that fails every tick is
+      // indistinguishable from a healthy one until downloads stop appearing, and
+      // on an unattended service nobody is watching for that.
+      void this.pollOnce().catch((error) =>
+        logError("acquisition.poll", error),
+      );
     }, this.intervalMs);
     timer.unref?.();
     this.timer = timer;
@@ -580,7 +586,9 @@ export class AcquisitionCoordinator {
    * rejection is contained here rather than becoming an unhandled rejection.
    */
   private startOwnedJobLoop(): void {
-    void this.processJobs().catch(() => undefined);
+    void this.processJobs().catch((error) =>
+      logError("acquisition.jobs", error),
+    );
   }
 
   private clearTimer(): void {

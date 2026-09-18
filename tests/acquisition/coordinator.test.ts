@@ -13,6 +13,7 @@ import { ENROLLMENT_CHANNEL_ID } from "../../src/media/seriesEnrollment.js";
 import type { AcquisitionProvider } from "../../src/integrations/acquisition/provider.js";
 import type { AcquisitionJob, AcquisitionReview, CompletedImport } from "../../src/acquisition/models.js";
 import type { RemoteItem } from "../../src/acquisition/providerTypes.js";
+import { errorLog } from "../../src/server/logging.js";
 
 const dirs: string[] = [];
 afterEach(async () => Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))));
@@ -690,5 +691,51 @@ test("contains a failing background job loop instead of an unhandled rejection",
     repositories.close();
   } finally {
     process.off("unhandledRejection", onRejection);
+  }
+});
+
+test("reports a poll that fails instead of discarding the error", async () => {
+  const { repositories } = await setup();
+  let callback: (() => void) | undefined;
+  const timer = { unref: vi.fn() };
+  const timers = {
+    setInterval: vi.fn((fn: () => void) => {
+      callback = fn;
+      return timer;
+    }),
+    clearInterval: vi.fn(),
+  };
+  const coordinator = new AcquisitionCoordinator({
+    repositories,
+    paths: await initializeManagedPaths((dirs[dirs.length - 1])!),
+    credentials: { get: async () => null, set: async () => {}, remove: async () => {} },
+    providers: {
+      "real-debrid": provider("real-debrid", async () => []),
+      torbox: provider("torbox", async () => []),
+    },
+    timers,
+  });
+  await coordinator.start();
+
+  // Spying on pollOnce exercises the wiring itself rather than one particular way
+  // of making a poll fail. Before this, the tick's rejection was discarded by
+  // `.catch(() => undefined)`, so a permanently failing poll looked identical to a
+  // healthy one until downloads stopped appearing.
+  const poll = vi
+    .spyOn(coordinator, "pollOnce")
+    .mockRejectedValue(new Error("poll exploded"));
+  const lines: string[] = [];
+  const previous = errorLog.sink;
+  errorLog.sink = (line) => lines.push(line);
+  try {
+    callback!();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(lines.join("\n")).toContain("acquisition.poll");
+    expect(lines.join("\n")).toContain("poll exploded");
+  } finally {
+    errorLog.sink = previous;
+    poll.mockRestore();
+    await coordinator.stop();
+    repositories.close();
   }
 });
