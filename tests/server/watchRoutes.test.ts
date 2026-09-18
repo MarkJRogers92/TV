@@ -171,6 +171,9 @@ async function withProxy(
     request: import("node:http").IncomingMessage,
     response: import("node:http").ServerResponse,
   ) => void,
+  // The advertised-window guard remembers state per channel id, so tests that
+  // exercise it take their own id rather than inheriting another test's window.
+  options?: { channelId?: string },
 ) {
   const upstream = createServer(handler);
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
@@ -184,7 +187,7 @@ async function withProxy(
   repositories.settings.put("tunarr-mapping", {
     url: `http://127.0.0.1:${address.port}`,
     marktvChannelId: "marktv-laughs",
-    channelId: "tunarr-channel",
+    channelId: options?.channelId ?? "tunarr-channel",
   });
   repositories.close();
   const app = await buildApp({ dataDir });
@@ -341,5 +344,241 @@ test("abandons the upstream request when the browser goes away", async () => {
 
   await new Promise((resolve) => setTimeout(resolve, 300));
   expect(upstreamClosedEarly).toBe(true);
+  await teardown();
+});
+
+test("re-tunes once and replays a media request when Tunarr reports no session", async () => {
+  // Mirrors the real failure: Tunarr drops an idle session, the media routes
+  // answer 404 "No session found" and are get-only so they cannot rebuild it,
+  // and only the master tune-in route creates a new one.
+  let sessionLive = false;
+  let masterHits = 0;
+  let mediaHits = 0;
+  const { app, teardown } = await withProxy((request, response) => {
+    if (request.url === "/stream/channels/tunarr-channel.m3u8") {
+      masterHits += 1;
+      sessionLive = true;
+      response.setHeader("content-type", "application/vnd.apple.mpegurl");
+      response.end("#EXTM3U\n/stream/channels/tunarr-channel/hls/stream.m3u8\n");
+      return;
+    }
+    if (request.url === "/stream/channels/tunarr-channel/hls/stream.m3u8") {
+      mediaHits += 1;
+      if (!sessionLive) {
+        response.statusCode = 404;
+        response.setHeader("content-type", "text/plain; charset=utf-8");
+        response.end("No session found");
+        return;
+      }
+      response.setHeader("content-type", "application/vnd.apple.mpegurl");
+      response.end("#EXTM3U\n#EXTINF:4.0,\ndata000001.ts\n");
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+
+  const response = await app.inject(
+    "/api/v1/watch/marktv-laughs/media/stream/channels/tunarr-channel/hls/stream.m3u8",
+  );
+
+  expect(response.statusCode).toBe(200);
+  expect(response.body).toBe(
+    "#EXTM3U\n#EXTINF:4.0,\n/api/v1/watch/marktv-laughs/media/stream/channels/tunarr-channel/hls/data000001.ts\n",
+  );
+  expect(masterHits).toBe(1);
+  expect(mediaHits).toBe(2);
+  await teardown();
+});
+
+test("re-tunes for a segment request too, and retries at most once", async () => {
+  let masterHits = 0;
+  let segmentHits = 0;
+  const { app, teardown } = await withProxy((request, response) => {
+    if (request.url === "/stream/channels/tunarr-channel.m3u8") {
+      masterHits += 1;
+      response.setHeader("content-type", "application/vnd.apple.mpegurl");
+      response.end("#EXTM3U\n/stream/channels/tunarr-channel/hls/stream.m3u8\n");
+      return;
+    }
+    segmentHits += 1;
+    response.statusCode = 404;
+    response.end("No session found");
+  });
+
+  const response = await app.inject(SEGMENT_PATH);
+
+  expect(response.statusCode).toBe(502);
+  expect(response.json()).toEqual({
+    code: "LIVE_TV_UNAVAILABLE",
+    message: "Tunarr could not provide the live stream",
+  });
+  expect(masterHits).toBe(1);
+  expect(segmentHits).toBe(2);
+  await teardown();
+});
+
+test("does not re-tune when the tune-in request itself fails", async () => {
+  // The master route is what building a session means, so retrying it would
+  // just repeat the same call and could loop.
+  let masterHits = 0;
+  const { app, teardown } = await withProxy((_request, response) => {
+    masterHits += 1;
+    response.statusCode = 500;
+    response.end("boom");
+  });
+
+  const response = await app.inject("/api/v1/watch/marktv-laughs/stream.m3u8");
+
+  expect(response.statusCode).toBe(502);
+  expect(masterHits).toBe(1);
+  await teardown();
+});
+
+test("refuses a segment below the advertised window without touching upstream", async () => {
+  // Forwarding such a request is what damages the session: Tunarr records the
+  // number before checking the file exists, which anchors its advertised window
+  // below the point it has already deleted to.
+  const hits: string[] = [];
+  const { app, teardown } = await withProxy(
+    (request, response) => {
+      hits.push(request.url ?? "");
+      if (request.url === "/stream/channels/window-channel/hls/stream.m3u8") {
+        response.setHeader("content-type", "application/vnd.apple.mpegurl");
+        response.end("#EXTM3U\n#EXTINF:4.0,\ndata000100.ts\n#EXTINF:4.0,\ndata000119.ts\n");
+        return;
+      }
+      response.setHeader("content-type", "video/mp2t");
+      response.end(SEGMENT_BYTES);
+    },
+    { channelId: "window-channel" },
+  );
+
+  const playlist = await app.inject(
+    "/api/v1/watch/marktv-laughs/media/stream/channels/window-channel/hls/stream.m3u8",
+  );
+  expect(playlist.statusCode).toBe(200);
+  hits.length = 0;
+
+  const below = await app.inject(
+    "/api/v1/watch/marktv-laughs/media/stream/channels/window-channel/hls/data000050.ts",
+  );
+  expect(below.statusCode).toBe(404);
+  expect(below.json()).toEqual({ code: "NOT_FOUND" });
+  expect(hits).toEqual([]);
+
+  // A segment inside the window still goes through, so this is a floor and not
+  // a blanket refusal.
+  const inside = await app.inject(
+    "/api/v1/watch/marktv-laughs/media/stream/channels/window-channel/hls/data000110.ts",
+  );
+  expect(inside.statusCode).toBe(200);
+  expect(hits).toEqual([
+    "/stream/channels/window-channel/hls/data000110.ts",
+  ]);
+  await teardown();
+});
+
+test("forwards a low segment when no window has been advertised yet", async () => {
+  const hits: string[] = [];
+  const { app, teardown } = await withProxy(
+    (request, response) => {
+      hits.push(request.url ?? "");
+      response.setHeader("content-type", "video/mp2t");
+      response.end(SEGMENT_BYTES);
+    },
+    { channelId: "nowindow-channel" },
+  );
+
+  const response = await app.inject(
+    "/api/v1/watch/marktv-laughs/media/stream/channels/nowindow-channel/hls/data000050.ts",
+  );
+
+  expect(response.statusCode).toBe(200);
+  expect(hits).toEqual([
+    "/stream/channels/nowindow-channel/hls/data000050.ts",
+  ]);
+  await teardown();
+});
+
+test("fails open once the advertised window is stale", async () => {
+  // A restarted channel renumbers from zero, so a remembered floor must not
+  // outlive its usefulness.
+  const previous = watchProxyLimits.windowGuardTtlMs;
+  watchProxyLimits.windowGuardTtlMs = 0;
+  const hits: string[] = [];
+  const { app, teardown } = await withProxy(
+    (request, response) => {
+      hits.push(request.url ?? "");
+      if (request.url === "/stream/channels/stale-channel/hls/stream.m3u8") {
+        response.setHeader("content-type", "application/vnd.apple.mpegurl");
+        response.end("#EXTM3U\n#EXTINF:4.0,\ndata000100.ts\n");
+        return;
+      }
+      response.setHeader("content-type", "video/mp2t");
+      response.end(SEGMENT_BYTES);
+    },
+    { channelId: "stale-channel" },
+  );
+
+  await app.inject(
+    "/api/v1/watch/marktv-laughs/media/stream/channels/stale-channel/hls/stream.m3u8",
+  );
+  hits.length = 0;
+  // A zero TTL only expires once a millisecond has actually elapsed, so without
+  // this the proxy can still see a fresh window and refuse the request.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const response = await app.inject(
+    "/api/v1/watch/marktv-laughs/media/stream/channels/stale-channel/hls/data000050.ts",
+  );
+
+  expect(response.statusCode).toBe(200);
+  expect(hits).toEqual([
+    "/stream/channels/stale-channel/hls/data000050.ts",
+  ]);
+  watchProxyLimits.windowGuardTtlMs = previous;
+  await teardown();
+});
+
+test("does not mistake a channel uuid's digits for a segment number", async () => {
+  // The master playlist's only line embeds the channel uuid, which is full of
+  // digits. Parsing those as a window would refuse good low-numbered segments,
+  // which is why the pattern is anchored to the basename suffix.
+  const hits: string[] = [];
+  const { app, teardown } = await withProxy(
+    (request, response) => {
+      hits.push(request.url ?? "");
+      if (request.url === "/stream/channels/9f8e7d6c5b4a.m3u8") {
+        response.setHeader("content-type", "application/vnd.apple.mpegurl");
+        response.end(
+          "#EXTM3U\n/stream/channels/9f8e7d6c5b4a/hls/stream.m3u8\n",
+        );
+        return;
+      }
+      if (request.url === "/stream/channels/9f8e7d6c5b4a/hls/stream.m3u8") {
+        response.setHeader("content-type", "application/vnd.apple.mpegurl");
+        response.end("#EXTM3U\n#EXTINF:4.0,\ndata000900.ts\n");
+        return;
+      }
+      response.setHeader("content-type", "video/mp2t");
+      response.end(SEGMENT_BYTES);
+    },
+    { channelId: "9f8e7d6c5b4a" },
+  );
+
+  // Proxy the MASTER, whose line is /stream/channels/<uuid>/hls/stream.m3u8.
+  const master = await app.inject("/api/v1/watch/marktv-laughs/stream.m3u8");
+  expect(master.statusCode).toBe(200);
+  hits.length = 0;
+
+  const response = await app.inject(
+    "/api/v1/watch/marktv-laughs/media/stream/channels/9f8e7d6c5b4a/hls/data000001.ts",
+  );
+
+  expect(response.statusCode).toBe(200);
+  expect(hits).toEqual([
+    "/stream/channels/9f8e7d6c5b4a/hls/data000001.ts",
+  ]);
   await teardown();
 });
