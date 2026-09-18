@@ -61,7 +61,19 @@ export interface ScheduleRefreshContext {
   readonly repositories: {
     readonly channels: { list: () => Channel[] };
     readonly schedules: {
-      latest: (channelId: string) => { id: string; date: string } | undefined;
+      /**
+       * Looked up BY DATE, deliberately not by `latest`.
+       *
+       * `latest` is insertion-ordered, and the quiet-hours pass at the bottom of
+       * this file writes TOMORROW's schedule into the same table - which moves
+       * `latest` off today. Asking "is today scheduled?" with `latest` therefore
+       * answers about tomorrow, and the pass rebuilds today: the regeneration and
+       * the pre-generation then flip `latest` back and forth forever, every tick.
+       */
+      latestForDate: (
+        channelId: string,
+        date: string,
+      ) => { id: string; date: string } | undefined;
     };
   };
   readonly schedules: {
@@ -74,11 +86,16 @@ export interface ScheduleRefreshDependencies {
   readonly timers?: ScheduleRefreshTimers;
   readonly now?: () => Date;
   /**
-   * Plan-and-apply the generated schedule to Tunarr. Injected rather than imported
+   * Plan-and-apply one specific schedule to Tunarr. Injected rather than imported
    * so a test can observe the call without a Tunarr instance.
+   *
+   * The schedule's id is a required argument because the sync otherwise resolves
+   * the newest stored schedule, and during the quiet hours that is tomorrow's -
+   * pushing it would air the wrong day's programming today.
    */
   readonly syncToTunarr: (
     channelId: string,
+    scheduleId: string,
     now: () => Date,
   ) => Promise<{ status: string }>;
   /**
@@ -117,15 +134,23 @@ export function startScheduleRefresh(
         if (!today) continue;
         const tomorrow = local.plus({ days: 1 }).toISODate();
 
-        const priorLatest = context.repositories.schedules.latest(channel.id);
-        const alreadyHaveTomorrow = priorLatest?.date === tomorrow;
-        let schedule = priorLatest;
+        // Both questions are asked by date. Asking them of the newest row instead
+        // is what made this loop regenerate work it already had: the pre-generation
+        // below inserts a row dated tomorrow, which is then the newest row, so a
+        // "newest row is not today" test is true on every subsequent pass.
+        let schedule = context.repositories.schedules.latestForDate(
+          channel.id,
+          today,
+        );
+        const alreadyHaveTomorrow = Boolean(
+          tomorrow &&
+            context.repositories.schedules.latestForDate(channel.id, tomorrow),
+        );
 
-        if (schedule?.date !== today) {
+        if (!schedule) {
           logInfo("schedule.refresh", "Generating a schedule for today", {
             channelId: channel.id,
             date: today,
-            previousDate: schedule?.date ?? null,
           });
           const generated = await context.schedules.generate(channel, today);
           if (generated.ok === false) {
@@ -148,12 +173,19 @@ export function startScheduleRefresh(
         // is recorded as synced, instead of assuming that generating was enough.
         // Without that, one failed sync would strand the lineup until the next day.
         const synced = dependencies.lastSync();
-        if (synced?.scheduleId !== schedule?.id || synced.status !== "synced") {
-          const tunarr = await dependencies.syncToTunarr(channel.id, now);
+        if (synced?.scheduleId !== schedule.id || synced.status !== "synced") {
+          // The id is passed rather than letting the sync resolve "the newest
+          // schedule" for itself: in the quiet hours the newest is tomorrow's, and
+          // pushing that would air the wrong day.
+          const tunarr = await dependencies.syncToTunarr(
+            channel.id,
+            schedule.id,
+            now,
+          );
           logInfo("schedule.refresh", "Tunarr sync attempted", {
             channelId: channel.id,
             date: today,
-            scheduleId: schedule?.id,
+            scheduleId: schedule.id,
             tunarr: tunarr.status,
           });
         }

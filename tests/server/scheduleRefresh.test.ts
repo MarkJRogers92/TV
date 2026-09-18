@@ -43,17 +43,30 @@ function setup(
 ) {
   const clock = options.now ?? now;
   const channel = demo().channel;
+  // A store that can hold SEVERAL days at once, like the real table, rather than a
+  // single "latest" value. The redundant-regeneration bug was invisible to a
+  // one-date stub: reproducing it needs tomorrow's schedule to be able to become
+  // the newest row, which is exactly what the following pass then misread.
+  const stored = new Map<string, Schedule>();
+  if (options.storedDate)
+    stored.set(options.storedDate, scheduleStub(options.storedDate));
   const generate = vi.fn<
     (channel: Channel, date: string) => Promise<PersistedGeneration>
   >(
     options.generate ??
-      (async () => ({
-        ok: true,
-        schedule: scheduleStub(TODAY),
-        exportPath: "/tmp/export.json",
-      })),
+      (async (_channel: Channel, date: string) => {
+        const schedule = scheduleStub(date);
+        stored.set(date, schedule);
+        return { ok: true, schedule, exportPath: "/tmp/export.json" };
+      }),
   );
-  const syncToTunarr = vi.fn(async () => ({ status: "synced" }));
+  const syncToTunarr = vi.fn<
+    (
+      channelId: string,
+      scheduleId: string,
+      at: () => Date,
+    ) => Promise<{ status: string }>
+  >(async () => ({ status: "synced" }));
   const timers = {
     setInterval: vi.fn(() => ({ unref: vi.fn() })),
     clearInterval: vi.fn(),
@@ -62,10 +75,9 @@ function setup(
     repositories: {
       channels: { list: () => [channel] },
       schedules: {
-        // Carries an id, because the service compares it against the last synced
-        // schedule to decide whether a sync is still owed.
-        latest: () =>
-          options.storedDate ? scheduleStub(options.storedDate) : undefined,
+        // Asked by date: the pass needs "is TODAY scheduled?", and the newest row
+        // is not always today's.
+        latestForDate: (_channelId: string, date: string) => stored.get(date),
       },
     },
     schedules: { generate },
@@ -225,6 +237,43 @@ test("does not pre-generate outside the quiet hours", async () => {
   await settle();
 
   expect(generate).not.toHaveBeenCalled();
+  refresh.stop();
+});
+
+test("does not rebuild today after pre-generating tomorrow", async () => {
+  // The regression this guards is a loop, not a single bad call.
+  //
+  // The pre-generation below writes tomorrow's schedule, and the schedule store is
+  // read by insertion order. A pass that asks "is today scheduled?" of the NEWEST
+  // row therefore gets tomorrow's date back, concludes today is missing and rebuilds
+  // it - which makes today newest again, so the pass after that rebuilds tomorrow.
+  // On a real install that ran every ten minutes indefinitely and produced ~12
+  // generations in 93 minutes, alternating between two dates.
+  const { refresh, generate } = setup({
+    storedDate: TODAY,
+    lastSync: () => ({ scheduleId: scheduleStub(TODAY).id, status: "synced" }),
+    now: () => new Date("2026-09-17T09:00:00Z"), // 04:00 local, inside the quiet window
+  });
+
+  await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1));
+  await refresh.refreshOnce();
+  await refresh.refreshOnce();
+
+  // Once, for tomorrow. Any entry for today means the loop is back.
+  expect(generate.mock.calls.map((call) => call[1])).toEqual(["2026-09-18"]);
+  refresh.stop();
+});
+
+test("aims the sync at the day it decided about, not the newest schedule", async () => {
+  // The sync resolves its target itself, so the refresh must name the schedule it
+  // means. Left to the newest row, the quiet hours would have it push TOMORROW's
+  // lineup over today's - the exact mistake the pre-generation comment forbids.
+  const { refresh, syncToTunarr } = setup({ storedDate: "2026-09-15" });
+
+  await vi.waitFor(() => expect(syncToTunarr).toHaveBeenCalledTimes(1));
+
+  expect(syncToTunarr.mock.calls[0]?.[0]).toBe("marktv-laughs");
+  expect(syncToTunarr.mock.calls[0]?.[1]).toBe(scheduleStub(TODAY).id);
   refresh.stop();
 });
 

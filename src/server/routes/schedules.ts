@@ -41,6 +41,10 @@ export async function registerScheduleRoutes(
       // still refuses; it can never fail the generation itself.
       const tunarr = await autoSyncTunarr(repositories, {
         channelId: channel.id,
+        // The schedule just generated, named explicitly: resolving "the newest"
+        // would race the quiet-hours pre-generation, which can put tomorrow's
+        // schedule in the table while this request is in flight.
+        scheduleId: result.schedule.id,
         now: context.now,
       });
       return { schedule: result.schedule, exportPath: result.exportPath, tunarr };

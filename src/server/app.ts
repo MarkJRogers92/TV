@@ -278,8 +278,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
       // Not awaited: a refresh that has to generate takes minutes, and serving must
       // not wait on it.
       scheduleRefresh = startScheduleRefresh(context, {
-        syncToTunarr: (channelId, at) =>
-          autoSyncTunarr(repositories, { channelId, now: at }),
+        syncToTunarr: (channelId, scheduleId, at) =>
+          autoSyncTunarr(repositories, { channelId, scheduleId, now: at }),
         lastSync: () => readTunarrMapping(repositories)?.lastSync,
       });
     }

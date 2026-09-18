@@ -190,6 +190,14 @@ export function createRepositories(database: MarkTvDatabase) {
     media,
     pools,
     schedules: {
+      /**
+       * The most recently WRITTEN schedule - insertion order, not broadcast order.
+       *
+       * These are not the same question. The quiet-hours pass writes TOMORROW's
+       * schedule into this table, so immediately afterwards the newest row is not
+       * today's. Anything that means "the schedule for a given day" must ask by
+       * date; `latest` is only right for "whatever was generated most recently".
+       */
       latest: (channelId: string): Schedule | undefined =>
         parseSchedule(
           database
@@ -197,6 +205,34 @@ export function createRepositories(database: MarkTvDatabase) {
               "SELECT json FROM schedule_generations WHERE channel_id = ? ORDER BY generation_id DESC LIMIT 1",
             )
             .get(channelId) as { json: string } | undefined,
+        ),
+      /**
+       * The newest schedule generated for one specific broadcast date.
+       *
+       * This is the question the refresh actually means to ask. Asking it with
+       * `latest` is what made the refresh regenerate a schedule it already had:
+       * pre-generating tomorrow moved `latest` off today, so the next pass read
+       * tomorrow's row, concluded today was missing, and rebuilt it - which moved
+       * `latest` back to today, so the pass after that rebuilt tomorrow again.
+       * Filters on the schedule's own `date` field, since the table stores the
+       * schedule as a document with no date column.
+       */
+      latestForDate: (channelId: string, date: string): Schedule | undefined =>
+        parseSchedule(
+          database
+            .prepare(
+              "SELECT json FROM schedule_generations WHERE channel_id = ? AND json_extract(json, '$.date') = ? ORDER BY generation_id DESC LIMIT 1",
+            )
+            .get(channelId, date) as { json: string } | undefined,
+        ),
+      /** A specific generation, so a sync can be aimed at the schedule it means. */
+      byId: (channelId: string, scheduleId: string): Schedule | undefined =>
+        parseSchedule(
+          database
+            .prepare(
+              "SELECT json FROM schedule_generations WHERE channel_id = ? AND schedule_id = ? ORDER BY generation_id DESC LIMIT 1",
+            )
+            .get(channelId, scheduleId) as { json: string } | undefined,
         ),
       list: (channelId: string): Schedule[] =>
         database

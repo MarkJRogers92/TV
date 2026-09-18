@@ -114,7 +114,7 @@ function reason(error: unknown): string {
 
 export async function autoSyncTunarr(
   repositories: Repositories,
-  options: { channelId: string; now: () => Date },
+  options: { channelId: string; now: () => Date; scheduleId?: string },
 ): Promise<TunarrAutoSyncOutcome> {
   const at = options.now().toISOString();
   const stored = readTunarrMapping(repositories);
@@ -142,12 +142,20 @@ export async function autoSyncTunarr(
       message: `Only ${stored.marktvChannelId} is synced automatically`,
     });
 
-  const schedule = repositories.schedules.latest(stored.marktvChannelId);
+  // A caller that knows which day it means passes the id. The fallback to
+  // `latest` is insertion order, and the quiet-hours pre-generation puts
+  // TOMORROW's schedule newest - so resolving "the newest" here would push a
+  // different day's lineup than the caller asked about, replacing what is on air.
+  const schedule = options.scheduleId
+    ? repositories.schedules.byId(stored.marktvChannelId, options.scheduleId)
+    : repositories.schedules.latest(stored.marktvChannelId);
   if (!schedule)
     return persist(repositories, stored, {
       ...base,
       status: "skipped",
-      message: "There is no schedule to sync",
+      message: options.scheduleId
+        ? `No stored schedule with id ${options.scheduleId}`
+        : "There is no schedule to sync",
     });
 
   const input = mappingInput(stored);
