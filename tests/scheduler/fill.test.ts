@@ -102,3 +102,83 @@ test('preserves the absolute path of an eligible local commercial',()=>{
   expect(result.entries.map((entry) => entry.mediaId)).toEqual(['local-commercial']);
   expect(result.entries[0].path).toBe('/media/spots/acme-15s.mp4');
 });
+
+test('skips an excluded interstitial when an unused one fits instead', () => {
+  const result = fillToBoundary({
+    start: new Date('2026-09-18T12:59:00.000Z'),
+    boundary: new Date('2026-09-18T13:00:00.000Z'),
+    items: [item('used', 'commercial', 60_000), item('unused', 'commercial', 60_000)],
+    cooldownMinutes: 120,
+    seed: 'bag',
+    exclude: new Set(['used']),
+  });
+
+  expect(result.entries.map((entry) => entry.mediaId)).toEqual(['unused']);
+});
+
+test('prefers a repeat over dead air when nothing unused can fill the gap', () => {
+  const result = fillToBoundary({
+    start: new Date('2026-09-18T12:55:00.000Z'),
+    boundary: new Date('2026-09-18T13:00:00.000Z'),
+    items: [item('only', 'commercial', 300_000)],
+    cooldownMinutes: 120,
+    seed: 'bag',
+    exclude: new Set(['only']),
+  });
+
+  expect(result.entries.map((entry) => entry.mediaId)).toEqual(['only']);
+  expect(result.entries.filter((entry) => entry.kind === 'flex')).toHaveLength(0);
+});
+
+test('does not repeat an item across breaks once its cooldown has expired', () => {
+  const items = [
+    item('early', 'commercial', 60_000),
+    item('other', 'commercial', 60_000),
+  ];
+  const morning = fillToBoundary({
+    start: new Date('2026-09-18T09:59:00.000Z'),
+    boundary: new Date('2026-09-18T10:00:00.000Z'),
+    items,
+    cooldownMinutes: 120,
+    seed: 'morning',
+  });
+  const aired = morning.entries.flatMap((entry) =>
+    entry.mediaId ? [entry.mediaId] : [],
+  );
+  expect(aired).toHaveLength(1);
+
+  // Eleven hours later the cooldown no longer covers the morning airing, so only
+  // the exclusion set can stop this break from drawing the same item again.
+  const evening = fillToBoundary({
+    start: new Date('2026-09-18T20:59:00.000Z'),
+    boundary: new Date('2026-09-18T21:00:00.000Z'),
+    items,
+    history: [{ mediaId: aired[0], at: '2026-09-18T10:00:00.000Z' }],
+    cooldownMinutes: 120,
+    seed: 'evening',
+    exclude: new Set(aired),
+  });
+
+  expect(
+    evening.entries.flatMap((entry) => (entry.mediaId ? [entry.mediaId] : [])),
+  ).not.toContain(aired[0]);
+});
+
+test('stays deterministic when an exclusion set is supplied', () => {
+  const input = {
+    start,
+    boundary: new Date('2026-09-18T13:00:00.000Z'),
+    items: [
+      item('commercial-180', 'commercial', 180_000),
+      item('commercial-120', 'commercial', 120_000),
+      item('filler-60', 'filler', 60_000),
+    ],
+    cooldownMinutes: 120,
+    seed: 'bag-deterministic',
+    exclude: new Set(['commercial-180']),
+  };
+
+  expect(fillToBoundary(input).entries.map((entry) => entry.mediaId)).toEqual(
+    fillToBoundary(input).entries.map((entry) => entry.mediaId),
+  );
+});

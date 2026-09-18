@@ -11,6 +11,19 @@ export type FillInput = {
   seed?: string;
   source?: string;
   stationIdsEligible?: boolean;
+  /**
+   * Interstitials already used elsewhere in the same schedule, so a short pool
+   * rotates through itself instead of repeating while unused items exist.
+   *
+   * The cooldown above cannot do this: it is a rolling window measured back from
+   * one break, so it prevents a repeat only while the window still covers the
+   * earlier airing. With a pool far larger than a day's slots, an item picked
+   * early in the morning is long out of cooldown by the evening and can be drawn
+   * again, which is what made a 268-slot day use only ~214 distinct ads. This set
+   * is scoped to one generation and is the thing that makes the pool behave as a
+   * bag rather than as independent draws.
+   */
+  exclude?: ReadonlySet<string>;
 };
 export const FILL_STATE_CAP = 50_000;
 export type FillResult = {
@@ -18,7 +31,24 @@ export type FillResult = {
   stats: { exploredStates: number };
 };
 const fillerKinds = new Set(["commercial", "filler", "bumper"]);
-function eligibleItems(input: FillInput): MediaItem[] {
+/**
+ * The eligible pool in seeded random order.
+ *
+ * The exclusion is applied AFTER the ranks are drawn, so removing items cannot
+ * shift the permutation of the items that remain. That matters for the fallback
+ * in `fillToBoundary`: the relaxed pool is then exactly this pool plus the
+ * excluded items back at their original positions, which is what makes "did
+ * excluding cost us an exact fit?" a fair comparison.
+ */
+// The `exclude` argument is passed explicitly rather than defaulted to
+// `input.exclude`, because a default would also trigger on an explicit
+// `undefined` - which is exactly the value the relaxed fallback passes to mean
+// "no exclusions". Defaulting here silently re-applied the exclusion and turned
+// the fallback into dead air.
+function eligibleItems(
+  input: FillInput,
+  exclude: ReadonlySet<string> | undefined,
+): MediaItem[] {
   const cutoff = input.start.getTime() - (input.cooldownMinutes ?? 0) * 60_000;
   const played = new Set(
     (input.history ?? [])
@@ -39,8 +69,11 @@ function eligibleItems(input: FillInput): MediaItem[] {
     .filter((item) => !played.has(item.id))
     .map((item) => ({ item, rank: random() }))
     .sort((a, b) => a.rank - b.rank || a.item.id.localeCompare(b.item.id))
-    .map(({ item }) => item);
+    .map(({ item }) => item)
+    .filter((item) => !exclude?.has(item.id));
 }
+const totalDurationMs = (items: MediaItem[]) =>
+  items.reduce((total, item) => total + (item.durationMs ?? 0), 0);
 const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
 function bestFit(
   items: MediaItem[],
@@ -107,7 +140,20 @@ function bestFit(
 }
 export function fillToBoundary(input: FillInput): FillResult {
   const gapMs = Math.max(0, input.boundary.getTime() - input.start.getTime());
-  const selected = bestFit(eligibleItems(input), gapMs);
+  let selected = bestFit(eligibleItems(input, input.exclude), gapMs);
+  // Excluding used items can make an exact fit unreachable even though the full
+  // pool has one, and a residual becomes a flex entry - dead air. Variety is
+  // worth paying for, but not that: fall back to the unexcluded pool when it
+  // fills the gap strictly better. Excluding can therefore never leave a break
+  // emptier than it would have been without the exclusion.
+  if (input.exclude?.size && totalDurationMs(selected.items) < gapMs) {
+    const relaxed = bestFit(
+      eligibleItems(input, undefined),
+      gapMs,
+    );
+    if (totalDurationMs(relaxed.items) > totalDurationMs(selected.items))
+      selected = relaxed;
+  }
   const entries: ScheduleEntry[] = [];
   let at = input.start.getTime();
   for (const item of selected.items) {

@@ -271,6 +271,13 @@ export function generateSchedule(
   // The pool that filled the previous episode or movie slot, so the same series
   // is not scheduled twice running when something else could have taken it.
   let previousPoolId: string | undefined;
+  // Interstitials already placed today. Held for the whole day rather than per
+  // break, so the ad pool is consumed like a bag: an item used at 09:00 is not
+  // offered again at 21:00 while unused items remain. The per-break cooldown
+  // cannot reach that far back, which is why a day used to draw only ~214 of
+  // 577 distinct ads. Scoped to one generation, so it never leaks across days -
+  // each day is a fresh shuffle.
+  const usedInterstitials = new Set<string>();
 
   while (at < dayEnd) {
     const daypart = activeDaypart(input.channel, at);
@@ -518,6 +525,7 @@ export function generateSchedule(
         seed: `${seed}:filler:${at.toMillis()}`,
         source: "interstitial",
         stationIdsEligible: boundary.minute === 0,
+        exclude: usedInterstitials,
       }).entries.map((fillerEntry) => ({
         ...fillerEntry,
         localStart: localTime(
@@ -533,8 +541,10 @@ export function generateSchedule(
       }));
       entries.push(...filled);
       for (const fillerEntry of filled) {
-        if (fillerEntry.mediaId)
+        if (fillerEntry.mediaId) {
           history.push({ mediaId: fillerEntry.mediaId, at: fillerEntry.start });
+          usedInterstitials.add(fillerEntry.mediaId);
+        }
       }
       at = boundary;
     }
