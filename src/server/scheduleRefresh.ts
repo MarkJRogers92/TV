@@ -31,6 +31,17 @@ import type { PersistedGeneration } from "./scheduleService.js";
 /** How often to look for a channel with no schedule for today. */
 export const scheduleRefreshLimits = {
   intervalMs: 10 * 60_000,
+  /**
+   * Local hours during which TOMORROW's schedule is built ahead of time.
+   *
+   * Generation is the slow part - ffmpeg runs over every episode - and the sync is
+   * the disruptive part, because replacing the lineup interrupts whoever is
+   * watching. Building tomorrow in advance means the day boundary costs only the
+   * sync, instead of a generation that can take minutes. Chosen to sit well inside
+   * the quietest hours for a channel whose dayparts start in the morning.
+   */
+  quietStartHour: 3,
+  quietEndHour: 5,
 };
 
 type RefreshTimer = { unref?: () => void };
@@ -101,23 +112,26 @@ export function startScheduleRefresh(
     refreshing = true;
     try {
       for (const channel of context.repositories.channels.list()) {
-        const date = DateTime.fromJSDate(now(), {
-          zone: channel.timezone,
-        }).toISODate();
-        if (!date) continue;
+        const local = DateTime.fromJSDate(now(), { zone: channel.timezone });
+        const today = local.toISODate();
+        if (!today) continue;
+        const tomorrow = local.plus({ days: 1 }).toISODate();
 
-        let schedule = context.repositories.schedules.latest(channel.id);
-        if (schedule?.date !== date) {
+        const priorLatest = context.repositories.schedules.latest(channel.id);
+        const alreadyHaveTomorrow = priorLatest?.date === tomorrow;
+        let schedule = priorLatest;
+
+        if (schedule?.date !== today) {
           logInfo("schedule.refresh", "Generating a schedule for today", {
             channelId: channel.id,
-            date,
+            date: today,
             previousDate: schedule?.date ?? null,
           });
-          const generated = await context.schedules.generate(channel, date);
+          const generated = await context.schedules.generate(channel, today);
           if (generated.ok === false) {
             logWarn("schedule.refresh", "Schedule generation was refused", {
               channelId: channel.id,
-              date,
+              date: today,
               issues: generated.issues.map((issue) =>
                 "code" in issue ? issue.code : "unknown",
               ),
@@ -132,20 +146,43 @@ export function startScheduleRefresh(
         // state moved between its two snapshots - which is exactly what an active
         // viewer causes. So this keeps retrying until the sync for THIS schedule
         // is recorded as synced, instead of assuming that generating was enough.
-        // Without that, a single failed sync would strand the lineup until someone
-        // generated the next day's schedule.
+        // Without that, one failed sync would strand the lineup until the next day.
         const synced = dependencies.lastSync();
-        if (synced?.scheduleId === schedule?.id && synced.status === "synced") {
-          continue;
+        if (synced?.scheduleId !== schedule?.id || synced.status !== "synced") {
+          const tunarr = await dependencies.syncToTunarr(channel.id, now);
+          logInfo("schedule.refresh", "Tunarr sync attempted", {
+            channelId: channel.id,
+            date: today,
+            scheduleId: schedule?.id,
+            tunarr: tunarr.status,
+          });
         }
 
-        const tunarr = await dependencies.syncToTunarr(channel.id, now);
-        logInfo("schedule.refresh", "Tunarr sync attempted", {
-          channelId: channel.id,
-          date,
-          scheduleId: schedule?.id,
-          tunarr: tunarr.status,
-        });
+        // Tomorrow, built in the quiet hours but deliberately NOT broadcast. A
+        // schedule covers one specific day, so pushing tomorrow's early would air
+        // the wrong day's programming. Paying the generation cost now is what keeps
+        // the midnight swap down to the sync alone.
+        if (
+          tomorrow &&
+          !alreadyHaveTomorrow &&
+          local.hour >= scheduleRefreshLimits.quietStartHour &&
+          local.hour < scheduleRefreshLimits.quietEndHour
+        ) {
+          logInfo("schedule.refresh", "Pre-generating tomorrow's schedule", {
+            channelId: channel.id,
+            date: tomorrow,
+          });
+          const ahead = await context.schedules.generate(channel, tomorrow);
+          if (ahead.ok === false) {
+            logWarn("schedule.refresh", "Pre-generation was refused", {
+              channelId: channel.id,
+              date: tomorrow,
+              issues: ahead.issues.map((issue) =>
+                "code" in issue ? issue.code : "unknown",
+              ),
+            });
+          }
+        }
       }
     } catch (error) {
       // Never rethrow: this runs on a timer, where a throw has nowhere to go and

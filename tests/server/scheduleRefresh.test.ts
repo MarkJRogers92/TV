@@ -38,8 +38,10 @@ function setup(
     storedDate?: string;
     generate?: (channel: Channel, date: string) => Promise<PersistedGeneration>;
     lastSync?: () => { scheduleId?: string; status?: string } | undefined;
+    now?: () => Date;
   } = {},
 ) {
+  const clock = options.now ?? now;
   const channel = demo().channel;
   const generate = vi.fn<
     (channel: Channel, date: string) => Promise<PersistedGeneration>
@@ -67,14 +69,14 @@ function setup(
       },
     },
     schedules: { generate },
-    now,
+    now: clock,
   };
   const refresh = startScheduleRefresh(context, {
     timers,
     syncToTunarr,
     // Default: nothing has ever been synced, so a sync is always due.
     lastSync: options.lastSync ?? (() => undefined),
-    now,
+    now: clock,
   });
   return { channel, generate, syncToTunarr, timers, refresh };
 }
@@ -193,6 +195,36 @@ test("overlapping passes generate only once", async () => {
   await refresh.refreshOnce();
 
   expect(generate).toHaveBeenCalledTimes(1);
+  refresh.stop();
+});
+
+test("pre-generates tomorrow's schedule in the quiet hours without broadcasting it", async () => {
+  // 09:00Z is 04:00 in America/Chicago, inside the quiet window.
+  const { refresh, generate, syncToTunarr } = setup({
+    storedDate: TODAY,
+    lastSync: () => ({ scheduleId: scheduleStub(TODAY).id, status: "synced" }),
+    now: () => new Date("2026-09-17T09:00:00Z"),
+  });
+
+  await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1));
+
+  expect(generate.mock.calls[0]?.[1]).toBe("2026-09-18");
+  // Not synced: a schedule covers one specific day, so pushing tomorrow's early
+  // would have the channel air the wrong day's programming.
+  expect(syncToTunarr).not.toHaveBeenCalled();
+  refresh.stop();
+});
+
+test("does not pre-generate outside the quiet hours", async () => {
+  // 17:00Z is 12:00 in America/Chicago - the default clock in these tests.
+  const { refresh, generate } = setup({
+    storedDate: TODAY,
+    lastSync: () => ({ scheduleId: scheduleStub(TODAY).id, status: "synced" }),
+  });
+
+  await settle();
+
+  expect(generate).not.toHaveBeenCalled();
   refresh.stop();
 });
 
