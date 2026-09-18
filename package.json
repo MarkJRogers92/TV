@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test:browser": "playwright test",
-    "verify:restart": "node scripts/verify-production-restart.mjs"
+    "verify:restart": "node scripts/verify-production-restart.mjs",
+    "verify:playback": "node scripts/verify-playback.mjs"
   },
   "dependencies": {
     "@fastify/static": "^10.1.3",
