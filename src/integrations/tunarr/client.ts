@@ -25,6 +25,22 @@ import {
   type TunarrTranscodeConfig,
 } from "./types.js";
 
+/**
+ * Deadline for every request made to Tunarr.
+ *
+ * Every upstream call funnels through `TunarrClient.request()`, so this one value
+ * bounds all of them. It exists because a Tunarr that accepts the connection and
+ * then never answers does not fail `fetch` on its own: the calling route would wait
+ * forever, holding its socket and handler. That is unrecoverable in practice,
+ * because the app runs without a logger - there is nothing to notice it by.
+ *
+ * A mutable object rather than a constant so tests can shrink the deadline instead
+ * of waiting it out, matching the `watchProxyLimits` convention.
+ */
+export const tunarrClientLimits = {
+  requestTimeoutMs: 15_000,
+};
+
 export function normalizeLocalPath(path: string): string {
   if (!isAbsolute(path))
     throw tunarrError(
@@ -49,9 +65,24 @@ export class TunarrClient {
   }
 
   private async request(path: string, init?: RequestInit): Promise<Response> {
+    const timeout = AbortSignal.timeout(tunarrClientLimits.requestTimeoutMs);
+    // Combine rather than overwrite: a caller-supplied signal (a client
+    // disconnect, a shutdown) must still be able to abort ahead of the deadline.
+    const signal = init?.signal
+      ? AbortSignal.any([init.signal, timeout])
+      : timeout;
     try {
-      return await this.fetcher(`${this.url}${path}`, init);
-    } catch {
+      return await this.fetcher(`${this.url}${path}`, { ...init, signal });
+    } catch (error) {
+      // A timeout and a refused connection call for different responses, so they
+      // are kept distinct: a timeout usually means a wedged or overloaded Tunarr,
+      // while a refusal means the URL itself is wrong.
+      if (error instanceof Error && error.name === "TimeoutError") {
+        throw tunarrError(
+          "TIMEOUT",
+          `Tunarr did not respond within ${tunarrClientLimits.requestTimeoutMs}ms`,
+        );
+      }
       throw tunarrError("UNREACHABLE", "Tunarr is unavailable");
     }
   }

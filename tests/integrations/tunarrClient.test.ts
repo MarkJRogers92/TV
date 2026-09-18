@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { createServer, type Server } from "node:http";
-import { TunarrClient } from "../../src/integrations/tunarr/client.js";
+import {
+  TunarrClient,
+  tunarrClientLimits,
+} from "../../src/integrations/tunarr/client.js";
 import { buildTunarrSyncPlan } from "../../src/integrations/tunarr/plan.js";
 import type { TunarrLineup } from "../../src/integrations/tunarr/types.js";
 
@@ -173,6 +176,34 @@ describe("TunarrClient local contract", () => {
     await expect(
       new TunarrClient(server.url).detect("7"),
     ).rejects.toMatchObject({ code: "UNSUPPORTED_SCHEMA" });
+  });
+  test("gives up on a Tunarr that accepts the connection and then never answers", async () => {
+    const previous = tunarrClientLimits.requestTimeoutMs;
+    tunarrClientLimits.requestTimeoutMs = 200;
+    // Opens the socket and never writes a response. Without a deadline this
+    // awaits forever, which is the shape of a wedged Tunarr - distinct from an
+    // unreachable one, where the connection is refused immediately.
+    const hanging = createServer(() => {});
+    await new Promise<void>((resolve) =>
+      hanging.listen(0, "127.0.0.1", resolve),
+    );
+    servers.push({
+      close: () =>
+        new Promise((resolve, reject) => {
+          hanging.closeAllConnections();
+          hanging.close((error) => (error ? reject(error) : resolve()));
+        }),
+    });
+    const address = hanging.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+
+    try {
+      await expect(
+        new TunarrClient(`http://127.0.0.1:${port}`).detect("7"),
+      ).rejects.toMatchObject({ code: "TIMEOUT" });
+    } finally {
+      tunarrClientLimits.requestTimeoutMs = previous;
+    }
   });
   test("rejects an HTTP-200 health report containing an official error result", async () => {
     const state: FakeState = {
