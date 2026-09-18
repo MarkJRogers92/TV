@@ -149,10 +149,16 @@ export async function registerTunarrRoutes(
         stored.plan,
         schedule,
       );
+      // Re-read rather than writing back the snapshot taken before the network
+      // work. A dry run that completed while this was in flight may have stored a
+      // newer plan, and spreading the stale copy would silently discard it. Only
+      // the plan actually consumed here is cleared.
+      const current = context.repositories.settings.get(TUNARR_MAPPING_SETTING)
+        ?.value as StoredMapping | undefined;
       context.repositories.settings.put(TUNARR_MAPPING_SETTING, {
-        ...stored,
+        ...(current ?? stored),
         ...result.state,
-        plan: undefined,
+        plan: current?.plan === stored.plan ? undefined : current?.plan,
       });
       if (result.partialFailure) return reply.code(502).send(result);
       return result;
