@@ -7,6 +7,7 @@ import {
 import type { ProviderName } from "../acquisition/providerTypes.js";
 import { openDatabase } from "../db/database.js";
 import { createRepositories } from "../db/repositories.js";
+import { logError } from "./logging.js";
 import { seedDemoIfEmpty } from "../demo/marktvLaughs.js";
 import { RealDebridProvider } from "../integrations/acquisition/realDebrid.js";
 import { TorBoxProvider } from "../integrations/acquisition/torBox.js";
@@ -153,6 +154,27 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({
     logger: false,
     routerOptions: { maxParamLength: 2048 },
+  });
+  // Fastify runs with `logger: false`, so an unexpected failure used to become a
+  // bare 500 with nothing recorded anywhere - the same blind spot the background
+  // loops had. Statuses below 500 keep Fastify's own handling, because its schema
+  // validation and the routes' explicit replies already carry a meaningful status
+  // and body; only genuinely unexpected failures are logged and normalised.
+  app.setErrorHandler((error: unknown, request, reply) => {
+    // Fastify types the handler's error as unknown, so the status has to be read
+    // defensively rather than assumed.
+    const status =
+      typeof error === "object" && error !== null && "statusCode" in error
+        ? Number((error as { statusCode?: unknown }).statusCode) || 500
+        : 500;
+    if (status < 500) return reply.send(error);
+    logError("request.unhandled", error, {
+      method: request.method,
+      url: request.url,
+    });
+    return reply
+      .code(500)
+      .send({ code: "INTERNAL_ERROR", message: "Unexpected server error" });
   });
   // This is registered before every route: binding to loopback is necessary,
   // but Host/Origin checks also prevent DNS rebinding and hostile browser tabs
