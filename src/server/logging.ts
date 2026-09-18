@@ -25,7 +25,7 @@ export const logSink = {
 };
 
 function writeRecord(
-  level: "error" | "warn",
+  level: "error" | "warn" | "info",
   scope: string,
   message: string,
   context: Record<string, unknown>,
@@ -70,4 +70,17 @@ export function logWarn(
   context: Record<string, unknown> = {},
 ) {
   writeRecord("warn", scope, message, context);
+}
+
+/**
+ * For things that worked and are worth being able to reconstruct later - a
+ * schedule generating itself being the motivating case, since the whole point is
+ * that nobody triggered it and so nobody would otherwise know when it happened.
+ */
+export function logInfo(
+  scope: string,
+  message: string,
+  context: Record<string, unknown> = {},
+) {
+  writeRecord("info", scope, message, context);
 }
