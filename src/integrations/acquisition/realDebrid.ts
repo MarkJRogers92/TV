@@ -3,6 +3,7 @@ import type { RemoteFile, RemoteItem } from "../../acquisition/providerTypes.js"
 import {
   type AcquisitionProvider,
   type ProviderAccount,
+  ProviderError,
   boundedProviderFetch,
   permanentError,
   readProviderJson,
@@ -62,7 +63,13 @@ export class RealDebridProvider implements AcquisitionProvider {
   async listCompletedItems(token: string, signal?: AbortSignal): Promise<readonly RemoteItem[]> {
     const results: RemoteItem[] = [];
     const pageSize = 100;
-    for (let page = 1; ; page += 1) {
+    // A stop, not a target. Real-Debrid has never returned anything close to this
+    // many pages, but a provider stuck returning full ones would otherwise loop
+    // forever: the poll cycle that owns this call would never resolve, `results`
+    // would grow without bound, and because concurrent callers coalesce onto that
+    // one in-flight cycle, polling would stop for good.
+    const maxPages = 50;
+    for (let page = 1; page <= maxPages; page += 1) {
       const response = await this.request(`/torrents?page=${page}&limit=${pageSize}`, token, {}, signal);
       if (!response.ok) throw responseError(response);
       const parsed = torrentListSchema.safeParse(await readProviderJson(response, signal));
@@ -74,6 +81,15 @@ export class RealDebridProvider implements AcquisitionProvider {
       }
       if (parsed.data.length < pageSize) return results;
     }
+    // Thrown rather than returning the partial list: a truncated listing is
+    // indistinguishable from "those downloads no longer exist", which is a much
+    // worse outcome than a provider failure the coordinator already knows how to
+    // isolate and retry.
+    throw new ProviderError(
+      "UNAVAILABLE",
+      `Real-Debrid returned ${maxPages} full pages of completed items`,
+      true,
+    );
   }
 
   private async completedItem(token: string, itemId: string, signal?: AbortSignal): Promise<RemoteItem | null> {

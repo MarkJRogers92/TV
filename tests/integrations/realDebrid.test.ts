@@ -26,6 +26,29 @@ describe("RealDebridProvider", () => {
     expect(fetcher.mock.calls.map((call) => call[0])).toContain("https://rd.test/torrents?page=2&limit=100");
   });
 
+  it("stops paginating instead of looping forever on endless full pages", async () => {
+    // A provider stuck returning full pages used to spin here indefinitely, which
+    // never resolves the poll cycle that owns the call - and because concurrent
+    // callers coalesce onto that one cycle, polling would stop for good.
+    const fullPage = Array.from({ length: 100 }, (_, index) => ({
+      id: String(index),
+      filename: `torrent-${index}`,
+      status: "downloading",
+    }));
+    // A fresh Response per call: a body can only be read once, so reusing one
+    // object would fail on the second page for the wrong reason.
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => json(fullPage));
+    const provider = new RealDebridProvider("https://rd.test", fetcher);
+
+    await expect(provider.listCompletedItems("secret")).rejects.toMatchObject({
+      code: "UNAVAILABLE",
+      retryable: true,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(50);
+  });
+
   it("uses official auth, follows pagination, and aligns selected files to links", async () => {
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(json({ username: "mark" }))
