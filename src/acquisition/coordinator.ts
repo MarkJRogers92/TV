@@ -66,6 +66,15 @@ const jobItemType: RemoteItemType = "torrent";
 export const defaultMaxAttempts = 3;
 /** Default provider poll interval. */
 export const defaultPollIntervalMs = 60_000;
+
+/**
+ * How often a running transfer may persist its progress.
+ *
+ * Progress is a display value, so persisting it a few times a second is plenty,
+ * and each write is synchronous SQLite on a single serialized queue shared with
+ * polls and commands.
+ */
+const progressPersistIntervalMs = 500;
 /** Ceiling for the bounded exponential backoff used when a failure has no typed retry hint. */
 export const maximumBackoffMs = 30_000;
 
@@ -1066,12 +1075,23 @@ export class AcquisitionCoordinator {
     const transfer = await this.enqueue(() => this.isActive(epoch) ? this.beginDownload(job.id, partPath) : null);
     if (!transfer) return;
     const controller = transfer.controller;
+    // Throttled, because the downloader awaits onProgress after every chunk it
+    // reads and each call enqueues a synchronous SQLite save. Unthrottled, a fast
+    // transfer gates its own throughput on database latency and backs the shared
+    // queue up behind progress writes, delaying polls and commands behind it. A
+    // slightly stale interim figure is harmless: the completion path persists the
+    // terminal state regardless.
+    let lastProgressAt = 0;
     const hooks: DownloadHooks = {
       inbox: this.paths.inbox,
       inboxIdentity: this.paths.inboxIdentity,
       hasFreeBytes: (neededBytes) => this.hasFreeBytes(neededBytes),
-      onProgress: (receivedBytes, expectedBytes) =>
-        this.enqueue(() => { if (this.isActive(epoch)) this.persistProgress(job.id, receivedBytes, expectedBytes); }),
+      onProgress: async (receivedBytes, expectedBytes) => {
+        const now = Date.now();
+        if (now - lastProgressAt < progressPersistIntervalMs) return;
+        lastProgressAt = now;
+        await this.enqueue(() => { if (this.isActive(epoch)) this.persistProgress(job.id, receivedBytes, expectedBytes); });
+      },
     };
     try {
       const downloaded = await this.download(
