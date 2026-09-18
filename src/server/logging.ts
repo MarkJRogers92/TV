@@ -10,11 +10,11 @@
  * nothing to notice it by.
  *
  * This is deliberately minimal: one structured line per event on stderr, no new
- * dependency, and no logging framework. It exists to make background failures
+ * dependency, and no logging framework. It exists to make background conditions
  * observable, not to become a general-purpose logger.
  */
 
-export const errorLog = {
+export const logSink = {
   /**
    * Mutable so tests can capture output rather than write to stderr, matching the
    * `watchProxyLimits` / `tunarrClientLimits` convention used elsewhere.
@@ -24,25 +24,50 @@ export const errorLog = {
   },
 };
 
-export function logError(
+function writeRecord(
+  level: "error" | "warn",
   scope: string,
-  error: unknown,
-  context: Record<string, unknown> = {},
+  message: string,
+  context: Record<string, unknown>,
 ) {
-  const message =
-    error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   const record = {
     at: new Date().toISOString(),
-    level: "error" as const,
+    level,
     scope,
     message,
     ...context,
   };
   try {
-    errorLog.sink(JSON.stringify(record));
+    logSink.sink(JSON.stringify(record));
   } catch {
     // Swallowed on purpose. This runs inside catch blocks that are reporting an
     // error, so throwing here would replace the real failure with a logging
     // failure - in the one place where that is least recoverable.
   }
+}
+
+export function logError(
+  scope: string,
+  error: unknown,
+  context: Record<string, unknown> = {},
+) {
+  writeRecord(
+    "error",
+    scope,
+    error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    context,
+  );
+}
+
+/**
+ * For conditions that are not failures yet but become them if ignored - low disk
+ * space being the motivating case. Separate from `logError` so a reader can tell
+ * "this is broken" apart from "this is heading somewhere bad".
+ */
+export function logWarn(
+  scope: string,
+  message: string,
+  context: Record<string, unknown> = {},
+) {
+  writeRecord("warn", scope, message, context);
 }

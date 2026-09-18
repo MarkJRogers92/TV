@@ -13,7 +13,7 @@ import { ENROLLMENT_CHANNEL_ID } from "../../src/media/seriesEnrollment.js";
 import type { AcquisitionProvider } from "../../src/integrations/acquisition/provider.js";
 import type { AcquisitionJob, AcquisitionReview, CompletedImport } from "../../src/acquisition/models.js";
 import type { RemoteItem } from "../../src/acquisition/providerTypes.js";
-import { errorLog } from "../../src/server/logging.js";
+import { logSink } from "../../src/server/logging.js";
 
 const dirs: string[] = [];
 afterEach(async () => Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))));
@@ -725,15 +725,70 @@ test("reports a poll that fails instead of discarding the error", async () => {
     .spyOn(coordinator, "pollOnce")
     .mockRejectedValue(new Error("poll exploded"));
   const lines: string[] = [];
-  const previous = errorLog.sink;
-  errorLog.sink = (line) => lines.push(line);
+  const previous = logSink.sink;
+  logSink.sink = (line) => lines.push(line);
   try {
     callback!();
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(lines.join("\n")).toContain("acquisition.poll");
     expect(lines.join("\n")).toContain("poll exploded");
   } finally {
-    errorLog.sink = previous;
+    logSink.sink = previous;
+    poll.mockRestore();
+    await coordinator.stop();
+    repositories.close();
+  }
+});
+
+test("warns once when free space drops below the threshold, and again on recovery", async () => {
+  const { repositories } = await setup();
+  let callback: (() => void) | undefined;
+  let available = 10 * 1024 ** 3;
+  const timers = {
+    setInterval: vi.fn((fn: () => void) => {
+      callback = fn;
+      return { unref: vi.fn() };
+    }),
+    clearInterval: vi.fn(),
+  };
+  const coordinator = new AcquisitionCoordinator({
+    repositories,
+    paths: await initializeManagedPaths((dirs[dirs.length - 1])!),
+    credentials: { get: async () => null, set: async () => {}, remove: async () => {} },
+    providers: {
+      "real-debrid": provider("real-debrid", async () => []),
+      torbox: provider("torbox", async () => []),
+    },
+    availableBytes: async () => available,
+    timers,
+  });
+  // The tick is being used for its disk check here, so the poll itself is stubbed.
+  const poll = vi.spyOn(coordinator, "pollOnce").mockResolvedValue(undefined as never);
+  const lines: string[] = [];
+  const previous = logSink.sink;
+  logSink.sink = (line) => lines.push(line);
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+  const tick = async () => {
+    callback!();
+    await settle();
+    await settle();
+  };
+  try {
+    await coordinator.start();
+    await tick();
+    expect(lines.join("\n")).not.toContain("storage.low");
+
+    available = 1024 ** 3;
+    await tick();
+    await tick();
+    // Once per crossing: a warning that repeats every tick is one nobody reads.
+    expect(lines.filter((line) => line.includes("storage.low"))).toHaveLength(1);
+
+    available = 10 * 1024 ** 3;
+    await tick();
+    expect(lines.join("\n")).toContain("storage.recovered");
+  } finally {
+    logSink.sink = previous;
     poll.mockRestore();
     await coordinator.stop();
     repositories.close();

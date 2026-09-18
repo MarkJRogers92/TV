@@ -4,7 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
 import { validationError } from '../../src/server/errors.js';
-import { errorLog } from '../../src/server/logging.js';
+import { logSink } from '../../src/server/logging.js';
 
 function capturingReply() {
   const sent: { status?: number; body?: unknown } = {};
@@ -33,14 +33,14 @@ test('answers an unexpected failure with a logged 500 instead of a 422', () => {
   // Every non-Zod throw used to be reported as `422 VALIDATION_ERROR` with an
   // empty issue list: a status that asserted a validation problem while hiding
   // what actually went wrong.
-  const lines: string[] = []; const previous = errorLog.sink; errorLog.sink = (line) => lines.push(line);
+  const lines: string[] = []; const previous = logSink.sink; logSink.sink = (line) => lines.push(line);
   try {
     const { reply, sent } = capturingReply();
     validationError(reply, new Error('the database connection is not open'));
     expect(sent.status).toBe(500);
     expect(sent.body).toMatchObject({ code: 'INTERNAL_ERROR' });
     expect(lines.join('\n')).toContain('request.validation');
-  } finally { errorLog.sink = previous; }
+  } finally { logSink.sink = previous; }
 });
 
 test('still answers a genuine validation failure with 422 and its issues', () => {

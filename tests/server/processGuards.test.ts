@@ -1,11 +1,11 @@
 import { EventEmitter } from "node:events";
 import { afterEach, expect, test, vi } from "vitest";
-import { errorLog } from "../../src/server/logging.js";
+import { logSink } from "../../src/server/logging.js";
 import { installProcessGuards } from "../../src/server/processGuards.js";
 
-const previous = errorLog.sink;
+const previous = logSink.sink;
 afterEach(() => {
-  errorLog.sink = previous;
+  logSink.sink = previous;
 });
 
 /** A stand-in for `process`, so the guards can be exercised without exiting. */
@@ -21,7 +21,7 @@ function fakeProcess() {
 
 test("records an unhandled rejection and keeps running", () => {
   const lines: string[] = [];
-  errorLog.sink = (line) => lines.push(line);
+  logSink.sink = (line) => lines.push(line);
   const fake = fakeProcess();
   installProcessGuards(fake.target);
 
@@ -36,7 +36,7 @@ test("records an unhandled rejection and keeps running", () => {
 
 test("records an uncaught exception and exits non-zero", () => {
   const lines: string[] = [];
-  errorLog.sink = (line) => lines.push(line);
+  logSink.sink = (line) => lines.push(line);
   const fake = fakeProcess();
   installProcessGuards(fake.target);
 

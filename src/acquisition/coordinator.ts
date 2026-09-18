@@ -14,7 +14,7 @@ import {
   recordEnrollmentFailure,
 } from "../media/seriesEnrollment.js";
 import type { CredentialStore } from "../security/credentialStore.js";
-import { logError } from "../server/logging.js";
+import { logError, logWarn } from "../server/logging.js";
 import {
   downloadJob,
   DownloadError,
@@ -117,6 +117,8 @@ export interface AcquisitionCoordinatorDependencies {
   readonly scanLibrary?: (root: string) => Promise<{ items: MediaItem[] }>;
   readonly probe?: (path: string) => Promise<ProbeResult>;
   readonly hasFreeBytes?: (neededBytes: number) => Promise<boolean>;
+  /** Injectable so the low-space warning can be exercised without a real volume. */
+  readonly availableBytes?: (path: string) => Promise<number>;
   readonly partialBytes?: (partPath: string) => Promise<number | null>;
   readonly now?: () => Date;
   readonly randomId?: () => string;
@@ -279,10 +281,24 @@ const defaultPartialBytes = async (partPath: string): Promise<number | null> => 
   }
 };
 
-const defaultHasFreeBytes = async (path: string, neededBytes: number): Promise<boolean> => {
+const availableBytes = async (path: string): Promise<number> => {
   const stats = await statfs(path);
-  return Number(stats.bavail) * Number(stats.bsize) >= neededBytes;
+  return Number(stats.bavail) * Number(stats.bsize);
 };
+
+const defaultHasFreeBytes = async (path: string, neededBytes: number): Promise<boolean> =>
+  (await availableBytes(path)) >= neededBytes;
+
+/**
+ * Warns once when free space first drops below this, and once more only after it
+ * recovers above it.
+ *
+ * A full volume does not fail cleanly: downloads refuse, and the media server's
+ * transcodes start exiting with opaque codes, so the symptom appears well away
+ * from the cause. Warning on the crossing rather than on every poll keeps the
+ * signal readable - a warning that repeats every 60s is one nobody reads.
+ */
+const lowDiskSpaceWarnBytes = 5 * 1024 ** 3;
 
 function isTerminal(state: string): boolean {
   return terminalStates.has(state);
@@ -342,11 +358,14 @@ export class AcquisitionCoordinator {
   private readonly scanLibrary: (root: string) => Promise<{ items: MediaItem[] }>;
   private readonly probe: ((path: string) => Promise<ProbeResult>) | undefined;
   private readonly hasFreeBytes: (neededBytes: number) => Promise<boolean>;
+  private readonly availableBytes: (path: string) => Promise<number>;
   private readonly partialBytes: (partPath: string) => Promise<number | null>;
   private readonly now: () => Date;
   private readonly randomId: () => string;
   private readonly timers: CoordinatorTimers;
   private readonly intervalMs: number;
+  /** Latches the low-space warning so it fires on the crossing, not every tick. */
+  private lowDiskWarned = false;
 
   private queue: Promise<void> = Promise.resolve();
   private timer: CoordinatorTimer | null = null;
@@ -376,6 +395,7 @@ export class AcquisitionCoordinator {
     this.scanLibrary = dependencies.scanLibrary ?? defaultScanLibrary;
     this.probe = dependencies.probe;
     this.hasFreeBytes = dependencies.hasFreeBytes ?? ((neededBytes) => defaultHasFreeBytes(this.paths.inbox, neededBytes));
+    this.availableBytes = dependencies.availableBytes ?? availableBytes;
     this.partialBytes = dependencies.partialBytes ?? defaultPartialBytes;
     this.now = dependencies.now ?? (() => new Date());
     this.randomId = dependencies.randomId ?? (() => randomUUID());
@@ -394,9 +414,9 @@ export class AcquisitionCoordinator {
       // Reported rather than discarded. A poll that fails every tick is
       // indistinguishable from a healthy one until downloads stop appearing, and
       // on an unattended service nobody is watching for that.
-      void this.pollOnce().catch((error) =>
-        logError("acquisition.poll", error),
-      );
+      void this.pollOnce()
+        .then(() => this.reportLowDiskSpace())
+        .catch((error) => logError("acquisition.poll", error));
     }, this.intervalMs);
     timer.unref?.();
     this.timer = timer;
@@ -598,6 +618,33 @@ export class AcquisitionCoordinator {
     void this.processJobs().catch((error) =>
       logError("acquisition.jobs", error),
     );
+  }
+
+  /**
+   * Reports a filling volume, once per crossing.
+   *
+   * Deliberately passive: it warns rather than refuses, because the per-download
+   * `hasFreeBytes` check is what actually protects a transfer. The value is in
+   * naming the condition before it shows up as unrelated-looking failures.
+   */
+  private async reportLowDiskSpace(): Promise<void> {
+    const available = await this.availableBytes(this.paths.inbox);
+    if (available >= lowDiskSpaceWarnBytes) {
+      if (this.lowDiskWarned) {
+        this.lowDiskWarned = false;
+        logWarn("storage.recovered", "Free disk space is back above the threshold", {
+          availableBytes: available,
+        });
+      }
+      return;
+    }
+    if (this.lowDiskWarned) return;
+    this.lowDiskWarned = true;
+    logWarn("storage.low", "Free disk space is low", {
+      availableBytes: available,
+      thresholdBytes: lowDiskSpaceWarnBytes,
+      path: this.paths.inbox,
+    });
   }
 
   private clearTimer(): void {
