@@ -76,6 +76,61 @@ test('allows an item played exactly at the cooldown boundary', () => {
   expect(result.entries[0]).toMatchObject({mediaId:'equal-cooldown'});
 });
 
+test('allows a recent commercial to repeat when it is the only exact fill', () => {
+  const result = fillToBoundary({
+    start: new Date('2026-09-18T12:59:00.000Z'),
+    boundary: new Date('2026-09-18T13:00:00.000Z'),
+    items: [item('only-commercial', 'commercial', 60_000)],
+    history: [{ mediaId: 'only-commercial', at: '2026-09-18T12:58:00.000Z' }],
+    cooldownMinutes: 120,
+    seed: 'recent-repeat',
+  });
+
+  expect(result.entries.map((entry) => entry.mediaId)).toEqual(['only-commercial']);
+  expect(result.entries.some((entry) => entry.kind === 'flex')).toBe(false);
+});
+
+test('prefers a recent exact fill over a fresh partial fill', () => {
+  const result = fillToBoundary({
+    start: new Date('2026-09-18T12:59:00.000Z'),
+    boundary: new Date('2026-09-18T13:00:00.000Z'),
+    items: [
+      item('recent-exact', 'commercial', 60_000),
+      item('fresh-partial', 'commercial', 45_000),
+    ],
+    history: [{ mediaId: 'recent-exact', at: '2026-09-18T12:58:00.000Z' }],
+    cooldownMinutes: 120,
+    seed: 'exact-over-diversity',
+  });
+
+  expect(result.entries.map((entry) => entry.mediaId)).toEqual(['recent-exact']);
+  expect(result.entries.some((entry) => entry.kind === 'flex')).toBe(false);
+});
+
+test('does not place the same commercial ID twice in one break', () => {
+  const duplicated = item('duplicated-commercial', 'commercial', 60_000);
+  const result = fillToBoundary({
+    start: new Date('2026-09-18T12:58:00.000Z'),
+    boundary: new Date('2026-09-18T13:00:00.000Z'),
+    items: [
+      duplicated,
+      { ...duplicated, title: 'duplicated-commercial-copy' },
+      item('other-commercial', 'commercial', 60_000),
+    ],
+    cooldownMinutes: 0,
+    seed: 'duplicate',
+  });
+
+  const ids = result.entries.flatMap((entry) =>
+    entry.mediaId ? [entry.mediaId] : [],
+  );
+  expect(ids).toHaveLength(2);
+  expect(new Set(ids).size).toBe(2);
+  expect(result.entries.reduce((total, entry) => total + entry.durationMs, 0)).toBe(
+    120_000,
+  );
+});
+
 test('fits a 60-minute gap with 300 items within a practical bound',()=>{
   const began=performance.now();
   const result=fillToBoundary({start:new Date('2026-09-18T12:00:00.000Z'),boundary:new Date('2026-09-18T13:00:00.000Z'),items:Array.from({length:300},(_,index)=>item(`large-${index}`,'commercial',(index%59+1)*60_000)),cooldownMinutes:120,seed:'large-pool'});
@@ -162,6 +217,36 @@ test('does not repeat an item across breaks once its cooldown has expired', () =
   expect(
     evening.entries.flatMap((entry) => (entry.mediaId ? [entry.mediaId] : [])),
   ).not.toContain(aired[0]);
+});
+
+test('varies commercials across several breaks while unused spots remain', () => {
+  const items = [
+    item('rotation-a', 'commercial', 60_000),
+    item('rotation-b', 'commercial', 60_000),
+    item('rotation-c', 'commercial', 60_000),
+    item('rotation-d', 'commercial', 60_000),
+  ];
+  const used = new Set<string>();
+  const ids: string[] = [];
+
+  for (const hour of [10, 11, 12]) {
+    const result = fillToBoundary({
+      start: new Date(`2026-09-18T${hour}:59:00.000Z`),
+      boundary: new Date(`2026-09-18T${String(hour + 1).padStart(2, '0')}:00:00.000Z`),
+      items,
+      cooldownMinutes: 0,
+      seed: `rotation-${hour}`,
+      exclude: used,
+    });
+    const aired = result.entries.flatMap((entry) =>
+      entry.mediaId ? [entry.mediaId] : [],
+    );
+    expect(aired).toHaveLength(1);
+    ids.push(aired[0]);
+    used.add(aired[0]);
+  }
+
+  expect(new Set(ids).size).toBe(3);
 });
 
 test('stays deterministic when an exclusion set is supplied', () => {

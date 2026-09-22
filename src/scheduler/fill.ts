@@ -22,6 +22,10 @@ export type FillInput = {
    * again, which is what made a 268-slot day use only ~214 distinct ads. This set
    * is scoped to one generation and is the thing that makes the pool behave as a
    * bag rather than as independent draws.
+   *
+   * Like recent history, this is a preference rather than a hard filter: the
+   * excluded items come back as the last fallback so an exact fill is never lost
+   * to variety.
    */
   exclude?: ReadonlySet<string>;
 };
@@ -32,32 +36,19 @@ export type FillResult = {
 };
 const fillerKinds = new Set(["commercial", "filler", "bumper"]);
 /**
- * The eligible pool in seeded random order.
+ * Every eligible item in seeded random order.
  *
- * The exclusion is applied AFTER the ranks are drawn, so removing items cannot
- * shift the permutation of the items that remain. That matters for the fallback
- * in `fillToBoundary`: the relaxed pool is then exactly this pool plus the
- * excluded items back at their original positions, which is what makes "did
- * excluding cost us an exact fit?" a fair comparison.
+ * The ranks are drawn BEFORE any recent/excluded filtering, so removing items
+ * cannot shift the permutation of the items that remain. That matters for the
+ * fallbacks in `fillToBoundary`: each relaxed pool is then exactly this pool
+ * with some items handed back at their original positions, which is what makes
+ * "did the preference cost us an exact fit?" a fair comparison.
  */
-// The `exclude` argument is passed explicitly rather than defaulted to
-// `input.exclude`, because a default would also trigger on an explicit
-// `undefined` - which is exactly the value the relaxed fallback passes to mean
-// "no exclusions". Defaulting here silently re-applied the exclusion and turned
-// the fallback into dead air.
-function eligibleItems(
-  input: FillInput,
-  exclude: ReadonlySet<string> | undefined,
-): MediaItem[] {
-  const cutoff = input.start.getTime() - (input.cooldownMinutes ?? 0) * 60_000;
-  const played = new Set(
-    (input.history ?? [])
-      .filter((entry) => Date.parse(entry.at) > cutoff)
-      .map((entry) => entry.mediaId),
-  );
+function rankedEligibleItems(input: FillInput): MediaItem[] {
   const stationIdsEligible =
     input.stationIdsEligible ?? input.boundary.getUTCMinutes() === 0;
   const random = createSeededRandom(input.seed ?? "filler");
+  const seen = new Set<string>();
   return input.items
     .filter(
       (item) =>
@@ -66,11 +57,28 @@ function eligibleItems(
         (fillerKinds.has(item.kind) ||
           (stationIdsEligible && item.kind === "station-id")),
     )
-    .filter((item) => !played.has(item.id))
+    .filter((item) => {
+      if (seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    })
     .map((item) => ({ item, rank: random() }))
     .sort((a, b) => a.rank - b.rank || a.item.id.localeCompare(b.item.id))
-    .map(({ item }) => item)
-    .filter((item) => !exclude?.has(item.id));
+    .map(({ item }) => item);
+}
+/**
+ * Media IDs still inside their cooldown window at the start of this break.
+ *
+ * These are a fallback rather than a hard filter: a break that can only be
+ * filled by repeating a spot should repeat it instead of leaving dead air.
+ */
+function recentIds(input: FillInput): ReadonlySet<string> {
+  const cutoff = input.start.getTime() - (input.cooldownMinutes ?? 0) * 60_000;
+  return new Set(
+    (input.history ?? [])
+      .filter((entry) => Date.parse(entry.at) > cutoff)
+      .map((entry) => entry.mediaId),
+  );
 }
 const totalDurationMs = (items: MediaItem[]) =>
   items.reduce((total, item) => total + (item.durationMs ?? 0), 0);
@@ -140,17 +148,27 @@ function bestFit(
 }
 export function fillToBoundary(input: FillInput): FillResult {
   const gapMs = Math.max(0, input.boundary.getTime() - input.start.getTime());
-  let selected = bestFit(eligibleItems(input, input.exclude), gapMs);
-  // Excluding used items can make an exact fit unreachable even though the full
-  // pool has one, and a residual becomes a flex entry - dead air. Variety is
-  // worth paying for, but not that: fall back to the unexcluded pool when it
-  // fills the gap strictly better. Excluding can therefore never leave a break
-  // emptier than it would have been without the exclusion.
-  if (input.exclude?.size && totalDurationMs(selected.items) < gapMs) {
-    const relaxed = bestFit(
-      eligibleItems(input, undefined),
-      gapMs,
-    );
+  const ranked = rankedEligibleItems(input);
+  const recent = recentIds(input);
+  const exclude = input.exclude;
+  // Preference order: unused items first, then recent repeats, then items
+  // already used elsewhere in this schedule. Each pool is the previous one with
+  // more items handed back at their seeded positions, so a relaxed pool still
+  // rotates through everything it can.
+  const pools = [
+    ranked.filter((item) => !recent.has(item.id) && !exclude?.has(item.id)),
+  ];
+  const unexcluded = ranked.filter((item) => !exclude?.has(item.id));
+  if (unexcluded.length > pools[0].length) pools.push(unexcluded);
+  if (ranked.length > unexcluded.length) pools.push(ranked);
+  let selected = bestFit(pools[0], gapMs);
+  // A repeat is only worth its lost variety when it fills the break strictly
+  // better - a residual becomes a flex entry, dead air. Ties keep the earlier,
+  // more varied pool, so relaxing can never leave a break emptier than the
+  // preference would have.
+  for (const pool of pools.slice(1)) {
+    if (totalDurationMs(selected.items) >= gapMs) break;
+    const relaxed = bestFit(pool, gapMs);
     if (totalDurationMs(relaxed.items) > totalDurationMs(selected.items))
       selected = relaxed;
   }
