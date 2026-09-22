@@ -1,10 +1,11 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { demo } from "../../src/demo/marktvLaughs.js";
-import type { Channel, Schedule } from "../../src/domain/models.js";
+import type { Channel, MediaItem, Schedule } from "../../src/domain/models.js";
 import { logSink } from "../../src/server/logging.js";
 import type { PersistedGeneration } from "../../src/server/scheduleService.js";
 import {
   scheduleRefreshLimits,
+  scheduleHasStaleMedia,
   startScheduleRefresh,
   type ScheduleRefreshContext,
 } from "../../src/server/scheduleRefresh.js";
@@ -18,7 +19,10 @@ afterEach(() => {
 const now = () => new Date("2026-09-17T17:00:00Z");
 const TODAY = "2026-09-17";
 
-function scheduleStub(date: string): Schedule {
+function scheduleStub(
+  date: string,
+  entries: Schedule["entries"] = [],
+): Schedule {
   return {
     id: `marktv-laughs-${date}`,
     channelId: "marktv-laughs",
@@ -28,14 +32,59 @@ function scheduleStub(date: string): Schedule {
     revision: "episode-midrolls-1",
     generatedAt: "2026-09-17T05:00:00.000Z",
     durationMs: 86_400_000,
-    entries: [],
+    entries,
     diagnostics: [],
+  };
+}
+
+const catalogItem = (id: string, path: string): MediaItem => ({
+  id,
+  source: "local-folder",
+  path,
+  kind: "episode",
+  title: id,
+  durationMs: 1_380_000,
+  durationStatus: "ok",
+  available: true,
+  tags: [],
+});
+
+/** One scheduled program referencing a media path the catalog may have moved. */
+function scheduledMedia(id: string, mediaId: string, path: string) {
+  return {
+    id,
+    start: "2026-09-17T10:00:00.000Z",
+    end: "2026-09-17T10:30:00.000Z",
+    localStart: "05:00",
+    localEnd: "05:30",
+    durationMs: 1_800_000,
+    kind: "episode" as const,
+    title: mediaId,
+    mediaId,
+    path,
+  };
+}
+
+/**
+ * A stored schedule whose media has since been renamed: the id is stable so a
+ * test can tell the replacement apart from what it replaced.
+ */
+function staleSchedule(
+  date: string,
+  path = "/media/old/renamed.mkv",
+): Schedule {
+  return {
+    ...scheduleStub(date, [scheduledMedia("stale-entry", "episode-1", path)]),
+    id: `stale-${date}`,
   };
 }
 
 function setup(
   options: {
     storedDate?: string;
+    /** Whole schedules, so a test can hold several dates and exact entries. */
+    stored?: Schedule[];
+    media?: MediaItem[];
     generate?: (channel: Channel, date: string) => Promise<PersistedGeneration>;
     lastSync?: () => { scheduleId?: string; status?: string } | undefined;
     now?: () => Date;
@@ -50,6 +99,9 @@ function setup(
   const stored = new Map<string, Schedule>();
   if (options.storedDate)
     stored.set(options.storedDate, scheduleStub(options.storedDate));
+  for (const schedule of options.stored ?? [])
+    stored.set(schedule.date, schedule);
+  const media = options.media ?? [];
   const generate = vi.fn<
     (channel: Channel, date: string) => Promise<PersistedGeneration>
   >(
@@ -74,6 +126,7 @@ function setup(
   const context: ScheduleRefreshContext = {
     repositories: {
       channels: { list: () => [channel] },
+      media: { list: () => media },
       schedules: {
         // Asked by date: the pass needs "is TODAY scheduled?", and the newest row
         // is not always today's.
@@ -274,6 +327,193 @@ test("aims the sync at the day it decided about, not the newest schedule", async
 
   expect(syncToTunarr.mock.calls[0]?.[0]).toBe("marktv-laughs");
   expect(syncToTunarr.mock.calls[0]?.[1]).toBe(scheduleStub(TODAY).id);
+  refresh.stop();
+});
+
+test("checks and syncs each channel using its own last-sync state", async () => {
+  const channel7 = demo().channel;
+  const channel9 = {
+    ...channel7,
+    id: "marktv-cult-movies",
+    name: "MarkTV Cult Movies",
+    number: 9,
+  };
+  const schedule7 = scheduleStub(TODAY);
+  const schedule9 = {
+    ...scheduleStub(TODAY),
+    id: "marktv-cult-movies-2026-09-17",
+    channelId: channel9.id,
+    channelName: channel9.name,
+    channelNumber: channel9.number,
+    seed: `${channel9.id}:${TODAY}`,
+  };
+  const schedules = new Map([
+    [`${channel7.id}:${TODAY}`, schedule7],
+    [`${channel9.id}:${TODAY}`, schedule9],
+  ]);
+  const lastSync = vi.fn((channelId: string) =>
+    channelId === channel7.id
+      ? { scheduleId: schedule7.id, status: "synced" }
+      : undefined,
+  );
+  const syncToTunarr = vi.fn<
+    (
+      channelId: string,
+      scheduleId: string,
+      at: () => Date,
+    ) => Promise<{ status: string }>
+  >(async () => ({ status: "synced" }));
+  const refresh = startScheduleRefresh(
+    {
+      repositories: {
+        channels: { list: () => [channel7, channel9] },
+        media: { list: () => [] },
+        schedules: {
+          latestForDate: (channelId, date) =>
+            schedules.get(`${channelId}:${date}`),
+        },
+      },
+      schedules: {
+        generate: async (_channel, date) => ({
+          ok: true as const,
+          schedule: scheduleStub(date),
+          exportPath: "/tmp/export.json",
+        }),
+      },
+      now,
+    },
+    {
+      lastSync,
+      syncToTunarr,
+      now,
+      timers: {
+        setInterval: vi.fn(() => ({ unref: vi.fn() })),
+        clearInterval: vi.fn(),
+      },
+    },
+  );
+
+  await vi.waitFor(() => expect(syncToTunarr).toHaveBeenCalledTimes(1));
+
+  expect(lastSync).toHaveBeenCalledWith(channel7.id);
+  expect(lastSync).toHaveBeenCalledWith(channel9.id);
+  expect(syncToTunarr).toHaveBeenCalledWith(
+    channel9.id,
+    schedule9.id,
+    expect.any(Function),
+  );
+  refresh.stop();
+});
+
+test("reads a stored schedule's media references against the catalog", () => {
+  const catalog = [catalogItem("episode-1", "/media/new/renamed.mkv")];
+
+  // Still current: the entry names a catalog item whose path is where it says.
+  expect(
+    scheduleHasStaleMedia(
+      scheduleStub(TODAY, [
+        scheduledMedia("entry", "episode-1", "/media/new/renamed.mkv"),
+      ]),
+      catalog,
+    ),
+  ).toBe(false);
+  // Renamed: the catalog moved that media somewhere else.
+  expect(
+    scheduleHasStaleMedia(
+      scheduleStub(TODAY, [
+        scheduledMedia("entry", "episode-1", "/media/old/renamed.mkv"),
+      ]),
+      catalog,
+    ),
+  ).toBe(true);
+  // Removed: the catalog no longer holds the media the entry references.
+  expect(
+    scheduleHasStaleMedia(
+      scheduleStub(TODAY, [
+        scheduledMedia("entry", "episode-2", "/media/new/renamed.mkv"),
+      ]),
+      catalog,
+    ),
+  ).toBe(true);
+  // Flex holds no media at all, so it can never be stale.
+  expect(
+    scheduleHasStaleMedia(
+      scheduleStub(TODAY, [
+        {
+          id: "flex-entry",
+          start: "2026-09-17T10:00:00.000Z",
+          end: "2026-09-17T10:30:00.000Z",
+          localStart: "05:00",
+          localEnd: "05:30",
+          durationMs: 1_800_000,
+          kind: "flex",
+          title: "Flexible programming",
+        },
+      ]),
+      catalog,
+    ),
+  ).toBe(false);
+});
+
+test("replaces today's stored schedule when its media no longer matches the catalog", async () => {
+  const lines: string[] = [];
+  logSink.sink = (line) => lines.push(line);
+  const { refresh, generate, syncToTunarr } = setup({
+    stored: [staleSchedule(TODAY)],
+    media: [catalogItem("episode-1", "/media/new/renamed.mkv")],
+    // The stale schedule itself was already broadcast, so a pass that failed to
+    // notice the rename would find nothing to sync and leave the lineup on the
+    // old path.
+    lastSync: () => ({
+      scheduleId: staleSchedule(TODAY).id,
+      status: "synced",
+    }),
+  });
+
+  await vi.waitFor(() => expect(syncToTunarr).toHaveBeenCalledTimes(1));
+
+  expect(generate.mock.calls.map((call) => call[1])).toEqual([TODAY]);
+  // The replacement, named explicitly: Tunarr still holds the old path.
+  expect(syncToTunarr.mock.calls[0]?.[1]).toBe(scheduleStub(TODAY).id);
+  expect(lines.join("\n")).toContain("stale");
+  refresh.stop();
+});
+
+test("leaves today's stored schedule alone while its media still matches the catalog", async () => {
+  const current = scheduleStub(TODAY, [
+    scheduledMedia("entry", "episode-1", "/media/new/renamed.mkv"),
+  ]);
+  const { refresh, generate, syncToTunarr } = setup({
+    stored: [current],
+    media: [catalogItem("episode-1", "/media/new/renamed.mkv")],
+    lastSync: () => ({ scheduleId: current.id, status: "synced" }),
+  });
+
+  await settle();
+
+  // Regenerating an already-correct-and-synced schedule every ten minutes is the
+  // loop this check must not reintroduce.
+  expect(generate).not.toHaveBeenCalled();
+  expect(syncToTunarr).not.toHaveBeenCalled();
+  refresh.stop();
+});
+
+test("pre-generates a replacement for a stale tomorrow in the quiet hours", async () => {
+  const today = scheduleStub(TODAY, [
+    scheduledMedia("entry", "episode-1", "/media/new/renamed.mkv"),
+  ]);
+  const { refresh, generate, syncToTunarr } = setup({
+    stored: [today, staleSchedule("2026-09-18")],
+    media: [catalogItem("episode-1", "/media/new/renamed.mkv")],
+    lastSync: () => ({ scheduleId: today.id, status: "synced" }),
+    now: () => new Date("2026-09-17T09:00:00Z"), // 04:00 local
+  });
+
+  await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1));
+
+  // Tomorrow is rebuilt because its media moved, and still not broadcast.
+  expect(generate.mock.calls[0]?.[1]).toBe("2026-09-18");
+  expect(syncToTunarr).not.toHaveBeenCalled();
   refresh.stop();
 });
 

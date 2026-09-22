@@ -1,10 +1,10 @@
 import { DateTime } from "luxon";
-import type { Channel } from "../domain/models.js";
+import type { Channel, MediaItem, Schedule } from "../domain/models.js";
 import { logError, logInfo, logWarn } from "./logging.js";
 import type { PersistedGeneration } from "./scheduleService.js";
 
 /**
- * Keeps today's schedule existent, without anyone asking.
+ * Keeps today's schedule existent and current, without anyone asking.
  *
  * WHY THIS EXISTS
  * Nothing regenerated schedules. The only path was `POST /api/v1/schedules/generate`,
@@ -18,10 +18,11 @@ import type { PersistedGeneration } from "./scheduleService.js";
  * exactly what happened when it was tried by hand - the client gave up and no schedule
  * was produced. Running on a timer makes being slow survivable.
  *
- * `ScheduleService.ensure()` looks like the right call and is not: it returns ANY
- * existing schedule for the channel without comparing the date, so against a stale
- * schedule it short-circuits and never regenerates. The date comparison is made here,
- * explicitly.
+ * `ScheduleService.ensure()` looks like the right call and is not. It asks by date
+ * now, but a schedule can exist for today and still be wrong: the files it refers to
+ * may have been renamed since it was generated, and Tunarr refuses a lineup whose
+ * programs it cannot play. Both comparisons are made here, explicitly, and a stored
+ * schedule whose media no longer matches the catalog is replaced for the same date.
  *
  * Deliberately takes a narrow context rather than the whole `ServerContext`, and takes
  * the Tunarr sync as a dependency, so the whole thing is exercisable without a running
@@ -60,6 +61,13 @@ const defaultTimers: ScheduleRefreshTimers = {
 export interface ScheduleRefreshContext {
   readonly repositories: {
     readonly channels: { list: () => Channel[] };
+    /**
+     * The current media catalog, so a stored schedule can be checked against it.
+     *
+     * Taken as a narrow reader rather than the whole `Repositories`, like the
+     * rest of this context: the refresh only ever asks what media exists now.
+     */
+    readonly media: { list: () => MediaItem[] };
     readonly schedules: {
       /**
        * Looked up BY DATE, deliberately not by `latest`.
@@ -73,7 +81,7 @@ export interface ScheduleRefreshContext {
       latestForDate: (
         channelId: string,
         date: string,
-      ) => { id: string; date: string } | undefined;
+      ) => Schedule | undefined;
     };
   };
   readonly schedules: {
@@ -102,15 +110,54 @@ export interface ScheduleRefreshDependencies {
    * The most recent recorded Tunarr sync. Reading it is what distinguishes
    * "generated" from "actually broadcast", so a failed sync gets retried.
    */
-  readonly lastSync: () =>
+  readonly lastSync: (channelId: string) =>
     | { scheduleId?: string; status?: string }
     | undefined;
+  /**
+   * Rolls the movie-programming feature's coverage forward.
+   *
+   * Optional so a test that does not exercise movies needs no stub, and narrow so
+   * the refresh keeps knowing nothing about rotation persistence.
+   */
+  readonly movieProgramming?: {
+    ensureCoverage: (
+      channel: Channel,
+      now: Date,
+    ) => Promise<{ resolvedDates: string[]; generatedDate?: string }>;
+  };
 }
 
 export interface ScheduleRefresh {
   /** Exposed so a test, or an operator, can drive one cycle directly. */
   refreshOnce: () => Promise<void>;
   stop: () => void;
+}
+
+/**
+ * Whether a stored schedule still refers to the media the catalog holds now.
+ *
+ * The quiet-hours pass builds TOMORROW's schedule hours before it airs, so
+ * anything that moves a file in the meantime - a rename, a re-import, an edited
+ * media record - leaves that stored schedule pointing at a path the catalog no
+ * longer has. Tunarr refuses the resulting plan, and the channel keeps replaying
+ * whatever it was already broadcasting, so the day never picks up its new
+ * lineup. This is how the refresh notices.
+ *
+ * Compared against the catalog rather than the filesystem, deliberately. A
+ * schedule that disagrees with the catalog can always be replaced by generating
+ * from it again, so this check cannot call the same schedule stale forever;
+ * asking the filesystem could, and this runs every ten minutes.
+ */
+export function scheduleHasStaleMedia(
+  schedule: Schedule,
+  media: MediaItem[],
+): boolean {
+  const byId = new Map(media.map((item) => [item.id, item]));
+  return schedule.entries.some((entry) => {
+    if (entry.kind === "flex") return false;
+    const item = entry.mediaId ? byId.get(entry.mediaId) : undefined;
+    return !item || item.path !== entry.path;
+  });
 }
 
 export function startScheduleRefresh(
@@ -128,6 +175,8 @@ export function startScheduleRefresh(
     if (refreshing) return;
     refreshing = true;
     try {
+      // Read once per pass: every channel is checked against the same catalog.
+      const media = context.repositories.media.list();
       for (const channel of context.repositories.channels.list()) {
         const local = DateTime.fromJSDate(now(), { zone: channel.timezone });
         const today = local.toISODate();
@@ -142,10 +191,22 @@ export function startScheduleRefresh(
           channel.id,
           today,
         );
-        const alreadyHaveTomorrow = Boolean(
-          tomorrow &&
-            context.repositories.schedules.latestForDate(channel.id, tomorrow),
-        );
+        const storedTomorrow = tomorrow
+          ? context.repositories.schedules.latestForDate(channel.id, tomorrow)
+          : undefined;
+
+        // A schedule for today that no longer matches the catalog is not a
+        // schedule for today. Regenerating for the SAME date is what replaces
+        // it; the stored one is dropped here so the generation below runs and
+        // the sync is aimed at the replacement rather than the stale row.
+        if (schedule && scheduleHasStaleMedia(schedule, media)) {
+          logWarn("schedule.refresh", "Replacing a stale schedule", {
+            channelId: channel.id,
+            date: today,
+            scheduleId: schedule.id,
+          });
+          schedule = undefined;
+        }
 
         if (!schedule) {
           logInfo("schedule.refresh", "Generating a schedule for today", {
@@ -172,7 +233,7 @@ export function startScheduleRefresh(
         // viewer causes. So this keeps retrying until the sync for THIS schedule
         // is recorded as synced, instead of assuming that generating was enough.
         // Without that, one failed sync would strand the lineup until the next day.
-        const synced = dependencies.lastSync();
+        const synced = dependencies.lastSync(channel.id);
         if (synced?.scheduleId !== schedule.id || synced.status !== "synced") {
           // The id is passed rather than letting the sync resolve "the newest
           // schedule" for itself: in the quiet hours the newest is tomorrow's, and
@@ -194,12 +255,26 @@ export function startScheduleRefresh(
         // schedule covers one specific day, so pushing tomorrow's early would air
         // the wrong day's programming. Paying the generation cost now is what keeps
         // the midnight swap down to the sync alone.
+        //
+        // A pre-generated tomorrow that no longer matches the catalog is rebuilt
+        // for the same reason today's is: it is cheaper now than at midnight,
+        // and it is still not broadcast.
         if (
           tomorrow &&
-          !alreadyHaveTomorrow &&
+          (!storedTomorrow || scheduleHasStaleMedia(storedTomorrow, media)) &&
           local.hour >= scheduleRefreshLimits.quietStartHour &&
           local.hour < scheduleRefreshLimits.quietEndHour
         ) {
+          if (storedTomorrow)
+            logWarn(
+              "schedule.refresh",
+              "Replacing a stale pre-generated schedule",
+              {
+                channelId: channel.id,
+                date: tomorrow,
+                scheduleId: storedTomorrow.id,
+              },
+            );
           logInfo("schedule.refresh", "Pre-generating tomorrow's schedule", {
             channelId: channel.id,
             date: tomorrow,
@@ -212,6 +287,36 @@ export function startScheduleRefresh(
               issues: ahead.issues.map((issue) =>
                 "code" in issue ? issue.code : "unknown",
               ),
+            });
+          }
+        }
+
+        // Movie coverage rolls forward in the quiet hours too, and only here: it
+        // resolves a week or more of assignments (cheap and idempotent) and builds
+        // at most one missing future schedule per pass. Nothing about it touches
+        // the live date, and the sync above still aims at today's id alone.
+        if (
+          channel.movieProgramming?.enabled &&
+          dependencies.movieProgramming &&
+          local.hour >= scheduleRefreshLimits.quietStartHour &&
+          local.hour < scheduleRefreshLimits.quietEndHour
+        ) {
+          try {
+            const coverage = await dependencies.movieProgramming.ensureCoverage(
+              channel,
+              now(),
+            );
+            logInfo("schedule.refresh", "Movie coverage rolled forward", {
+              channelId: channel.id,
+              resolved: coverage.resolvedDates.length,
+              generated: coverage.generatedDate,
+            });
+          } catch (error) {
+            // Contained here rather than left to the pass-level catch: one
+            // channel's movie inventory must not stop every other channel's
+            // refresh.
+            logError("schedule.refresh.movies", error, {
+              channelId: channel.id,
             });
           }
         }

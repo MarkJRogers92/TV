@@ -12,13 +12,17 @@ import {
   startScheduleRefresh,
   type ScheduleRefresh,
 } from "./scheduleRefresh.js";
-import { autoSyncTunarr, readTunarrMapping } from "./tunarrAutoSync.js";
+import {
+  autoSyncTunarr,
+  readTunarrMappingForChannel,
+} from "./tunarrAutoSync.js";
 import { seedDemoIfEmpty } from "../demo/marktvLaughs.js";
 import { RealDebridProvider } from "../integrations/acquisition/realDebrid.js";
 import { TorBoxProvider } from "../integrations/acquisition/torBox.js";
 import type { AcquisitionProvider } from "../integrations/acquisition/provider.js";
 import { pinRegisteredMediaRoots, registerManagedLibrary } from "../media/roots.js";
 import { reconcileImportedSeries } from "../media/seriesEnrollment.js";
+import { reconcileMovieProgramming } from "../media/movieEnrollment.js";
 import { KeychainCredentialStore } from "../security/keychain.js";
 import type { CredentialStore } from "../security/credentialStore.js";
 import type { ServerContext } from "./context.js";
@@ -30,6 +34,7 @@ import { registerPoolRoutes } from "./routes/pools.js";
 import { registerScheduleRoutes } from "./routes/schedules.js";
 import { registerTunarrRoutes } from "./routes/tunarr.js";
 import { registerWatchRoutes } from "./routes/watch.js";
+import { registerContinuityRoutes } from "./routes/continuity.js";
 import { ScheduleService, type ExportSchedule } from "./scheduleService.js";
 
 /**
@@ -208,7 +213,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
   // Create/verify the managed inbox and library, then register the resolved
   // library root exactly once so acquisition writes and the media scanner share
   // one root however often the app starts against the same data dir.
-  const managedPaths = await registerManagedLibrary(repositories, dataDir);
+  const managedPaths = await registerManagedLibrary(repositories, dataDir, {
+    inbox: process.env.MARKTV_INBOX_DIR,
+    library: process.env.MARKTV_LIBRARY_DIR,
+  });
   // Hold every registered root open so the inode comparisons the scanner relies
   // on cannot be defeated by a recycled inode, including roots from earlier runs.
   await pinRegisteredMediaRoots(repositories);
@@ -216,6 +224,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
   // also re-attaches anything whose enrolment was skipped while the channel was
   // missing, and it closes the window after an import whose enrolment never ran.
   reconcileImportedSeries(repositories, { now: now() });
+  // Movie pools are swept at startup too, so a library scanned before the feature
+  // was switched on becomes schedulable without a second manual scan.
+  reconcileMovieProgramming(repositories);
   // One coordinator for the whole process. It reuses the validated provider map
   // and credential store the integration routes use, so a token, locator, or
   // command can never be routed through a second, unvalidated stack.
@@ -264,6 +275,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   }));
   await registerAcquisitionRoutes(app, context);
   await registerChannelRoutes(app, context);
+  await registerContinuityRoutes(app, context);
   await registerIntegrationRoutes(app, context);
   await registerMediaRoutes(app, context);
   await registerPoolRoutes(app, context);
@@ -280,7 +292,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
       scheduleRefresh = startScheduleRefresh(context, {
         syncToTunarr: (channelId, scheduleId, at) =>
           autoSyncTunarr(repositories, { channelId, scheduleId, now: at }),
-        lastSync: () => readTunarrMapping(repositories)?.lastSync,
+        lastSync: (channelId) =>
+          readTunarrMappingForChannel(repositories, channelId)?.lastSync,
+        movieProgramming: {
+          ensureCoverage: (channel, at) =>
+            context.schedules.ensureMovieCoverage(channel, at),
+        },
       });
     }
   } catch (error) {
