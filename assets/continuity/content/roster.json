@@ -1,0 +1,233 @@
+{
+  "schemaVersion": 1,
+  "source": "User-selected lineup; not evidence of locally available files or a published schedule. Resolve against live library IDs before production use.",
+  "shows": [
+    {
+      "id": "roseanne",
+      "title": "Roseanne",
+      "spokenTitle": "Roseanne"
+    },
+    {
+      "id": "home-improvement",
+      "title": "Home Improvement",
+      "spokenTitle": "Home Improvement"
+    },
+    {
+      "id": "married-with-children",
+      "title": "Married… with Children",
+      "spokenTitle": "Married with Children"
+    },
+    {
+      "id": "grace-under-fire",
+      "title": "Grace Under Fire",
+      "spokenTitle": "Grace Under Fire"
+    },
+    {
+      "id": "according-to-jim",
+      "title": "According to Jim",
+      "spokenTitle": "According to Jim"
+    },
+    {
+      "id": "that-70s-show",
+      "title": "That ’70s Show",
+      "spokenTitle": "That ’70s Show"
+    },
+    {
+      "id": "everybody-loves-raymond",
+      "title": "Everybody Loves Raymond",
+      "spokenTitle": "Everybody Loves Raymond"
+    },
+    {
+      "id": "the-nanny",
+      "title": "The Nanny",
+      "spokenTitle": "The Nanny"
+    },
+    {
+      "id": "dinosaurs",
+      "title": "Dinosaurs",
+      "spokenTitle": "Dinosaurs"
+    },
+    {
+      "id": "the-drew-carey-show",
+      "title": "The Drew Carey Show",
+      "spokenTitle": "The Drew Carey Show"
+    },
+    {
+      "id": "grounded-for-life",
+      "title": "Grounded for Life",
+      "spokenTitle": "Grounded for Life"
+    },
+    {
+      "id": "the-golden-girls",
+      "title": "The Golden Girls",
+      "spokenTitle": "The Golden Girls"
+    },
+    {
+      "id": "alf",
+      "title": "ALF",
+      "spokenTitle": "Alf"
+    },
+    {
+      "id": "the-cosby-show",
+      "title": "The Cosby Show",
+      "spokenTitle": "The Cosby Show"
+    },
+    {
+      "id": "night-court",
+      "title": "Night Court",
+      "spokenTitle": "Night Court"
+    }
+  ],
+  "movies": [
+    {
+      "id": "weekend-at-bernies",
+      "title": "Weekend at Bernie’s",
+      "spokenTitle": "Weekend at Bernie’s"
+    },
+    {
+      "id": "beverly-hills-ninja",
+      "title": "Beverly Hills Ninja",
+      "spokenTitle": "Beverly Hills Ninja"
+    },
+    {
+      "id": "coneheads",
+      "title": "Coneheads",
+      "spokenTitle": "Coneheads"
+    },
+    {
+      "id": "tremors",
+      "title": "Tremors",
+      "spokenTitle": "Tremors"
+    },
+    {
+      "id": "the-big-green",
+      "title": "The Big Green",
+      "spokenTitle": "The Big Green"
+    },
+    {
+      "id": "tommy-boy",
+      "title": "Tommy Boy",
+      "spokenTitle": "Tommy Boy"
+    },
+    {
+      "id": "clerks",
+      "title": "Clerks",
+      "spokenTitle": "Clerks"
+    },
+    {
+      "id": "pee-wees-big-adventure",
+      "title": "Pee-wee’s Big Adventure",
+      "spokenTitle": "Pee-wee’s Big Adventure"
+    },
+    {
+      "id": "waynes-world",
+      "title": "Wayne’s World",
+      "spokenTitle": "Wayne’s World"
+    },
+    {
+      "id": "groundhog-day",
+      "title": "Groundhog Day",
+      "spokenTitle": "Groundhog Day"
+    },
+    {
+      "id": "encino-man",
+      "title": "Encino Man",
+      "spokenTitle": "Encino Man"
+    },
+    {
+      "id": "airheads",
+      "title": "Airheads",
+      "spokenTitle": "Airheads"
+    },
+    {
+      "id": "dutch",
+      "title": "Dutch",
+      "spokenTitle": "Dutch"
+    },
+    {
+      "id": "the-great-outdoors",
+      "title": "The Great Outdoors",
+      "spokenTitle": "The Great Outdoors"
+    },
+    {
+      "id": "problem-child",
+      "title": "Problem Child",
+      "spokenTitle": "Problem Child"
+    },
+    {
+      "id": "heavyweights",
+      "title": "Heavyweights",
+      "spokenTitle": "Heavyweights"
+    },
+    {
+      "id": "little-giants",
+      "title": "Little Giants",
+      "spokenTitle": "Little Giants"
+    },
+    {
+      "id": "kingpin",
+      "title": "Kingpin",
+      "spokenTitle": "Kingpin"
+    },
+    {
+      "id": "bio-dome",
+      "title": "Bio-Dome",
+      "spokenTitle": "Bio-Dome"
+    },
+    {
+      "id": "black-sheep",
+      "title": "Black Sheep",
+      "spokenTitle": "Black Sheep"
+    },
+    {
+      "id": "the-cable-guy",
+      "title": "The Cable Guy",
+      "spokenTitle": "The Cable Guy"
+    },
+    {
+      "id": "mars-attacks",
+      "title": "Mars Attacks!",
+      "spokenTitle": "Mars Attacks!"
+    },
+    {
+      "id": "ernest-scared-stupid",
+      "title": "Ernest Scared Stupid",
+      "spokenTitle": "Ernest Scared Stupid"
+    },
+    {
+      "id": "the-burbs",
+      "title": "The ’Burbs",
+      "spokenTitle": "The Burbs"
+    },
+    {
+      "id": "arachnophobia",
+      "title": "Arachnophobia",
+      "spokenTitle": "Arachnophobia"
+    },
+    {
+      "id": "chairman-of-the-board",
+      "title": "Chairman of the Board",
+      "spokenTitle": "Chairman of the Board"
+    },
+    {
+      "id": "son-in-law",
+      "title": "Son in Law",
+      "spokenTitle": "Son in Law"
+    },
+    {
+      "id": "in-the-army-now",
+      "title": "In the Army Now",
+      "spokenTitle": "In the Army Now"
+    },
+    {
+      "id": "jury-duty",
+      "title": "Jury Duty",
+      "spokenTitle": "Jury Duty"
+    },
+    {
+      "id": "major-payne",
+      "title": "Major Payne",
+      "spokenTitle": "Major Payne"
+    }
+  ]
+}

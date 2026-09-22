@@ -114,6 +114,7 @@ export function upsertTunarrMapping(
 /** The subset of the stored mapping the plan builder consumes. */
 function mappingInput(stored: StoredTunarrMapping): TunarrMappingInput {
   return {
+    ...(stored.preserveExistingLineup ? { preserveExistingLineup: true } : {}),
     libraryId: stored.libraryId,
     libraryIds: stored.libraryIds,
     channelId: stored.channelId,
@@ -147,7 +148,9 @@ async function rescanTunarrLibraries(
   client: TunarrClient,
   mapping: TunarrMappingInput,
 ): Promise<boolean> {
-  const libraryIds = normalizeLibraryIds(mapping.libraryIds ?? mapping.libraryId);
+  const libraryIds = normalizeLibraryIds(
+    mapping.libraryIds ?? mapping.libraryId,
+  );
   if (!libraryIds.length) return false;
   const sources = await client.mediaSources();
   let requested = false;
@@ -223,7 +226,8 @@ export async function autoSyncTunarr(
     // ordinary path where the inventory is already current.
     if (!plan.syncEligible && (await rescanTunarrLibraries(client, input))) {
       for (let attempt = 0; attempt < 6 && !plan.syncEligible; attempt += 1) {
-        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 10_000));
+        if (attempt > 0)
+          await new Promise((resolve) => setTimeout(resolve, 10_000));
         const refreshed = await client.snapshot(input);
         plan = buildTunarrSyncPlan(
           schedule,
@@ -235,15 +239,37 @@ export async function autoSyncTunarr(
       }
     }
     if (!plan.syncEligible)
-      return persist(repositories, { ...stored, plan }, {
-        ...base,
-        status: "blocked",
-        scheduleId: schedule.id,
-        blockingErrors: plan.blockingErrors.length,
-        message: plan.blockingErrors[0]?.message,
-      });
+      return persist(
+        repositories,
+        { ...stored, plan },
+        {
+          ...base,
+          status: "blocked",
+          scheduleId: schedule.id,
+          blockingErrors: plan.blockingErrors.length,
+          message: plan.blockingErrors[0]?.message,
+        },
+      );
 
-    const result = await syncTunarrPlan(client, plan, schedule);
+    const result = await syncTunarrPlan(client, plan, schedule).catch(
+      (error: unknown) => {
+        if ((error as { code?: string }).code === "ACTIVE_VIEWERS")
+          return "blocked" as const;
+        throw error;
+      },
+    );
+    if (result === "blocked")
+      return persist(
+        repositories,
+        { ...stored, plan },
+        {
+          ...base,
+          status: "blocked",
+          scheduleId: schedule.id,
+          message:
+            "The Tunarr channel has active viewers; the sync will retry after playback stops",
+        },
+      );
     const state = { ...stored, ...result.state, plan };
     if (result.state.channelId) state.createChannel = false;
     if (result.partialFailure)

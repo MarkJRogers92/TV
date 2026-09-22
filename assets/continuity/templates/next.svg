@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="720" viewBox="0 0 960 720" role="img" aria-label="MarkTV slap-bar template">
+<title>MarkTV slap-bar — prototype template</title>
+<rect width="960" height="720" fill="#392567"/><path d="M0 0H590L315 720H0Z" fill="#24164a"/><path d="M0 586L960 384V434L0 636Z" fill="#199b9a"/><rect x="64" y="182" width="184" height="48" fill="#f3ce48"/>
+{{LOGO}}
+<text x="76" y="216" fill="#392567" font-family="Arial,Helvetica,sans-serif" font-size="30" font-weight="700" letter-spacing="3">{{LABEL}}</text>
+<text x="64" y="294" fill="#ffffff" font-family="Arial,Helvetica,sans-serif" font-size="54" font-weight="900">{{TITLE_1}}</text>
+<text x="64" y="355" fill="#ffffff" font-family="Arial,Helvetica,sans-serif" font-size="54" font-weight="900">{{TITLE_2}}</text>
+<g fill="#e1dfdb" font-family="Arial,Helvetica,sans-serif" font-size="28" font-weight="600">
+<text x="64" y="442">{{DETAIL_1}}</text><text x="64" y="482">{{DETAIL_2}}</text><text x="64" y="522">{{DETAIL_3}}</text><text x="64" y="562">{{DETAIL_4}}</text>
+</g>
+<text x="64" y="661" fill="#d5d8da" font-family="Arial,Helvetica,sans-serif" font-size="16" letter-spacing="1">{{FOOTER}}</text>
+</svg>

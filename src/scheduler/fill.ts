@@ -1,4 +1,8 @@
-import type { MediaItem, ScheduleEntry } from "../domain/models.js";
+import {
+  scheduleScopedContinuityTag,
+  type MediaItem,
+  type ScheduleEntry,
+} from "../domain/models.js";
 import { createSeededRandom } from "./random.js";
 
 export type FillerHistory = { mediaId: string; at: string };
@@ -54,6 +58,10 @@ function rankedEligibleItems(input: FillInput): MediaItem[] {
       (item) =>
         item.available &&
         item.durationMs &&
+        // A schedule-scoped continuity card belongs to exactly one completed
+        // schedule. It is placed by the continuity pass, never drawn as generic
+        // filler on some other day.
+        !item.tags.includes(scheduleScopedContinuityTag) &&
         (fillerKinds.has(item.kind) ||
           (stationIdsEligible && item.kind === "station-id")),
     )

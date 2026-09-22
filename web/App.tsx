@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { markTvApi } from "./api";
 import { Nav, type PageName } from "./components/Nav";
 import { ChannelEditor } from "./pages/ChannelEditor";
+import { Continuity } from "./pages/Continuity";
 import { Dashboard } from "./pages/Dashboard";
 import { Integrations } from "./pages/Integrations";
 import { Library } from "./pages/Library";
@@ -17,6 +18,7 @@ const routePages: Record<string, PageName> = {
   channel: "Channel",
   library: "Library",
   schedule: "Schedule",
+  continuity: "Continuity",
   tunarr: "Tunarr",
   wanted: "Wanted",
   integrations: "Integrations",
@@ -65,6 +67,8 @@ export function App() {
       <Library />
     ) : page === "Schedule" ? (
       <Schedule channelId={channelId} />
+    ) : page === "Continuity" ? (
+      <Continuity channelId={channelId} />
     ) : page === "Wanted" ? (
       <Wanted />
     ) : page === "Integrations" ? (

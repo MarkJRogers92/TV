@@ -160,6 +160,7 @@ export async function registerTunarrRoutes(
         });
       const libraryIds = resolveLibraryIds(input);
       const mapping: TunarrMappingInput = {
+        ...(existing?.preserveExistingLineup ? { preserveExistingLineup: true } : {}),
         libraryId: libraryIds[0],
         libraryIds,
         channelId: input.channelId || undefined,

@@ -1,6 +1,7 @@
 import { Readable } from "node:stream";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ServerContext } from "../context.js";
+import { readTunarrMappingForChannel } from "../tunarrAutoSync.js";
 
 type WatchMapping = {
   url?: string;
@@ -122,8 +123,7 @@ function mappingFor(
   context: ServerContext,
   id: string,
 ): Required<WatchMapping> | undefined {
-  const mapping = context.repositories.settings.get("tunarr-mapping")
-    ?.value as WatchMapping | undefined;
+  const mapping = readTunarrMappingForChannel(context.repositories, id);
   return mapping?.url &&
     mapping.channelId &&
     mapping.marktvChannelId === id &&

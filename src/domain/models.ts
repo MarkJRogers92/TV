@@ -11,6 +11,15 @@ export const mediaKinds = [
 ] as const;
 export type MediaKind = (typeof mediaKinds)[number];
 
+/**
+ * Marker tag for offline-rendered, schedule-scoped continuity video.
+ *
+ * The tag is the contract that keeps a generated card out of ordinary filler
+ * and station-ID rotation: it may only ever be placed by the continuity pass,
+ * for the one completed schedule its binding names.
+ */
+export const scheduleScopedContinuityTag = "schedule-scoped-continuity";
+
 const localTimeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 const instantSchema = z
   .string()
@@ -63,6 +72,45 @@ export const poolSchema = z.object({
 });
 export type Pool = z.infer<typeof poolSchema>;
 
+/**
+ * A channel whose lineup is a preserved import rather than a generated one.
+ *
+ * Some channels exist to mirror a lineup somebody else already programmed - an
+ * imported movie channel whose exact film order and start instants the operator
+ * approved. For those, ordinary pool selection is not a fallback but a different
+ * product, so the binding below replaces generation entirely: the day is sliced
+ * from an immutable normalized archive (see `src/scheduler/preservedLineup.ts`)
+ * instead of being selected, and a missing, invalid, or exhausted archive fails
+ * the generation closed rather than quietly airing a scheduled-from-scratch day.
+ *
+ * The archive itself is never stored here. This is the *binding*: it names the
+ * `settings` row (`preserved-lineup:<sourceId>`) the parent writes the normalized
+ * archive into, optionally pins the archive digest the channel was approved
+ * against, and declares what a day past the archive's coverage may do.
+ */
+export const preservedLineupSourceSchema = z.object({
+  /** Identity of the imported lineup; the archive lives under this key suffix. */
+  sourceId: z.string().min(1),
+  /**
+   * Advertised archive digest.
+   *
+   * When set, a stored archive whose content does not hash to this value is
+   * refused. The digest is also part of the generated schedule's identity, so
+   * re-importing a different archive mints a different schedule revision instead
+   * of silently reinterpreting the approved one.
+   */
+  digest: z.string().min(1).optional(),
+  /**
+   * What a broadcast day outside the archive's coverage means.
+   *
+   * `once` (the default) is fail-closed: the day is refused rather than derived
+   * from anything else. `repeat` tiles the archive by its exact total span, which
+   * is only useful for a deliberately looped lineup.
+   */
+  cycle: z.enum(["once", "repeat"]).default("once"),
+});
+export type PreservedLineupSource = z.infer<typeof preservedLineupSourceSchema>;
+
 export const daypartSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -81,6 +129,121 @@ export const movieMidrollSchema = z.object({
   tailBufferMinutes: z.number().nonnegative().default(0),
   strategy: z.enum(["lazy", "eager"]),
 });
+
+/**
+ * Break rules for the movie-programming feature.
+ *
+ * Deliberately its own record rather than a reuse of `movieMidrollSchema`, which
+ * belongs to the scheduled movie *slots*: the feature protects the first and last
+ * minutes of a feature, targets two minutes, and may never exceed the live
+ * 2.5-minute sitcom policy. The break COUNT is a rule rather than a knob - three
+ * for a feature up to `shortMaxMinutes`, four above it - so a configuration edit
+ * cannot quietly turn a two-hour film into eleven interruptions.
+ */
+export const movieProgrammingBreakSchema = z.object({
+  targetMinutes: z.number().positive().default(2),
+  maxMinutes: z.number().positive().default(2.5),
+  /** Content kept break-free at each end of the feature. */
+  protectionMinutes: z.number().nonnegative().default(15),
+  shortMaxMinutes: z.number().positive().default(110),
+});
+export type MovieProgrammingBreakPolicy = z.infer<
+  typeof movieProgrammingBreakSchema
+>;
+
+/**
+ * The single control for the movie-programming feature.
+ *
+ * Present but `enabled: false` by default, so an existing channel keeps exactly
+ * the programming it has until an operator turns the feature on.
+ */
+export const movieProgrammingSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** Movie pools the rotation draws from. */
+  poolIds: z.array(z.string()).default([]),
+  /** Absolute folder the movies are scanned from, reported by the status API. */
+  rootPath: z.string().min(1).optional(),
+  /**
+   * Instant the feature was (re)enabled.
+   *
+   * A first run has no earlier weekend opener to replay, and inventing one would
+   * write an airing that never happened. The scheduler uses this instant to tell
+   * "the opener was scheduled under this feature" from "the feature did not exist
+   * yet", so a Sunday or Monday that starts the feature draws a normal movie
+   * instead of synthesising a past one. Absent on installs enabled before this
+   * field existed, which keeps their linking behaviour unchanged.
+   */
+  activatedAt: instantSchema.optional(),
+  /** Nightly feature anchor, soft within +/- 15 minutes of a program boundary. */
+  nightlyAnchor: localTimeSchema.default("02:00"),
+  /** Weekend double-feature anchor, soft within +/- 15 minutes. */
+  weekendAnchor: localTimeSchema.default("19:00"),
+  /** Pools the 60-120 second between-features bridge draws whole spots from. */
+  bridgePoolIds: z.array(z.string()).default([]),
+  bridgeMinSeconds: z.number().positive().default(60),
+  bridgeMaxSeconds: z.number().positive().default(120),
+  /** Rolling preview/coverage horizon; never shorter than a week. */
+  lookaheadDays: z.number().int().min(7).max(30).default(8),
+  breakPolicy: movieProgrammingBreakSchema.default({
+    targetMinutes: 2,
+    maxMinutes: 2.5,
+    protectionMinutes: 15,
+    shortMaxMinutes: 110,
+  }),
+});
+export type MovieProgramming = z.infer<typeof movieProgrammingSchema>;
+
+/**
+ * Where a movie airing sits in the weekly movie programme.
+ *
+ * `encore` carries no new selection: it replays the opener of the adjacent
+ * weekend double feature.
+ */
+export const movieRoleSchema = z.enum([
+  "nightly",
+  "weekend-opener",
+  "weekend-closer",
+  "encore",
+]);
+export type MovieRole = z.infer<typeof movieRoleSchema>;
+
+/**
+ * The piece of a movie programme that did not fit in one broadcast day.
+ *
+ * A weekend double feature is one block - opener, between-features bridge,
+ * closer - but a long enough pair reaches midnight in the middle of it. The
+ * schedule for the day it started in cannot hold the rest, and the next day's
+ * schedule cannot always be derived from the last entry: a soft anchor means the
+ * block may have started at 19:04, and a closer that could not start leaves the
+ * last entry a sitcom. The state is therefore written down on the schedule that
+ * owns the airing, and read back by the day that continues it.
+ */
+export const movieCarrySchema = z.object({
+  /** Tail of a feature that stopped at the day boundary, from its source offset. */
+  continuation: z
+    .object({
+      mediaId: z.string().min(1),
+      sourceOffsetMs: z.number().int().nonnegative(),
+      occurrenceKey: z.string().min(1).optional(),
+      role: movieRoleSchema.optional(),
+    })
+    .optional(),
+  /**
+   * A double feature whose opener was interrupted: the closer is still owed, and
+   * `bridgeOwed` says whether the between-features bridge has aired yet, so it is
+   * never played twice and never skipped.
+   */
+  closer: z
+    .object({
+      occurrenceKey: z.string().min(1),
+      mediaId: z.string().min(1),
+      role: movieRoleSchema,
+      encore: z.boolean(),
+      bridgeOwed: z.boolean(),
+    })
+    .optional(),
+});
+export type MovieCarry = z.infer<typeof movieCarrySchema>;
 
 export const episodeMidrollSchema = z
   .object({
@@ -120,10 +283,10 @@ export const slotSchema = z.object({
   poolIds: z.array(z.string()).min(1),
   kind: z.enum(["episode", "movie"]),
   fallbackPoolIds: z.array(z.string()).default([]),
-  allowCooldownRelaxation: z.boolean().optional(),
-  movieMidroll: movieMidrollSchema.optional(),
-  episodeMidroll: episodeMidrollSchema.optional(),
-});
+    allowCooldownRelaxation: z.boolean().optional(),
+    movieMidroll: movieMidrollSchema.optional(),
+    episodeMidroll: episodeMidrollSchema.optional(),
+  });
 export type SlotRule = z.infer<typeof slotSchema>;
 
 export const breakSchema = z.object({
@@ -143,6 +306,17 @@ export const channelSchema = z.object({
   revision: z.string().default("1"),
   dayparts: z.array(daypartSchema),
   slots: z.array(slotSchema),
+  movieProgramming: movieProgrammingSchema.optional(),
+  /**
+   * Present only on a channel that airs a preserved imported lineup.
+   *
+   * When set, `ScheduleService` slices the day from the bound archive instead of
+   * running ordinary slot selection; the channel's dayparts/slots are then simply
+   * unused by generation (the channel's own config still has to be valid enough
+   * to save). Absent - the default - keeps exactly the previous behaviour for
+   * every existing channel.
+   */
+  preservedLineup: preservedLineupSourceSchema.optional(),
   breakPolicy: breakSchema.default({
     boundaryMinutes: 30,
     poolIds: [],
@@ -168,6 +342,17 @@ export const scheduleEntrySchema = z
     localEnd: localTimeSchema,
     durationMs: z.number().int().positive(),
     contentDurationMs: z.number().int().positive().optional(),
+    /**
+     * Offset into the media file where this entry starts.
+     *
+     * Non-zero only for the tail of a movie that crossed a broadcast day
+     * boundary: the next day's schedule continues the same source rather than
+     * dropping it, and Tunarr is told where in the file to resume.
+     */
+    sourceOffsetMs: z.number().int().nonnegative().optional(),
+    /** Which movie-programming position produced this entry, when any. */
+    movieRole: movieRoleSchema.optional(),
+    movieOccurrenceKey: z.string().min(1).optional(),
     kind: z.union([z.enum(mediaKinds), z.literal("flex")]),
     title: z.string().min(1),
     mediaId: z.string().optional(),
@@ -180,7 +365,12 @@ export const scheduleEntrySchema = z
     midrolls: z
       .array(
         z.object({
-          offsetMs: z.number().int().positive(),
+          /**
+           * Zero is legal for exactly one case: a movie resumed at the exact
+           * offset of one of its breaks, which must air rather than be lost
+           * because the previous broadcast day ended on it.
+           */
+          offsetMs: z.number().int().nonnegative(),
           durationMs: z.number().int().positive(),
         }),
       )
@@ -225,7 +415,7 @@ export const scheduleEntrySchema = z
         });
       }
       const sourceDurationMs = entry.contentDurationMs ?? entry.durationMs;
-      let previousOffset = 0;
+      let previousOffset = -1;
       entry.midrolls.forEach((midroll, index) => {
         if (
           midroll.offsetMs <= previousOffset ||
@@ -265,6 +455,19 @@ export const scheduleSchema = z
     durationMs: z.number().int().positive(),
     entries: z.array(scheduleEntrySchema).min(1),
     diagnostics: z.array(scheduleDiagnosticSchema),
+    continuityBinding: z.object({
+      contentHash: z.string(),
+      appliedHash: z.string(),
+      adjacent: z.array(z.object({ date: broadcastDateSchema, hash: z.string() })),
+    }).optional(),
+    /**
+     * Movie programme that crossed this broadcast day's boundary.
+     *
+     * Persisted with the schedule rather than re-derived from its last entry: a
+     * double feature interrupted at midnight leaves its closer owed, and the block
+     * has to be resumed exactly where the film stopped even after a restart.
+     */
+    movieCarry: movieCarrySchema.optional(),
     channelName: z.string().optional(),
     channelNumber: z.number().int().optional(),
     breakPolicy: breakSchema.optional(),

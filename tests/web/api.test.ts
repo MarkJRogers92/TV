@@ -86,3 +86,50 @@ test("Import Season encodes the durable pack id as one URL path segment", async 
     "/api/v1/acquisitions/reviews/season-pack%3Areal-debrid%3Atorrent%3AQ4IB%3Ahome%2520improvement%25201991%3As1/import-season",
   );
 });
+
+test("latestSchedule names the broadcast date it wants, when it has one", async () => {
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockImplementation(async () => new Response("null", { status: 200 }));
+  vi.stubGlobal("fetch", fetcher);
+
+  await markTvApi.latestSchedule("marktv-laughs", "2026-09-18");
+  await markTvApi.latestSchedule("marktv-laughs");
+
+  // Naming the date is how a caller avoids being answered with tomorrow's
+  // pre-generated schedule; omitting it asks the server for the channel's
+  // current date.
+  expect(fetcher.mock.calls.map((call) => call[0])).toEqual([
+    "/api/v1/schedules/latest?channelId=marktv-laughs&date=2026-09-18",
+    "/api/v1/schedules/latest?channelId=marktv-laughs",
+  ]);
+});
+
+test("movie programming reads its status and writes its single control", async () => {
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockImplementation(async () =>
+      jsonResponse({
+        channelId: "marktv-laughs",
+        enabled: false,
+        upcoming: [],
+        degraded: [],
+      }),
+    );
+  vi.stubGlobal("fetch", fetcher);
+
+  await markTvApi.movieProgrammingStatus("marktv-laughs");
+  await markTvApi.setMovieProgramming("marktv-laughs", {
+    enabled: true,
+    poolIds: ["movies"],
+  });
+
+  expect(fetcher.mock.calls.map((call) => call[0])).toEqual([
+    "/api/v1/channels/marktv-laughs/movie-programming",
+    "/api/v1/channels/marktv-laughs/movie-programming",
+  ]);
+  expect(fetcher.mock.calls[1]?.[1]?.method).toBe("PUT");
+  expect(fetcher.mock.calls[1]?.[1]?.body).toBe(
+    JSON.stringify({ enabled: true, poolIds: ["movies"] }),
+  );
+});

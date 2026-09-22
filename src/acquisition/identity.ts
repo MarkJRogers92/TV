@@ -1,11 +1,11 @@
-import type { WantedEpisode } from "./models.js";
+import type { WantedEpisode, WantedMovie } from "./models.js";
 
 /**
  * Episode identity helpers for the Wanted workflow. `episodeKey` and
  * `normalizedSeriesTitle` are re-exported from the durable acquisition model so
  * the public API helper and the SQLite unique identity can never drift.
  */
-export { episodeKey, normalizedSeriesTitle } from "./models.js";
+export { episodeKey, movieKey, normalizedSeriesTitle } from "./models.js";
 
 /**
  * The minimum human metadata needed to build a Stremio search query. A full
@@ -33,6 +33,25 @@ export function stremioSearchUrl(wanted: StremioSearchable): string {
     wanted.seriesTitle.trim(),
     seasonEpisodeCode(wanted.season, wanted.episode),
     episodeTitle ? episodeTitle : undefined,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
+  return `stremio:///search?search=${encodeURIComponent(query)}`;
+}
+
+/** The minimum human metadata needed to build a Stremio movie search query. */
+export type StremioMovieSearchable = Pick<WantedMovie, "title" | "year">;
+
+/**
+ * The movie twin of {@link stremioSearchUrl}. A film has no SxxExx code, so the
+ * release year is the only disambiguator — and it is the one Stremio's own
+ * search understands, which matters for remakes that share a title. An unknown
+ * year simply drops out of the query rather than guessing one.
+ */
+export function stremioMovieSearchUrl(movie: StremioMovieSearchable): string {
+  const query = [
+    movie.title.trim(),
+    movie.year === null ? undefined : String(movie.year),
   ]
     .filter((part): part is string => Boolean(part))
     .join(" ");

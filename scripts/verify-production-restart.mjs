@@ -102,7 +102,9 @@ try {
   server = startServer();
   await waitForServer(server);
   const reopened = await (
-    await fetch(`${baseUrl}/api/v1/schedules/latest?channelId=marktv-laughs`)
+    await fetch(
+      `${baseUrl}/api/v1/schedules/latest?channelId=marktv-laughs&date=2026-09-13`,
+    )
   ).json();
   if (
     generated.id !== reopened.id ||

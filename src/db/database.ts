@@ -49,6 +49,20 @@ function migrate(database: MarkTvDatabase) {
       ON wanted_episodes(episode_key);
     CREATE INDEX IF NOT EXISTS wanted_episodes_status
       ON wanted_episodes(status);
+    CREATE TABLE IF NOT EXISTS wanted_movies (
+      id TEXT PRIMARY KEY,
+      movie_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      year INTEGER,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS wanted_movies_movie_identity
+      ON wanted_movies(movie_key);
+    CREATE INDEX IF NOT EXISTS wanted_movies_status
+      ON wanted_movies(status);
     CREATE TABLE IF NOT EXISTS acquisition_jobs (
       id TEXT PRIMARY KEY,
       wanted_id TEXT NOT NULL,
@@ -90,6 +104,28 @@ function migrate(database: MarkTvDatabase) {
       ON completed_imports(episode_key);
     CREATE UNIQUE INDEX IF NOT EXISTS completed_imports_remote_identity
       ON completed_imports(provider, remote_item_id, remote_file_id);
+    /*
+     * Movie programming state.
+     *
+     * Its own tables rather than rows in the documents table, because both are
+     * read by exact key on the generation path and the occurrence ledger grows
+     * one row per airing forever - the assignments are the audit trail that
+     * proves a rescan cannot silently re-shuffle what already aired.
+     */
+    CREATE TABLE IF NOT EXISTS movie_rotation (
+      channel_id TEXT PRIMARY KEY,
+      updated_at TEXT NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS movie_occurrences (
+      channel_id TEXT NOT NULL,
+      broadcast_date TEXT NOT NULL,
+      position TEXT NOT NULL,
+      json TEXT NOT NULL,
+      PRIMARY KEY(channel_id, broadcast_date, position)
+    );
+    CREATE INDEX IF NOT EXISTS movie_occurrences_channel_date
+      ON movie_occurrences(channel_id, broadcast_date);
   `);
 
   const jobColumns = database.pragma("table_info(acquisition_jobs)") as Array<{

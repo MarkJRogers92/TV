@@ -43,13 +43,29 @@ const localLocationSchema = z.object({
 const remoteLocationSchema = z
   .object({ type: z.literal("remote"), path: z.string() })
   .passthrough();
+/**
+ * Tunarr's own verdict on whether a program can be played.
+ *
+ * A library program whose file has been renamed or deleted is still listed by
+ * `GET /api/media-libraries/:libraryId/programs`, and it still carries the
+ * absolute path MarkTV matches on - which is exactly why it has to survive
+ * parsing. Tunarr has declared this as `state: "missing"` on the program, and
+ * has exposed the same fields on the nested terminal program or its media item
+ * on other builds, so all three places are kept.
+ */
+const programAvailabilitySchema = {
+  state: z.string().optional(),
+  available: z.boolean().optional(),
+};
 const terminalProgramSchema = z
   .object({
     uuid: z.uuid(),
     externalId: z.string().optional(),
     sourceType: z.string().optional(),
+    ...programAvailabilitySchema,
     mediaItem: z
       .object({
+        ...programAvailabilitySchema,
         locations: z.array(
           z.union([localLocationSchema, remoteLocationSchema]),
         ),
@@ -170,6 +186,30 @@ export const channelSchema = z
   })
   .passthrough();
 export const createdFillerSchema = z.object({ id: z.string() }).passthrough();
+/**
+ * One of Tunarr's live sessions.
+ *
+ * The channel identity is read defensively: Tunarr has exposed it as a nested
+ * channel object on some versions and as a bare id on others, and a session
+ * whose channel cannot be attributed is counted rather than ignored by the
+ * sync guard (refusing a safe sync is recoverable; interrupting a viewer is
+ * not).
+ */
+export const mediaSessionSchema = z
+  .object({
+    numConnections: z.number().nonnegative().optional(),
+    channelId: z.string().optional(),
+    channel_id: z.string().optional(),
+    channel: z
+      .union([
+        z.string(),
+        // The id is optional so a differently-shaped channel object still counts
+        // as an unattributed session rather than failing the whole list.
+        z.object({ id: z.string().optional() }).passthrough(),
+      ])
+      .optional(),
+  })
+  .passthrough();
 
 export type TunarrCapabilities = {
   url: string;
@@ -192,6 +232,7 @@ export type TunarrLineup = TunarrProgramming["lineup"];
 export type TunarrChannel = z.infer<typeof channelSchema>;
 export type TunarrFillerList = z.infer<typeof fillerListSchema>;
 export type TunarrTranscodeConfig = z.infer<typeof transcodeConfigSchema>;
+export type TunarrMediaSession = z.infer<typeof mediaSessionSchema>;
 export type TunarrSnapshots = {
   channels: TunarrChannel[];
   fillerLists: TunarrFillerList[];
@@ -200,6 +241,8 @@ export type TunarrSnapshots = {
   programming?: TunarrProgramming;
 };
 export type TunarrMappingInput = {
+  /** Update one prepared day, retaining the surrounding imported lineup. */
+  preserveExistingLineup?: boolean;
   libraryId: string;
   libraryIds?: string[];
   channelId?: string;
@@ -209,7 +252,11 @@ export type TunarrMappingInput = {
 };
 
 export function normalizeLibraryIds(ids: unknown): string[] {
-  const list = Array.isArray(ids) ? ids : ids === undefined || ids === null ? [] : [ids];
+  const list = Array.isArray(ids)
+    ? ids
+    : ids === undefined || ids === null
+      ? []
+      : [ids];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of list) {

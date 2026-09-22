@@ -2,6 +2,8 @@ import type {
   AirStatus,
   ApiError,
   Channel,
+  ContinuityStatus,
+  ContinuityUpdate,
   GeneratedSchedule,
   ImportSeasonResult,
   IntegrationProjection,
@@ -9,11 +11,15 @@ import type {
   JobActionResult,
   MediaItem,
   MediaRoot,
+  MovieProgrammingControl,
+  MovieProgrammingStatus,
   NewWantedInput,
+  NewWantedMovieInput,
   Pool,
   ScanResult,
   Schedule,
   SeasonPackView,
+  WantedMovieView,
   WantedView,
 } from "./types";
 
@@ -59,6 +65,28 @@ export const markTvApi = {
   updateChannel: (channel: Channel) =>
     api<Channel>(`/channels/${channel.id}`, update(channel)),
   getAir: (id: string) => api<AirStatus>(`/channels/${id}/air`),
+  continuityStatus: (channelId: string) =>
+    api<ContinuityStatus>(
+      `/channels/${encodeURIComponent(channelId)}/continuity`,
+    ),
+  updateContinuity: (channelId: string, input: ContinuityUpdate) =>
+    api<ContinuityStatus>(
+      `/channels/${encodeURIComponent(channelId)}/continuity`,
+      update(input),
+    ),
+  /** Movie-programming control and its rolling preview. */
+  movieProgrammingStatus: (channelId: string) =>
+    api<MovieProgrammingStatus>(
+      `/channels/${encodeURIComponent(channelId)}/movie-programming`,
+    ),
+  setMovieProgramming: (
+    channelId: string,
+    input: MovieProgrammingControl,
+  ) =>
+    api<Channel>(
+      `/channels/${encodeURIComponent(channelId)}/movie-programming`,
+      update(input),
+    ),
   listMedia: () => api<MediaItem[]>("/media"),
   updateMedia: (item: MediaItem) =>
     api<MediaItem>(`/media/${item.id}`, update(item)),
@@ -73,9 +101,18 @@ export const markTvApi = {
   createPool: (pool: Pool) => api<Pool>("/pools", body(pool)),
   updatePool: (pool: Pool) => api<Pool>(`/pools/${pool.id}`, update(pool)),
   removePool: (id: string) => api<void>(`/pools/${id}`, { method: "DELETE" }),
-  latestSchedule: (channelId: string) =>
+  /**
+   * The newest schedule for one broadcast date.
+   *
+   * `date` is optional so a caller can let the server answer for the channel's
+   * current date, which is derived in the channel's timezone rather than the
+   * browser's.
+   */
+  latestSchedule: (channelId: string, date?: string) =>
     api<Schedule | null>(
-      `/schedules/latest?channelId=${encodeURIComponent(channelId)}`,
+      `/schedules/latest?channelId=${encodeURIComponent(channelId)}${
+        date ? `&date=${encodeURIComponent(date)}` : ""
+      }`,
     ),
   generateSchedule: (channelId: string, date: string) =>
     api<GeneratedSchedule>("/schedules/generate", body({ channelId, date })),
@@ -84,6 +121,11 @@ export const markTvApi = {
     api<WantedView>("/acquisitions/wanted", body(input)),
   removeWanted: (id: string) =>
     api<WantedView>(`/acquisitions/wanted/${id}`, { method: "DELETE" }),
+  listWantedMovies: () => api<WantedMovieView[]>("/acquisitions/wanted-movies"),
+  addWantedMovie: (input: NewWantedMovieInput) =>
+    api<WantedMovieView>("/acquisitions/wanted-movies", body(input)),
+  removeWantedMovie: (id: string) =>
+    api<WantedMovieView>(`/acquisitions/wanted-movies/${id}`, { method: "DELETE" }),
   listSeasonPacks: () =>
     api<SeasonPackView[]>("/acquisitions/season-packs"),
   retryJob: (id: string) =>
@@ -98,6 +140,12 @@ export const markTvApi = {
   importSeason: (id: string) =>
     api<ImportSeasonResult>(
       `/acquisitions/reviews/${encodeURIComponent(id)}/import-season`,
+      body({}),
+    ),
+  /** Decline an offer without importing it. Removes only the offer row. */
+  dismissReview: (id: string) =>
+    api<{ dismissed: boolean; id: string }>(
+      `/acquisitions/reviews/${encodeURIComponent(id)}/dismiss`,
       body({}),
     ),
   listIntegrations: () => api<IntegrationProjection[]>("/integrations"),

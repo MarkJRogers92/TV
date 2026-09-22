@@ -32,6 +32,38 @@ test('shuffle selection is stable for the same seed regardless of input item ord
   expect(forward.item?.id).toBe(reversed.item?.id);
 });
 
+test('orders season 1 before season 2 when a show title only differs by case, spacing, and a trailing year', () => {
+  // The same series is spelled three ways by the files it arrived from: season 2
+  // sorts before season 1 under a raw title comparison, because "show" and
+  // "Show" are prefixes of "Show (2019)".
+  const episodes: MediaItem[] = [
+    { ...item('episode-s2e1', 'episode'), showTitle: 'show', season: 2, episode: 1 },
+    { ...item('episode-s1e1', 'episode'), showTitle: 'Show (2019)', season: 1, episode: 1 },
+    { ...item('episode-s1e2', 'episode'), showTitle: 'Show', season: 1, episode: 2 },
+  ];
+  const pool: Pool = { id: 'episodes', name: 'Episodes', kinds: ['episode'], mediaIds: episodes.map(({ id }) => id), mode: 'chronological', noRepeatMinutes: 0, weight: 1 };
+  const at = '2026-09-18T20:00:00.000Z';
+  const playedIds: string[] = [];
+  const pickedIds: string[] = [];
+  for (let slot = 0; slot < episodes.length; slot += 1) {
+    const history = playedIds.map((mediaId, index) => ({ mediaId, at: `2026-09-18T19:0${index}:00.000Z` }));
+    const selection = selectCandidate({ pool, items: episodes, kind: 'episode', history, at, seed: 'selection' });
+    pickedIds.push(selection.item!.id);
+    playedIds.push(selection.item!.id);
+  }
+  expect(pickedIds).toEqual(['episode-s1e1', 'episode-s1e2', 'episode-s2e1']);
+});
+
+test('keeps distinct movie remake years in title order', () => {
+  const movies: MediaItem[] = [
+    { ...item('a-new-remake', 'movie'), title: 'Dune (2021)' },
+    { ...item('z-old-original', 'movie'), title: 'Dune (1984)' },
+  ];
+  const pool: Pool = { id: 'movies', name: 'Movies', kinds: ['movie'], mediaIds: movies.map(({ id }) => id), mode: 'chronological', noRepeatMinutes: 0, weight: 1 };
+
+  expect(select(pool, movies, 'movie')?.id).toBe('z-old-original');
+});
+
 test('enforces cooldown unless relaxation is explicitly enabled', () => {
   const episode = item('episode', 'episode');
   const pool: Pool = { id: 'episodes', name: 'Episodes', kinds: ['episode'], mediaIds: [episode.id], mode: 'chronological', noRepeatMinutes: 120, weight: 1 };

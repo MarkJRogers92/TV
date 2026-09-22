@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="720" viewBox="0 0 960 720" role="img" aria-label="MarkTV back-to-program template">
+<title>MarkTV back-to-program — prototype template</title>
+<rect width="960" height="720" fill="#dfba49"/><path d="M0 0H960V215L0 280Z" fill="#49356e"/><rect x="48" y="250" width="866" height="147" fill="#2c2044"/><path d="M48 410H914" stroke="#6e512c" stroke-width="3"/><path d="M0 619H960V720H0Z" fill="#34314e"/>
+{{LOGO}}
+<text x="64" y="166" fill="#ffffff" font-family="Arial,Helvetica,sans-serif" font-size="30" font-weight="700" letter-spacing="3">{{LABEL}}</text>
+<text x="64" y="294" fill="#ffffff" font-family="Arial,Helvetica,sans-serif" font-size="54" font-weight="900">{{TITLE_1}}</text>
+<text x="64" y="355" fill="#ffffff" font-family="Arial,Helvetica,sans-serif" font-size="54" font-weight="900">{{TITLE_2}}</text>
+<g fill="#35283d" font-family="Arial,Helvetica,sans-serif" font-size="28" font-weight="600">
+<text x="64" y="442">{{DETAIL_1}}</text><text x="64" y="482">{{DETAIL_2}}</text><text x="64" y="522">{{DETAIL_3}}</text><text x="64" y="562">{{DETAIL_4}}</text>
+</g>
+<text x="64" y="661" fill="#efeee6" font-family="Arial,Helvetica,sans-serif" font-size="16" letter-spacing="1">{{FOOTER}}</text>
+</svg>

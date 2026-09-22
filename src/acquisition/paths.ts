@@ -20,6 +20,11 @@ export interface ManagedPaths {
   readonly libraryIdentity: ManagedDirectoryIdentity;
 }
 
+export interface ManagedPathOverrides {
+  readonly inbox?: string;
+  readonly library?: string;
+}
+
 /** A resolved directory identity detects replacement after startup. */
 export interface ManagedDirectoryIdentity {
   readonly path: string;
@@ -206,11 +211,20 @@ export async function assertManagedDirectory(
     throw new ManagedPathError("Managed directory was replaced");
 }
 
+function explicitManagedPath(path: string | undefined, fallback: string, field: string): string {
+  if (path === undefined) return fallback;
+  if (!isAbsolute(path)) throw new ManagedPathError(`${field} must be an absolute path`);
+  return path;
+}
+
 /** Creates and then verifies the only directories used by acquisition writes. */
-export async function initializeManagedPaths(dataDir: string): Promise<ManagedPaths> {
+export async function initializeManagedPaths(
+  dataDir: string,
+  overrides: ManagedPathOverrides = {},
+): Promise<ManagedPaths> {
   const root = await ensureDirectory(dataDir);
-  const inbox = await ensureDirectory(join(root, "inbox"));
-  const library = await ensureDirectory(join(root, "library"));
+  const inbox = await ensureDirectory(explicitManagedPath(overrides.inbox, join(root, "inbox"), "Inbox"));
+  const library = await ensureDirectory(explicitManagedPath(overrides.library, join(root, "library"), "Library"));
   return {
     inbox,
     library,

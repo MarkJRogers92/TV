@@ -12,7 +12,16 @@
     "lint": "eslint .",
     "test:browser": "playwright test",
     "verify:restart": "node scripts/verify-production-restart.mjs",
-    "verify:playback": "node scripts/verify-playback.mjs"
+    "verify:playback": "node scripts/verify-playback.mjs",
+    "continuity:preview": "tsx scripts/prepare-continuity-preview.ts",
+    "continuity:validate-assets": "tsx scripts/validate-continuity-assets.ts",
+    "continuity:prepare-cards": "tsx scripts/prepare-continuity-assets.ts",
+    "continuity:verify-day": "tsx scripts/verify-continuity-live-day.ts",
+    "continuity:prepare-general-cards": "tsx scripts/prepare-general-bumper-cards.ts",
+    "continuity:render-general-cards": "tsx scripts/render-general-bumper-cards.ts",
+    "continuity:register-general-cards": "tsx scripts/register-general-bumper-cards.ts",
+    "continuity:activate-general-cards": "tsx scripts/activate-general-station-cards.ts",
+    "continuity:deactivate-general-cards": "tsx scripts/deactivate-general-station-cards.ts"
   },
   "dependencies": {
     "@fastify/static": "^10.1.3",

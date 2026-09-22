@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "productionReady": false,
+  "assets": [
+    {
+      "id": "EXAMPLE-NOT-A-LIVE-ASSET",
+      "kind": "return",
+      "status": "script-only",
+      "filePath": null,
+      "fileSha256": null,
+      "durationMs": null,
+      "videoProfile": null,
+      "audioProfile": null,
+      "scriptId": "show-roseanne-return-a",
+      "personaId": "local",
+      "sourceAssetId": null,
+      "scope": "airing-bound",
+      "channelId": null,
+      "airingId": null,
+      "logicalProgramId": null,
+      "seriesId": null,
+      "targetAiringIds": [],
+      "scheduleRevision": null,
+      "validFromUtc": null,
+      "validUntilUtc": null,
+      "eligibilityGuards": [
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "lastPlayedUtc": null,
+      "airReady": false
+    }
+  ]
+}

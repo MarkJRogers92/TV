@@ -61,6 +61,7 @@ function stubClient(overrides = {}) {
   return {
     listWanted: async () => [{ ...wantedEntry }],
     listSeasonPacks: async () => [{ ...pack }],
+    listWantedMovies: async () => [],
     addWanted: async (input: unknown) => ({ ...wantedEntry, id: "wanted-2", ...(input as object), stremioUrl: "stremio:///search?search=New", job: null, review: null }),
     removeWanted: async () => ({ ...wantedEntry }),
     retryJob: async () => ({ status: "queued", job: wantedEntry.job }),
@@ -239,4 +240,112 @@ test("does not arm the refresh timer when every Wanted item is terminal", async 
   expect(listWanted).toHaveBeenCalledTimes(1);
   expect(listSeasonPacks).toHaveBeenCalledTimes(1);
   vi.useRealTimers();
+});
+
+const movieEntry = {
+  id: "movie-1",
+  title: "Dune",
+  year: 2021,
+  status: "wanted",
+  statusDetail: null,
+  createdAt: "2026-09-14T00:00:00.000Z",
+  updatedAt: "2026-09-14T00:00:00.000Z",
+  stremioUrl: "stremio:///search?search=Dune%202021",
+};
+
+/** The movie card, scoped so it cannot match the episode's identical link label. */
+function movieCard(title: string) {
+  return screen.getByText(title).closest("article") as HTMLElement;
+}
+
+test("movie list renders status and the exact Stremio link, and adds a movie", async () => {
+  const addWantedMovie = vi.fn(async () => ({
+    ...movieEntry,
+    id: "movie-2",
+    title: "Arrival",
+    year: 2016,
+    stremioUrl: "stremio:///search?search=Arrival%202016",
+  }));
+  render(
+    <Wanted
+      client={stubClient({ listWantedMovies: async () => [{ ...movieEntry }], addWantedMovie }) as never}
+    />,
+  );
+
+  expect(await screen.findByText("Wanted movies (1)")).toBeVisible();
+  const card = movieCard("Dune (2021)");
+  expect(within(card).getByText("Wanted")).toBeVisible();
+  expect(within(card).getByRole("link", { name: "Open in Stremio" }).getAttribute("href")).toBe(
+    movieEntry.stremioUrl,
+  );
+
+  fireEvent.change(screen.getByLabelText("Movie title"), { target: { value: "Arrival" } });
+  fireEvent.change(screen.getByLabelText("Year (optional)"), { target: { value: "2016" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add movie" }));
+  await screen.findByText(/Added Arrival/);
+  expect(addWantedMovie).toHaveBeenCalledWith({ title: "Arrival", year: 2016 });
+  expect(screen.getByText("Wanted movies (2)")).toBeVisible();
+});
+
+test("a movie add sends a null year when the year is left blank", async () => {
+  const addWantedMovie = vi.fn(async () => ({ ...movieEntry, year: null, stremioUrl: "stremio:///search?search=Dune" }));
+  render(<Wanted client={stubClient({ addWantedMovie }) as never} />);
+  await screen.findByText("Wanted movies (0)");
+
+  fireEvent.change(screen.getByLabelText("Movie title"), { target: { value: "Dune" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add movie" }));
+  await screen.findByText(/Added Dune/);
+  expect(addWantedMovie).toHaveBeenCalledWith({ title: "Dune", year: null });
+});
+
+test("movie add validates the title and a malformed year without calling the API", async () => {
+  const addWantedMovie = vi.fn();
+  render(<Wanted client={stubClient({ addWantedMovie }) as never} />);
+  await screen.findByText("Wanted movies (0)");
+
+  fireEvent.click(screen.getByRole("button", { name: "Add movie" }));
+  expect(await screen.findByText("Enter a movie title.")).toBeVisible();
+
+  fireEvent.change(screen.getByLabelText("Movie title"), { target: { value: "Dune" } });
+  fireEvent.change(screen.getByLabelText("Year (optional)"), { target: { value: "abc" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add movie" }));
+  expect(await screen.findByText("Enter a valid release year, or leave it blank.")).toBeVisible();
+  expect(addWantedMovie).not.toHaveBeenCalled();
+});
+
+test("a movie with no year renders unparenthesised and its link omits the year", async () => {
+  render(
+    <Wanted
+      client={stubClient({
+        listWantedMovies: async () => [{ ...movieEntry, year: null, stremioUrl: "stremio:///search?search=Dune" }],
+      }) as never}
+    />,
+  );
+
+  expect(await screen.findByText("Wanted movies (1)")).toBeVisible();
+  const card = movieCard("Dune");
+  expect(within(card).getByRole("link", { name: "Open in Stremio" }).getAttribute("href")).toBe(
+    "stremio:///search?search=Dune",
+  );
+});
+
+test("removing a movie calls the API and drops it from the list", async () => {
+  const removeWantedMovie = vi.fn(async () => ({ ...movieEntry }));
+  render(
+    <Wanted
+      client={stubClient({ listWantedMovies: async () => [{ ...movieEntry }], removeWantedMovie }) as never}
+    />,
+  );
+
+  await screen.findByText("Wanted movies (1)");
+  fireEvent.click(screen.getByRole("button", { name: "Remove movie" }));
+  await screen.findByText(/Removed Dune \(2021\)/);
+  expect(removeWantedMovie).toHaveBeenCalledWith("movie-1");
+  expect(screen.getByText("Wanted movies (0)")).toBeVisible();
+});
+
+test("the movie section is reachable and honest when nothing is wanted", async () => {
+  render(<Wanted client={stubClient() as never} />);
+  expect(await screen.findByText("No wanted movies yet.")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Add movie" })).toBeVisible();
 });

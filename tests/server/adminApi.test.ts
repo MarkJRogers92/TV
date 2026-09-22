@@ -136,6 +136,53 @@ test("persists, scans, and removes explicit read-only media roots with safe erro
   });
   expect(unsafe.statusCode).toBe(422);
   expect(unsafe.json()).toMatchObject({ code: "INVALID_SCAN_ROOT" });
+
+  // A generated continuity card lives inside the mapped root, so a later scan
+  // rediscovers the file. It must not mint a second, untagged catalog entry that
+  // would let the same file leak into another day's pools as ordinary filler.
+  const cardDirectory = join(mediaRoot, "generated", "continuity");
+  await mkdir(cardDirectory, { recursive: true });
+  const cardPath = join(cardDirectory, "next-card.mp4");
+  await writeFile(cardPath, "fixture");
+  const card = {
+    id: "continuity-test-card",
+    source: "local-folder",
+    path: cardPath,
+    kind: "bumper",
+    title: "marktv continuity next",
+    durationMs: 5000,
+    durationStatus: "ok",
+    available: true,
+    tags: ["continuity", "schedule-scoped-continuity", "continuity-hash=abc"],
+  };
+  expect(
+    (
+      await app.inject({
+        method: "PUT",
+        url: `/api/v1/media/${card.id}`,
+        payload: card,
+      })
+    ).statusCode,
+  ).toBe(200);
+  expect(
+    (
+      await app.inject({
+        method: "POST",
+        url: `/api/v1/media/roots/${root.id}/scan`,
+      })
+    ).statusCode,
+  ).toBe(200);
+  const catalog = (await app.inject("/api/v1/media")).json() as Array<{
+    id: string;
+    path?: string;
+    tags: string[];
+  }>;
+  expect(catalog.filter((item) => item.path === cardPath)).toEqual([
+    expect.objectContaining({
+      id: "continuity-test-card",
+      tags: expect.arrayContaining(["schedule-scoped-continuity"]),
+    }),
+  ]);
   expect(
     (
       await app.inject({
@@ -315,9 +362,13 @@ test("rejects malformed channel and generation dates without replacing persisted
   });
   expect(invalidDate.statusCode).toBe(422);
   expect(invalidDate.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+  // Asked by the date this test generated: the endpoint answers for a
+  // broadcast date, not for whatever row happens to be newest.
   expect(
     (
-      await app.inject(`/api/v1/schedules/latest?channelId=${channel.id}`)
+      await app.inject(
+        `/api/v1/schedules/latest?channelId=${channel.id}&date=2026-09-13`,
+      )
     ).json().id,
   ).toBe(original.json().schedule.id);
   await app.close();
@@ -465,7 +516,9 @@ test("an export failure does not replace the prior successful schedule", async (
   expect(failed.json()).toMatchObject({ code: "EXPORT_FAILED" });
   expect(
     (
-      await app.inject("/api/v1/schedules/latest?channelId=marktv-laughs")
+      await app.inject(
+        "/api/v1/schedules/latest?channelId=marktv-laughs&date=2026-09-13",
+      )
     ).json().id,
   ).toBe(first.json().schedule.id);
   await app.close();

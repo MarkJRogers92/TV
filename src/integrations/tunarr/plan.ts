@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Schedule, ScheduleEntry } from "../../domain/models.js";
 import { normalizeLocalPath } from "./client.js";
+import { assertPreservedMovies, splicePreservedLineup } from "./preserveLineup.js";
 import type {
   TunarrCapabilities,
   TunarrChannel,
@@ -111,6 +112,67 @@ function saveableExisting(channel: TunarrChannel, schedule: Schedule) {
   return { ...saveable, ...channelIdentity(schedule) };
 }
 
+/**
+ * The states in which Tunarr can be asked to play a program.
+ *
+ * Fail closed: a program that declares any other state is treated as unplayable.
+ * An unrecognized state is not evidence that the file is there, and the two
+ * mistakes are not symmetric - refusing a plan costs a retry, while programming
+ * something Tunarr cannot play is dead air on a channel nobody is watching at
+ * the time.
+ */
+const playableProgramStates = new Set([
+  "ok",
+  "ready",
+  "available",
+  "present",
+  "healthy",
+  "scanned",
+]);
+
+type DeclaredAvailability = {
+  state?: unknown;
+  available?: unknown;
+  program?: {
+    state?: unknown;
+    available?: unknown;
+    mediaItem?: { state?: unknown; available?: unknown };
+  };
+};
+
+/**
+ * Why Tunarr itself says this inventory program cannot be played, if it does.
+ *
+ * `GET /api/media-libraries/:libraryId/programs` keeps listing a program whose
+ * file has been renamed or deleted, still carrying the absolute path that
+ * MarkTV matches against, and reports it with a state of `missing`. A plan built
+ * on one of those looks eligible and is not, which is the failure this catches.
+ */
+export function unusableInventoryReason(
+  item: TunarrInventory[number],
+): string | undefined {
+  const wrapper = (item.program ?? {}) as DeclaredAvailability;
+  const terminal = (wrapper.program ?? {}) as NonNullable<
+    DeclaredAvailability["program"]
+  >;
+  const mediaItem = (terminal.mediaItem ?? {}) as {
+    state?: unknown;
+    available?: unknown;
+  };
+  if (
+    [wrapper.available, terminal.available, mediaItem.available].some(
+      (value) => value === false,
+    )
+  )
+    return "unavailable";
+  for (const value of [wrapper.state, terminal.state, mediaItem.state]) {
+    if (typeof value !== "string") continue;
+    const state = value.trim().toLowerCase();
+    if (state && !playableProgramStates.has(state)) return state;
+  }
+  return undefined;
+}
+
 function matchEntry(
   entry: ScheduleEntry,
   inventory: TunarrInventory,
@@ -126,14 +188,35 @@ function matchEntry(
     return;
   }
   const path = normalizeLocalPath(entry.path);
-  const matches = inventory.filter((item) => item.path === path);
+  const candidates = inventory.filter((item) => item.path === path);
+  // A program Tunarr says it cannot play never satisfies the match. MarkTV only
+  // knows the absolute path, so a renamed or deleted file still matches it
+  // exactly; Tunarr knows the file is gone, and a lineup built on that program
+  // airs as offline time instead of failing where someone would notice.
+  const matches = candidates.filter(
+    (item) => unusableInventoryReason(item) === undefined,
+  );
+  if (!matches.length) {
+    // Counted as a miss rather than a match: nothing playable answers the path.
+    counts.unmatched += 1;
+    const reasons = [
+      ...new Set(
+        candidates.map((item) => unusableInventoryReason(item) ?? "unusable"),
+      ),
+    ];
+    blockingErrors.push(
+      reasons.length
+        ? {
+            code: "UNUSABLE_MEDIA_STATE",
+            message: `${path} is in Tunarr's library but cannot be played (${reasons.join(", ")})`,
+          }
+        : { code: "UNMATCHED_MEDIA_PATH", message: path },
+    );
+    return;
+  }
   if (matches.length !== 1) {
-    if (matches.length) counts.ambiguous += 1;
-    else counts.unmatched += 1;
-    blockingErrors.push({
-      code: matches.length ? "AMBIGUOUS_MEDIA_PATH" : "UNMATCHED_MEDIA_PATH",
-      message: path,
-    });
+    counts.ambiguous += 1;
+    blockingErrors.push({ code: "AMBIGUOUS_MEDIA_PATH", message: path });
     return;
   }
   counts.matched += 1;
@@ -151,7 +234,9 @@ function validMidrollLayout(entry: ScheduleEntry) {
     entry.durationMs
   )
     return false;
-  let previousOffset = 0;
+  // -1 rather than 0: a film that resumes exactly on one of its breaks opens its
+  // continuation with that break, at offset zero.
+  let previousOffset = -1;
   for (const midroll of breaks) {
     if (
       !Number.isInteger(midroll.offsetMs) ||
@@ -172,19 +257,32 @@ function splitContent(
   midrollPods: Array<TunarrLineup | undefined>,
 ): TunarrLineup {
   const breaks = entry.midrolls ?? [];
+  // A movie that crossed a broadcast day boundary resumes partway through the
+  // file, so every content segment is quoted at its offset in the SOURCE rather
+  // than at its offset in this entry. Tunarr plays the file from there instead of
+  // restarting it.
+  const sourceBase = entry.sourceOffsetMs ?? 0;
   if (!breaks.length)
-    return [{ type: "content", id: contentId, duration: entry.durationMs }];
+    return [
+      {
+        type: "content",
+        id: contentId,
+        duration: entry.durationMs,
+        ...(sourceBase ? { startOffsetMs: sourceBase } : {}),
+      },
+    ];
   const contentDurationMs = entry.contentDurationMs!;
   const lineup: TunarrLineup = [];
   let offset = 0;
   for (const [index, midroll] of breaks.entries()) {
-    if (midroll.offsetMs <= offset) continue;
-    lineup.push({
-      type: "content",
-      id: contentId,
-      duration: midroll.offsetMs - offset,
-      startOffsetMs: offset,
-    });
+    if (midroll.offsetMs < offset) continue;
+    if (midroll.offsetMs > offset)
+      lineup.push({
+        type: "content",
+        id: contentId,
+        duration: midroll.offsetMs - offset,
+        startOffsetMs: sourceBase + offset,
+      });
     lineup.push(
       ...(midrollPods[index] ?? [
         { type: "flex" as const, duration: midroll.durationMs },
@@ -197,7 +295,7 @@ function splitContent(
       type: "content",
       id: contentId,
       duration: contentDurationMs - offset,
-      startOffsetMs: offset,
+      startOffsetMs: sourceBase + offset,
     });
   }
   return lineup;
@@ -207,10 +305,15 @@ function selectExactMidrollFill(
   candidates: MidrollCandidate[],
   targetDuration: number,
   seed: string,
+  exclude?: ReadonlySet<string>,
 ): TunarrLineup | undefined {
-  const ordered = [...candidates].sort((left, right) =>
-    hash(`${seed}:${left.id}`).localeCompare(hash(`${seed}:${right.id}`)),
-  );
+  // Ranked before the exclusion is applied, so adding the exclusion changes which
+  // spots are available but never reshuffles the ranking they are drawn from.
+  const ordered = [...candidates]
+    .sort((left, right) =>
+      hash(`${seed}:${left.id}`).localeCompare(hash(`${seed}:${right.id}`)),
+    )
+    .filter((candidate) => !exclude?.has(candidate.id));
 
   const byDuration = new Map<number, MidrollCandidate[]>();
   for (const candidate of ordered) {
@@ -370,7 +473,11 @@ export function buildTunarrSyncPlan(
     const match = matchEntry(entry, inventory, blockingErrors, matchCounts);
     if (!match) continue;
     entryMatches.set(entry.id, match);
-    if (fillerKinds.has(entry.kind) && match.program.duration > 0) {
+    // These cards describe one exact airing. Keep their explicit lineup slot,
+    // but never let the ordinary mid-roll/filler bag replay them elsewhere.
+    const scheduleBoundCard = entry.id.startsWith("continuity:generated:")
+      || entry.path?.replaceAll("\\", "/").includes("/generated/continuity/");
+    if (!scheduleBoundCard && fillerKinds.has(entry.kind) && match.program.duration > 0) {
       matches.set(match.id, match.program);
       midrollCandidates.set(match.id, {
         id: match.id,
@@ -397,12 +504,25 @@ export function buildTunarrSyncPlan(
         });
         continue;
       }
+      // One programme's breaks are drawn like a bag: a spot used in its first
+      // break is not offered again in its second while anything else can make the
+      // exact duration, so a film with four breaks does not play the same
+      // commercial four times. Episodes get the same treatment.
+      const usedWithinEntry = new Set<string>();
       midrollPods = entry.midrolls.map((midroll, index) => {
-        const pod = selectExactMidrollFill(
-          [...midrollCandidates.values()],
-          midroll.durationMs,
-          `${schedule.seed}:${entry.id}:${index}`,
-        );
+        const candidates = [...midrollCandidates.values()];
+        const seed = `${schedule.seed}:${entry.id}:${index}`;
+        const preferred = usedWithinEntry.size
+          ? selectExactMidrollFill(candidates, midroll.durationMs, seed, usedWithinEntry)
+          : selectExactMidrollFill(candidates, midroll.durationMs, seed);
+        // Excluding can make the exact duration unreachable - the library may only
+        // hold one spot of the right length. Falling back to the unused-inclusive
+        // draw is the honest answer there: repeat a spot rather than leave a break
+        // that Tunarr cannot fill.
+        const pod = preferred ?? selectExactMidrollFill(candidates, midroll.durationMs, seed);
+        for (const item of pod ?? [])
+          if ("id" in item && typeof item.id === "string")
+            usedWithinEntry.add(item.id);
         if (!pod && midrollCandidates.size) {
           blockingErrors.push({
             code: "MIDROLL_EXACT_FILL_UNAVAILABLE",
@@ -452,10 +572,37 @@ export function buildTunarrSyncPlan(
         "Tunarr lineup duration does not exactly match the MarkTV schedule",
     });
   }
+  let publishedLineup = lineup;
+  if (mapping.preserveExistingLineup) {
+    try {
+      const existing = snapshots.channels.find(channel => channel.id === mapping.channelId);
+      if (mapping.createChannel || !existing || !snapshots.programming)
+        throw new Error("Preserved lineup requires an existing channel and programming snapshot");
+      const movieIds = new Set(Object.entries(snapshots.programming.programs)
+        .filter(([, program]) => program.program.type === "movie").map(([id]) => id));
+      for (const entry of schedule.entries) {
+        if (entry.kind === "movie") {
+          const match = entryMatches.get(entry.id);
+          if (match) movieIds.add(match.id);
+        }
+      }
+      assertPreservedMovies(snapshots.programming.lineup,
+        Date.parse(schedule.entries[0]!.start) - existing.startTime, lineup, movieIds);
+      publishedLineup = splicePreservedLineup(snapshots.programming.lineup,
+        existing.startTime, Date.parse(schedule.entries[0]!.start), lineup);
+      const operation = operations.find(operation => operation.type === "channel-update");
+      if (operation?.type === "channel-update") {
+        operation.payload.startTime = existing.startTime;
+        operation.payload.duration = existing.duration;
+      }
+    } catch (error) {
+      blockingErrors.push({ code: "PRESERVED_LINEUP_INVALID", message: error instanceof Error ? error.message : "Could not preserve existing lineup" });
+    }
+  }
   operations.push({
     type: "programming",
     channelId: resolvedChannelId,
-    payload: lineup,
+    payload: publishedLineup,
   });
 
   const fingerprint = hash({

@@ -9,6 +9,13 @@ import {
   poolSchema,
   scheduleSchema,
 } from "../domain/models.js";
+import {
+  movieOccurrenceSchema,
+  movieRotationSchema,
+  type MovieOccurrence,
+  type MoviePosition,
+  type MovieRotationRecord,
+} from "../domain/movieProgramming.js";
 
 export type AcquisitionImportCompletion = {
   media: MediaItem;
@@ -243,21 +250,56 @@ export function createRepositories(database: MarkTvDatabase) {
           .map((row: unknown) =>
             scheduleSchema.parse(JSON.parse((row as { json: string }).json)),
           ),
-      historyBefore: (channelId: string, date: string) =>
+      /**
+       * Drops the stored schedules for broadcast dates AFTER `date`.
+       *
+       * The quiet-hours pass pre-generates tomorrow, so a configuration change
+       * leaves a stored future day that plans the old programming. Rebuilding it
+       * is the fix; deleting it is what makes the rebuild happen. Scoped to dates
+       * strictly after the caller's cutoff, so the day being broadcast right now
+       * - and every day already aired - is untouched.
+       */
+      removeAfterDate: (channelId: string, date: string): number =>
         database
+          .prepare(
+            "DELETE FROM schedule_generations WHERE channel_id = ? AND json_extract(json, '$.date') > ?",
+          )
+          .run(channelId, date).changes,
+      /**
+       * What actually aired on the broadcast dates before `date`.
+       *
+       * Only the newest generation of each prior date counts. A date is
+       * routinely generated more than once - a media rescan, a configuration
+       * edit, or the quiet-hours pass replacing a schedule it already wrote -
+       * and a regeneration supersedes the schedule it replaced rather than
+       * adding a second airing of the same window. Counting the superseded rows
+       * as well double-counts every slot they shared, which is not merely
+       * wasteful: selection walks its chronological cursor forward from the
+       * newest play, so a superseded generation that ended earlier in a series
+       * drags that cursor backwards and the next day replays episodes that
+       * already aired.
+       *
+       * Rows are ordered by `generation_id`, so the last row seen for a date is
+       * that date's newest generation.
+       */
+      historyBefore: (channelId: string, date: string) => {
+        const rows = database
           .prepare(
             "SELECT json FROM schedule_generations WHERE channel_id = ? ORDER BY generation_id",
           )
-          .all(channelId)
-          .map((row: unknown) =>
-            scheduleSchema.parse(JSON.parse((row as { json: string }).json)),
-          )
-          .filter((schedule) => schedule.date < date)
-          .flatMap((schedule) =>
-            schedule.entries
-              .filter((entry) => entry.kind !== "flex" && entry.mediaId)
-              .map((entry) => ({ mediaId: entry.mediaId!, at: entry.start })),
-          ),
+          .all(channelId) as Array<{ json: string }>;
+        const newestPerDate = new Map<string, Schedule>();
+        for (const row of rows) {
+          const schedule = scheduleSchema.parse(JSON.parse(row.json));
+          if (schedule.date >= date) continue;
+          newestPerDate.set(schedule.date, schedule);
+        }
+        return [...newestPerDate.values()].flatMap((schedule) =>
+          schedule.entries
+            .filter((entry) => entry.kind !== "flex" && entry.mediaId)
+            .map((entry) => ({ mediaId: entry.mediaId!, at: entry.start })),
+        );
+      },
       replaceSuccessful: (channelId: string, schedule: Schedule) => {
         const validated = scheduleSchema.parse(schedule);
         if (validated.channelId !== channelId)
@@ -329,6 +371,107 @@ export function createRepositories(database: MarkTvDatabase) {
                )`,
           )
           .run(`${prefix}%`, `${prefix}%`, keep),
+    },
+    /**
+     * The movie-programming feature's rotation bag, one row per channel.
+     *
+     * Kept out of `documents` because it is read on every generation and written
+     * only when the eligible movie set changes.
+     */
+    movieRotations: {
+      get: (channelId: string): MovieRotationRecord | undefined => {
+        const row = database
+          .prepare("SELECT json FROM movie_rotation WHERE channel_id = ?")
+          .get(channelId) as { json: string } | undefined;
+        return row ? movieRotationSchema.parse(JSON.parse(row.json)) : undefined;
+      },
+      put: (rotation: MovieRotationRecord): MovieRotationRecord => {
+        const validated = movieRotationSchema.parse(rotation);
+        database
+          .prepare(
+            "INSERT OR REPLACE INTO movie_rotation(channel_id, updated_at, json) VALUES (?, ?, ?)",
+          )
+          .run(validated.channelId, validated.updatedAt, JSON.stringify(validated));
+        return validated;
+      },
+      remove: (channelId: string) =>
+        database
+          .prepare("DELETE FROM movie_rotation WHERE channel_id = ?")
+          .run(channelId),
+    },
+    /**
+     * Dated movie assignments, including the encores that reuse an earlier one.
+     *
+     * Written once per (channel, date, position) and never rewritten, so a
+     * preview, a rescan or a restart reads the same assignment instead of
+     * consuming the rotation a second time.
+     */
+    movieOccurrences: {
+      get: (
+        channelId: string,
+        date: string,
+        position: MoviePosition,
+      ): MovieOccurrence | undefined => {
+        const row = database
+          .prepare(
+            "SELECT json FROM movie_occurrences WHERE channel_id = ? AND broadcast_date = ? AND position = ?",
+          )
+          .get(channelId, date, position) as { json: string } | undefined;
+        return row
+          ? movieOccurrenceSchema.parse(JSON.parse(row.json))
+          : undefined;
+      },
+      listForDate: (channelId: string, date: string): MovieOccurrence[] =>
+        database
+          .prepare(
+            "SELECT json FROM movie_occurrences WHERE channel_id = ? AND broadcast_date = ? ORDER BY position",
+          )
+          .all(channelId, date)
+          .map((row: unknown) =>
+            movieOccurrenceSchema.parse(
+              JSON.parse((row as { json: string }).json),
+            ),
+          ),
+      listForChannel: (channelId: string): MovieOccurrence[] =>
+        database
+          .prepare(
+            "SELECT json FROM movie_occurrences WHERE channel_id = ? ORDER BY broadcast_date, position",
+          )
+          .all(channelId)
+          .map((row: unknown) =>
+            movieOccurrenceSchema.parse(
+              JSON.parse((row as { json: string }).json),
+            ),
+          ),
+      put: (occurrence: MovieOccurrence): MovieOccurrence => {
+        const validated = movieOccurrenceSchema.parse(occurrence);
+        database
+          .prepare(
+            `INSERT OR REPLACE INTO movie_occurrences(channel_id, broadcast_date, position, json)
+             VALUES (?, ?, ?, ?)`,
+          )
+          .run(
+            validated.channelId,
+            validated.date,
+            validated.position,
+            JSON.stringify(validated),
+          );
+        return validated;
+      },
+      /**
+       * Drops the assignments for broadcast dates AFTER `date`.
+       *
+       * A movie-programming change rewrites the future - a new anchor, a different
+       * pool, the feature switched off - so future assignments derived from the old
+       * configuration are stale even though the rotation they came from is not.
+       * Aired and currently-airing dates are left exactly as they were.
+       */
+      removeAfterDate: (channelId: string, date: string): number =>
+        database
+          .prepare(
+            "DELETE FROM movie_occurrences WHERE channel_id = ? AND broadcast_date > ?",
+          )
+          .run(channelId, date).changes,
     },
     transaction: <T>(operation: () => T): T =>
       database.transaction(operation)(),

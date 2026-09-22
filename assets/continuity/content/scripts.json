@@ -1,0 +1,3728 @@
+{
+  "schemaVersion": 1,
+  "notes": "Original draft copy. Timings are slot targets, not measured audio durations. Eligibility guards must be implemented in the live app; this file alone does not enforce them.",
+  "lines": [
+    {
+      "id": "show-roseanne-break-a",
+      "role": "break",
+      "text": "More Roseanne after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "roseanne",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-roseanne-break-b",
+      "role": "break",
+      "text": "Roseanne continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "roseanne",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-roseanne-return-a",
+      "role": "return",
+      "text": "And now, back to Roseanne.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "roseanne",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-roseanne-return-b",
+      "role": "return",
+      "text": "You’re watching Roseanne on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "roseanne",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-roseanne-next-a",
+      "role": "next",
+      "text": "Coming up next: Roseanne, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "roseanne",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-roseanne-next-b",
+      "role": "next",
+      "text": "Stay with us. Roseanne is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "roseanne",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-home-improvement-break-a",
+      "role": "break",
+      "text": "More Home Improvement after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "home-improvement",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-home-improvement-break-b",
+      "role": "break",
+      "text": "Home Improvement continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "home-improvement",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-home-improvement-return-a",
+      "role": "return",
+      "text": "And now, back to Home Improvement.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "home-improvement",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-home-improvement-return-b",
+      "role": "return",
+      "text": "You’re watching Home Improvement on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "home-improvement",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-home-improvement-next-a",
+      "role": "next",
+      "text": "Coming up next: Home Improvement, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "home-improvement",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-home-improvement-next-b",
+      "role": "next",
+      "text": "Stay with us. Home Improvement is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "home-improvement",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-married-with-children-break-a",
+      "role": "break",
+      "text": "More Married with Children after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "married-with-children",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-married-with-children-break-b",
+      "role": "break",
+      "text": "Married with Children continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "married-with-children",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-married-with-children-return-a",
+      "role": "return",
+      "text": "And now, back to Married with Children.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "married-with-children",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-married-with-children-return-b",
+      "role": "return",
+      "text": "You’re watching Married with Children on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "married-with-children",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-married-with-children-next-a",
+      "role": "next",
+      "text": "Coming up next: Married with Children, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "married-with-children",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-married-with-children-next-b",
+      "role": "next",
+      "text": "Stay with us. Married with Children is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "married-with-children",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-grace-under-fire-break-a",
+      "role": "break",
+      "text": "More Grace Under Fire after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "grace-under-fire",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-grace-under-fire-break-b",
+      "role": "break",
+      "text": "Grace Under Fire continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "grace-under-fire",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-grace-under-fire-return-a",
+      "role": "return",
+      "text": "And now, back to Grace Under Fire.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "grace-under-fire",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-grace-under-fire-return-b",
+      "role": "return",
+      "text": "You’re watching Grace Under Fire on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "grace-under-fire",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-grace-under-fire-next-a",
+      "role": "next",
+      "text": "Coming up next: Grace Under Fire, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "grace-under-fire",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-grace-under-fire-next-b",
+      "role": "next",
+      "text": "Stay with us. Grace Under Fire is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "grace-under-fire",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-according-to-jim-break-a",
+      "role": "break",
+      "text": "More According to Jim after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "according-to-jim",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-according-to-jim-break-b",
+      "role": "break",
+      "text": "According to Jim continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "according-to-jim",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-according-to-jim-return-a",
+      "role": "return",
+      "text": "And now, back to According to Jim.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "according-to-jim",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-according-to-jim-return-b",
+      "role": "return",
+      "text": "You’re watching According to Jim on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "according-to-jim",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-according-to-jim-next-a",
+      "role": "next",
+      "text": "Coming up next: According to Jim, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "according-to-jim",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-according-to-jim-next-b",
+      "role": "next",
+      "text": "Stay with us. According to Jim is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "according-to-jim",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-that-70s-show-break-a",
+      "role": "break",
+      "text": "More That ’70s Show after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "that-70s-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-that-70s-show-break-b",
+      "role": "break",
+      "text": "That ’70s Show continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "that-70s-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-that-70s-show-return-a",
+      "role": "return",
+      "text": "And now, back to That ’70s Show.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "that-70s-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-that-70s-show-return-b",
+      "role": "return",
+      "text": "You’re watching That ’70s Show on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "that-70s-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-that-70s-show-next-a",
+      "role": "next",
+      "text": "Coming up next: That ’70s Show, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "that-70s-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-that-70s-show-next-b",
+      "role": "next",
+      "text": "Stay with us. That ’70s Show is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "that-70s-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-everybody-loves-raymond-break-a",
+      "role": "break",
+      "text": "More Everybody Loves Raymond after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "everybody-loves-raymond",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-everybody-loves-raymond-break-b",
+      "role": "break",
+      "text": "Everybody Loves Raymond continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "everybody-loves-raymond",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-everybody-loves-raymond-return-a",
+      "role": "return",
+      "text": "And now, back to Everybody Loves Raymond.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "everybody-loves-raymond",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-everybody-loves-raymond-return-b",
+      "role": "return",
+      "text": "You’re watching Everybody Loves Raymond on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "everybody-loves-raymond",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-everybody-loves-raymond-next-a",
+      "role": "next",
+      "text": "Coming up next: Everybody Loves Raymond, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "everybody-loves-raymond",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-everybody-loves-raymond-next-b",
+      "role": "next",
+      "text": "Stay with us. Everybody Loves Raymond is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "everybody-loves-raymond",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-nanny-break-a",
+      "role": "break",
+      "text": "More The Nanny after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "the-nanny",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-nanny-break-b",
+      "role": "break",
+      "text": "The Nanny continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "the-nanny",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-nanny-return-a",
+      "role": "return",
+      "text": "And now, back to The Nanny.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "the-nanny",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-nanny-return-b",
+      "role": "return",
+      "text": "You’re watching The Nanny on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "the-nanny",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-nanny-next-a",
+      "role": "next",
+      "text": "Coming up next: The Nanny, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "the-nanny",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-nanny-next-b",
+      "role": "next",
+      "text": "Stay with us. The Nanny is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "the-nanny",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-dinosaurs-break-a",
+      "role": "break",
+      "text": "More Dinosaurs after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "dinosaurs",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-dinosaurs-break-b",
+      "role": "break",
+      "text": "Dinosaurs continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "dinosaurs",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-dinosaurs-return-a",
+      "role": "return",
+      "text": "And now, back to Dinosaurs.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "dinosaurs",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-dinosaurs-return-b",
+      "role": "return",
+      "text": "You’re watching Dinosaurs on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "dinosaurs",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-dinosaurs-next-a",
+      "role": "next",
+      "text": "Coming up next: Dinosaurs, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "dinosaurs",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-dinosaurs-next-b",
+      "role": "next",
+      "text": "Stay with us. Dinosaurs is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "dinosaurs",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-drew-carey-show-break-a",
+      "role": "break",
+      "text": "More The Drew Carey Show after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "the-drew-carey-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-drew-carey-show-break-b",
+      "role": "break",
+      "text": "The Drew Carey Show continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "the-drew-carey-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-drew-carey-show-return-a",
+      "role": "return",
+      "text": "And now, back to The Drew Carey Show.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "the-drew-carey-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-drew-carey-show-return-b",
+      "role": "return",
+      "text": "You’re watching The Drew Carey Show on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "the-drew-carey-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-drew-carey-show-next-a",
+      "role": "next",
+      "text": "Coming up next: The Drew Carey Show, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "the-drew-carey-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-drew-carey-show-next-b",
+      "role": "next",
+      "text": "Stay with us. The Drew Carey Show is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "the-drew-carey-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-grounded-for-life-break-a",
+      "role": "break",
+      "text": "More Grounded for Life after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "grounded-for-life",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-grounded-for-life-break-b",
+      "role": "break",
+      "text": "Grounded for Life continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "grounded-for-life",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-grounded-for-life-return-a",
+      "role": "return",
+      "text": "And now, back to Grounded for Life.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "grounded-for-life",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-grounded-for-life-return-b",
+      "role": "return",
+      "text": "You’re watching Grounded for Life on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "grounded-for-life",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-grounded-for-life-next-a",
+      "role": "next",
+      "text": "Coming up next: Grounded for Life, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "grounded-for-life",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-grounded-for-life-next-b",
+      "role": "next",
+      "text": "Stay with us. Grounded for Life is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "grounded-for-life",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-golden-girls-break-a",
+      "role": "break",
+      "text": "More The Golden Girls after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "the-golden-girls",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-golden-girls-break-b",
+      "role": "break",
+      "text": "The Golden Girls continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "the-golden-girls",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-golden-girls-return-a",
+      "role": "return",
+      "text": "And now, back to The Golden Girls.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "the-golden-girls",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-golden-girls-return-b",
+      "role": "return",
+      "text": "You’re watching The Golden Girls on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "the-golden-girls",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-golden-girls-next-a",
+      "role": "next",
+      "text": "Coming up next: The Golden Girls, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "the-golden-girls",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-golden-girls-next-b",
+      "role": "next",
+      "text": "Stay with us. The Golden Girls is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "the-golden-girls",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-alf-break-a",
+      "role": "break",
+      "text": "More Alf after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "alf",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-alf-break-b",
+      "role": "break",
+      "text": "Alf continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "alf",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-alf-return-a",
+      "role": "return",
+      "text": "And now, back to Alf.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "alf",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-alf-return-b",
+      "role": "return",
+      "text": "You’re watching Alf on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "alf",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-alf-next-a",
+      "role": "next",
+      "text": "Coming up next: Alf, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "alf",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-alf-next-b",
+      "role": "next",
+      "text": "Stay with us. Alf is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "alf",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-cosby-show-break-a",
+      "role": "break",
+      "text": "More The Cosby Show after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "the-cosby-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-cosby-show-break-b",
+      "role": "break",
+      "text": "The Cosby Show continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "the-cosby-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-cosby-show-return-a",
+      "role": "return",
+      "text": "And now, back to The Cosby Show.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "the-cosby-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-cosby-show-return-b",
+      "role": "return",
+      "text": "You’re watching The Cosby Show on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "the-cosby-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-cosby-show-next-a",
+      "role": "next",
+      "text": "Coming up next: The Cosby Show, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "the-cosby-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-the-cosby-show-next-b",
+      "role": "next",
+      "text": "Stay with us. The Cosby Show is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "the-cosby-show",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-night-court-break-a",
+      "role": "break",
+      "text": "More Night Court after this.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "night-court",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-night-court-break-b",
+      "role": "break",
+      "text": "Night Court continues in a moment, here on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "night-court",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-night-court-return-a",
+      "role": "return",
+      "text": "And now, back to Night Court.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "night-court",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-night-court-return-b",
+      "role": "return",
+      "text": "You’re watching Night Court on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "night-court",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-night-court-next-a",
+      "role": "next",
+      "text": "Coming up next: Night Court, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "night-court",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "show-night-court-next-b",
+      "role": "next",
+      "text": "Stay with us. Night Court is next.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": "night-court",
+      "guards": [
+        "exact-catalog-match",
+        "source-file-available",
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-weekend-at-bernies-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Weekend at Bernie’s.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "weekend-at-bernies",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-weekend-at-bernies-return",
+      "role": "return",
+      "text": "And now, back to Weekend at Bernie’s on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "weekend-at-bernies",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-weekend-at-bernies-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Weekend at Bernie’s.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "weekend-at-bernies",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-beverly-hills-ninja-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Beverly Hills Ninja.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "beverly-hills-ninja",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-beverly-hills-ninja-return",
+      "role": "return",
+      "text": "And now, back to Beverly Hills Ninja on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "beverly-hills-ninja",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-beverly-hills-ninja-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Beverly Hills Ninja.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "beverly-hills-ninja",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-coneheads-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Coneheads.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "coneheads",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-coneheads-return",
+      "role": "return",
+      "text": "And now, back to Coneheads on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "coneheads",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-coneheads-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Coneheads.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "coneheads",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-tremors-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Tremors.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "tremors",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-tremors-return",
+      "role": "return",
+      "text": "And now, back to Tremors on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "tremors",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-tremors-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Tremors.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "tremors",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-the-big-green-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents The Big Green.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "the-big-green",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-the-big-green-return",
+      "role": "return",
+      "text": "And now, back to The Big Green on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "the-big-green",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-the-big-green-next",
+      "role": "next",
+      "text": "Up next on Mark TV: The Big Green.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "the-big-green",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-tommy-boy-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Tommy Boy.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "tommy-boy",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-tommy-boy-return",
+      "role": "return",
+      "text": "And now, back to Tommy Boy on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "tommy-boy",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-tommy-boy-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Tommy Boy.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "tommy-boy",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-clerks-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Clerks.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "clerks",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-clerks-return",
+      "role": "return",
+      "text": "And now, back to Clerks on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "clerks",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-clerks-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Clerks.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "clerks",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-pee-wees-big-adventure-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Pee-wee’s Big Adventure.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "pee-wees-big-adventure",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-pee-wees-big-adventure-return",
+      "role": "return",
+      "text": "And now, back to Pee-wee’s Big Adventure on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "pee-wees-big-adventure",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-pee-wees-big-adventure-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Pee-wee’s Big Adventure.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "pee-wees-big-adventure",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-waynes-world-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Wayne’s World.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "waynes-world",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-waynes-world-return",
+      "role": "return",
+      "text": "And now, back to Wayne’s World on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "waynes-world",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-waynes-world-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Wayne’s World.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "waynes-world",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-groundhog-day-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Groundhog Day.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "groundhog-day",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-groundhog-day-return",
+      "role": "return",
+      "text": "And now, back to Groundhog Day on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "groundhog-day",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-groundhog-day-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Groundhog Day.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "groundhog-day",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-encino-man-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Encino Man.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "encino-man",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-encino-man-return",
+      "role": "return",
+      "text": "And now, back to Encino Man on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "encino-man",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-encino-man-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Encino Man.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "encino-man",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-airheads-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Airheads.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "airheads",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-airheads-return",
+      "role": "return",
+      "text": "And now, back to Airheads on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "airheads",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-airheads-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Airheads.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "airheads",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-dutch-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Dutch.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "dutch",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-dutch-return",
+      "role": "return",
+      "text": "And now, back to Dutch on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "dutch",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-dutch-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Dutch.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "dutch",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-the-great-outdoors-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents The Great Outdoors.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "the-great-outdoors",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-the-great-outdoors-return",
+      "role": "return",
+      "text": "And now, back to The Great Outdoors on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "the-great-outdoors",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-the-great-outdoors-next",
+      "role": "next",
+      "text": "Up next on Mark TV: The Great Outdoors.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "the-great-outdoors",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-problem-child-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Problem Child.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "problem-child",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-problem-child-return",
+      "role": "return",
+      "text": "And now, back to Problem Child on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "problem-child",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-problem-child-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Problem Child.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "problem-child",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-heavyweights-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Heavyweights.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "heavyweights",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-heavyweights-return",
+      "role": "return",
+      "text": "And now, back to Heavyweights on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "heavyweights",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-heavyweights-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Heavyweights.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "heavyweights",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-little-giants-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Little Giants.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "little-giants",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-little-giants-return",
+      "role": "return",
+      "text": "And now, back to Little Giants on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "little-giants",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-little-giants-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Little Giants.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "little-giants",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-kingpin-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Kingpin.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "kingpin",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-kingpin-return",
+      "role": "return",
+      "text": "And now, back to Kingpin on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "kingpin",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-kingpin-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Kingpin.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "kingpin",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-bio-dome-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Bio-Dome.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "bio-dome",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-bio-dome-return",
+      "role": "return",
+      "text": "And now, back to Bio-Dome on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "bio-dome",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-bio-dome-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Bio-Dome.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "bio-dome",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-black-sheep-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Black Sheep.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "black-sheep",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-black-sheep-return",
+      "role": "return",
+      "text": "And now, back to Black Sheep on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "black-sheep",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-black-sheep-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Black Sheep.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "black-sheep",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-the-cable-guy-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents The Cable Guy.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "the-cable-guy",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-the-cable-guy-return",
+      "role": "return",
+      "text": "And now, back to The Cable Guy on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "the-cable-guy",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-the-cable-guy-next",
+      "role": "next",
+      "text": "Up next on Mark TV: The Cable Guy.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "the-cable-guy",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-mars-attacks-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Mars Attacks!.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "mars-attacks",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-mars-attacks-return",
+      "role": "return",
+      "text": "And now, back to Mars Attacks! on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "mars-attacks",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-mars-attacks-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Mars Attacks!.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "mars-attacks",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-ernest-scared-stupid-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Ernest Scared Stupid.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "ernest-scared-stupid",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-ernest-scared-stupid-return",
+      "role": "return",
+      "text": "And now, back to Ernest Scared Stupid on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "ernest-scared-stupid",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-ernest-scared-stupid-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Ernest Scared Stupid.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "ernest-scared-stupid",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-the-burbs-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents The Burbs.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "the-burbs",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-the-burbs-return",
+      "role": "return",
+      "text": "And now, back to The Burbs on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "the-burbs",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-the-burbs-next",
+      "role": "next",
+      "text": "Up next on Mark TV: The Burbs.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "the-burbs",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-arachnophobia-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Arachnophobia.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "arachnophobia",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-arachnophobia-return",
+      "role": "return",
+      "text": "And now, back to Arachnophobia on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "arachnophobia",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-arachnophobia-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Arachnophobia.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "arachnophobia",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-chairman-of-the-board-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Chairman of the Board.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "chairman-of-the-board",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-chairman-of-the-board-return",
+      "role": "return",
+      "text": "And now, back to Chairman of the Board on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "chairman-of-the-board",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-chairman-of-the-board-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Chairman of the Board.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "chairman-of-the-board",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-son-in-law-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Son in Law.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "son-in-law",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-son-in-law-return",
+      "role": "return",
+      "text": "And now, back to Son in Law on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "son-in-law",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-son-in-law-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Son in Law.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "son-in-law",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-in-the-army-now-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents In the Army Now.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "in-the-army-now",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-in-the-army-now-return",
+      "role": "return",
+      "text": "And now, back to In the Army Now on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "in-the-army-now",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-in-the-army-now-next",
+      "role": "next",
+      "text": "Up next on Mark TV: In the Army Now.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "in-the-army-now",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-jury-duty-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Jury Duty.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "jury-duty",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-jury-duty-return",
+      "role": "return",
+      "text": "And now, back to Jury Duty on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "jury-duty",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-jury-duty-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Jury Duty.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "jury-duty",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-major-payne-intro",
+      "role": "movie-intro",
+      "text": "Mark TV presents Major Payne.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": "major-payne",
+      "guards": [
+        "exact-catalog-match",
+        "immediately-precedes-feature-start",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-major-payne-return",
+      "role": "return",
+      "text": "And now, back to Major Payne on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "major-payne",
+      "guards": [
+        "exact-catalog-match",
+        "same-airing-resumes",
+        "immediately-precedes-resume",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "movie-major-payne-next",
+      "role": "next",
+      "text": "Up next on Mark TV: Major Payne.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": "major-payne",
+      "guards": [
+        "exact-catalog-match",
+        "next-editorial-airing-matches",
+        "source-file-available"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "network-generic-01",
+      "role": "station-id",
+      "text": "You’re watching Mark TV.",
+      "preferredPersona": "network",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "network-generic-02",
+      "role": "station-id",
+      "text": "Mark TV. Settle in.",
+      "preferredPersona": "network",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "network-generic-03",
+      "role": "station-id",
+      "text": "Good company. Familiar television. Mark TV.",
+      "preferredPersona": "network",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "network-generic-04",
+      "role": "lineup-bridge",
+      "text": "Here’s what’s coming up on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "schedule-bound",
+      "catalogId": null,
+      "guards": [
+        "matching-card-targets",
+        "future-committed-airings"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "network-generic-05",
+      "role": "weekend-bridge",
+      "text": "Two movies, back to back. This weekend on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "schedule-bound",
+      "catalogId": null,
+      "guards": [
+        "confirmed-future-weekend-double-feature",
+        "matching-card-targets"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "network-generic-06",
+      "role": "movie-bridge",
+      "text": "Stay with us. The movie is coming up next.",
+      "preferredPersona": "network",
+      "scope": "airing-bound",
+      "catalogId": null,
+      "guards": [
+        "next-editorial-airing-is-movie"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "local-generic-01",
+      "role": "station-id",
+      "text": "This is Mark TV. Make yourself comfortable.",
+      "preferredPersona": "local",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "local-generic-02",
+      "role": "station-id",
+      "text": "Mark TV. Right where you left us.",
+      "preferredPersona": "local",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "local-generic-03",
+      "role": "station-id",
+      "text": "You found Mark TV. We’ll take it from here.",
+      "preferredPersona": "local",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "local-generic-04",
+      "role": "station-id",
+      "text": "Mark TV. The couch has accepted your application.",
+      "preferredPersona": "local",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [],
+      "targetSlotSeconds": 8,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "local-generic-05",
+      "role": "break-generic",
+      "text": "We’ll be right back.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": null,
+      "guards": [
+        "same-airing-resumes"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "local-generic-06",
+      "role": "return-generic",
+      "text": "And now, back to the show.",
+      "preferredPersona": "local",
+      "scope": "airing-bound",
+      "catalogId": null,
+      "guards": [
+        "same-airing-resumes",
+        "immediately-precedes-resume"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "overnight-generic-01",
+      "role": "station-id",
+      "text": "Mark TV. Apparently, we’re both still up.",
+      "preferredPersona": "overnight",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [
+        "local-time-00-to-06"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "overnight-generic-02",
+      "role": "station-id",
+      "text": "It’s late. We kept the television on.",
+      "preferredPersona": "overnight",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [
+        "local-time-00-to-06"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "overnight-generic-03",
+      "role": "station-id",
+      "text": "Mark TV. Tomorrow can wait a few more minutes.",
+      "preferredPersona": "overnight",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [
+        "local-time-00-to-06"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "overnight-generic-04",
+      "role": "station-id",
+      "text": "You’re watching Mark TV. That still counts as a plan.",
+      "preferredPersona": "overnight",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [
+        "local-time-00-to-06"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "overnight-generic-05",
+      "role": "station-id",
+      "text": "Mark TV. The remote is probably under you.",
+      "preferredPersona": "overnight",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [
+        "local-time-00-to-06"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "overnight-generic-06",
+      "role": "movie-bridge",
+      "text": "A late movie. A quiet house. Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "airing-bound",
+      "catalogId": null,
+      "guards": [
+        "next-editorial-airing-is-movie",
+        "local-time-00-to-06"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "odd-generic-01",
+      "role": "odd-id",
+      "text": "Mark TV. The building is empty. The schedule is not.",
+      "preferredPersona": "odd",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [
+        "odd-frequency-cap",
+        "local-time-01-to-05"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "odd-generic-02",
+      "role": "odd-id",
+      "text": "Please remain comfortable. This is Mark TV.",
+      "preferredPersona": "odd",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [
+        "odd-frequency-cap",
+        "local-time-01-to-05"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "odd-generic-03",
+      "role": "odd-id",
+      "text": "Mark TV. Your regularly scheduled evening continues.",
+      "preferredPersona": "odd",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [
+        "odd-frequency-cap",
+        "local-time-01-to-05"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "odd-generic-04",
+      "role": "odd-id",
+      "text": "We have located the next program.",
+      "preferredPersona": "odd",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [
+        "odd-frequency-cap",
+        "local-time-01-to-05"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "odd-generic-05",
+      "role": "odd-id",
+      "text": "Mark TV. Everything appears to be television.",
+      "preferredPersona": "odd",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [
+        "odd-frequency-cap",
+        "local-time-01-to-05"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "odd-generic-06",
+      "role": "odd-id",
+      "text": "The night shift has declined to comment.",
+      "preferredPersona": "odd",
+      "scope": "evergreen",
+      "catalogId": null,
+      "guards": [
+        "odd-frequency-cap",
+        "local-time-01-to-05"
+      ],
+      "targetSlotSeconds": 8,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "dynamic-next-show",
+      "role": "next",
+      "text": "Next: {nextTitle}, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "schedule-bound",
+      "catalogId": null,
+      "guards": [
+        "next-editorial-airing-matches"
+      ],
+      "targetSlotSeconds": 15,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "dynamic-another-episode",
+      "role": "next",
+      "text": "Another episode of {nextTitle} is coming up next.",
+      "preferredPersona": "local",
+      "scope": "schedule-bound",
+      "catalogId": null,
+      "guards": [
+        "next-distinct-airing-same-series"
+      ],
+      "targetSlotSeconds": 15,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "dynamic-later-title",
+      "role": "later",
+      "text": "Later on Mark TV: {laterTitle}.",
+      "preferredPersona": "network",
+      "scope": "schedule-bound",
+      "catalogId": null,
+      "guards": [
+        "future-committed-airing"
+      ],
+      "targetSlotSeconds": 15,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "dynamic-next-and-later",
+      "role": "lineup",
+      "text": "Next, {nextTitle}. Then, {laterTitle}.",
+      "preferredPersona": "network",
+      "scope": "schedule-bound",
+      "catalogId": null,
+      "guards": [
+        "next-and-immediately-following-editorial-airings"
+      ],
+      "targetSlotSeconds": 15,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "dynamic-tonight-title",
+      "role": "tonight",
+      "text": "Tonight on Mark TV: {title}.",
+      "preferredPersona": "network",
+      "scope": "schedule-bound",
+      "catalogId": null,
+      "guards": [
+        "tonight-label-valid",
+        "future-committed-airing"
+      ],
+      "targetSlotSeconds": 15,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "dynamic-tomorrow-night-title",
+      "role": "tomorrow",
+      "text": "Tomorrow night on Mark TV: {title}.",
+      "preferredPersona": "network",
+      "scope": "schedule-bound",
+      "catalogId": null,
+      "guards": [
+        "tomorrow-night-label-valid",
+        "future-committed-airing"
+      ],
+      "targetSlotSeconds": 15,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "dynamic-weekend-double",
+      "role": "weekend",
+      "text": "{dayName} night: {firstMovie}, followed by {secondMovie}.",
+      "preferredPersona": "network",
+      "scope": "schedule-bound",
+      "catalogId": null,
+      "guards": [
+        "confirmed-weekend-double-feature",
+        "future-committed-airings"
+      ],
+      "targetSlotSeconds": 15,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "dynamic-overnight-approx",
+      "role": "overnight",
+      "text": "Around two in the morning: {movieTitle}, on Mark TV.",
+      "preferredPersona": "overnight",
+      "scope": "schedule-bound",
+      "catalogId": null,
+      "guards": [
+        "planned-start-within-approved-two-am-window",
+        "future-committed-airing"
+      ],
+      "targetSlotSeconds": 15,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "dynamic-overnight-sequence",
+      "role": "overnight",
+      "text": "After the sitcoms, stay with us for {movieTitle}.",
+      "preferredPersona": "overnight",
+      "scope": "schedule-bound",
+      "catalogId": null,
+      "guards": [
+        "next-movie-follows-current-sitcom-block",
+        "future-committed-airing"
+      ],
+      "targetSlotSeconds": 15,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "dynamic-movie-two",
+      "role": "next",
+      "text": "Stay with us. {secondMovie} is next.",
+      "preferredPersona": "network",
+      "scope": "schedule-bound",
+      "catalogId": null,
+      "guards": [
+        "at-first-movie-completion",
+        "second-feature-is-next"
+      ],
+      "targetSlotSeconds": 15,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "dynamic-replay",
+      "role": "overnight",
+      "text": "Later tonight, another chance to see {movieTitle}.",
+      "preferredPersona": "overnight",
+      "scope": "schedule-bound",
+      "catalogId": null,
+      "guards": [
+        "is-confirmed-replay",
+        "later-tonight-label-valid",
+        "future-committed-airing"
+      ],
+      "targetSlotSeconds": 15,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "dynamic-around-time",
+      "role": "later",
+      "text": "Around {timeSpoken}: {title}, on Mark TV.",
+      "preferredPersona": "network",
+      "scope": "schedule-bound",
+      "catalogId": null,
+      "guards": [
+        "estimated-start-within-approved-window",
+        "future-committed-airing"
+      ],
+      "targetSlotSeconds": 15,
+      "humor": false,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "staged-interruption-01",
+      "role": "staged-interruption",
+      "text": "Well. That was embarrassing.",
+      "preferredPersona": "odd",
+      "scope": "airing-bound",
+      "catalogId": null,
+      "guards": [
+        "approved-staged-clip",
+        "healthy-playback",
+        "between-programs-only",
+        "rolling-24h-cap",
+        "not-a-real-emergency-message"
+      ],
+      "targetSlotSeconds": 5,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "staged-interruption-02",
+      "role": "staged-interruption",
+      "text": "We found the right button.",
+      "preferredPersona": "odd",
+      "scope": "airing-bound",
+      "catalogId": null,
+      "guards": [
+        "approved-staged-clip",
+        "healthy-playback",
+        "between-programs-only",
+        "rolling-24h-cap",
+        "not-a-real-emergency-message"
+      ],
+      "targetSlotSeconds": 5,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    },
+    {
+      "id": "staged-interruption-03",
+      "role": "staged-interruption",
+      "text": "Normal service. Questionable programming.",
+      "preferredPersona": "odd",
+      "scope": "airing-bound",
+      "catalogId": null,
+      "guards": [
+        "approved-staged-clip",
+        "healthy-playback",
+        "between-programs-only",
+        "rolling-24h-cap",
+        "not-a-real-emergency-message"
+      ],
+      "targetSlotSeconds": 5,
+      "humor": true,
+      "status": "script-only",
+      "airReady": false
+    }
+  ]
+}

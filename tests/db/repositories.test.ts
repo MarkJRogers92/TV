@@ -7,8 +7,14 @@ import {
   scheduleLimits,
 } from "../../src/db/repositories.js";
 import { demo } from "../../src/demo/marktvLaughs.js";
-import type { Channel, Schedule } from "../../src/domain/models.js";
+import type {
+  Channel,
+  MediaItem,
+  Pool,
+  Schedule,
+} from "../../src/domain/models.js";
 import { generateSchedule } from "../../src/scheduler/generate.js";
+import { selectCandidate } from "../../src/scheduler/select.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -53,6 +59,27 @@ function schedule(
       },
     ],
     diagnostics: [],
+  };
+}
+
+/**
+ * One scheduled airing of a single media item on a broadcast date.
+ *
+ * Every fixture shares the same entry clock time on purpose: regenerating a day
+ * rewrites the same window, so a superseded generation and the generation that
+ * replaced it hold plays at identical instants.
+ */
+function airing(
+  id: string,
+  date: string,
+  mediaId: string,
+  generatedAt = "2026-09-13T12:00:00.000Z",
+): Schedule {
+  const base = schedule(id, generatedAt);
+  return {
+    ...base,
+    date,
+    entries: [{ ...base.entries[0], mediaId, title: mediaId }],
   };
 }
 
@@ -118,6 +145,105 @@ test("returns only non-flex play history from schedules before the requested dat
   expect(
     repositories.schedules.historyBefore("marktv-laughs", "2026-09-14"),
   ).toEqual([{ mediaId: "apartment-4b-1", at: "2026-09-13T05:00:00.000Z" }]);
+  repositories.close();
+});
+
+test("keeps only the newest generation of a prior date as air history", async () => {
+  const repositories = createRepositories(
+    openDatabase(await temporaryDirectory()),
+  );
+  // A day can be generated more than once. The later generation replaces the
+  // earlier one; it does not add a second airing of the same window, so the
+  // superseded row must not contribute plays.
+  repositories.schedules.replaceSuccessful(
+    "marktv-laughs",
+    airing("day-before", "2026-09-12", "apartment-4b-2"),
+  );
+  repositories.schedules.replaceSuccessful(
+    "marktv-laughs",
+    airing(
+      "superseded",
+      "2026-09-13",
+      "apartment-4b-replaced",
+      "2026-09-13T10:00:00.000Z",
+    ),
+  );
+  repositories.schedules.replaceSuccessful(
+    "marktv-laughs",
+    airing(
+      "replacement",
+      "2026-09-13",
+      "apartment-4b-1",
+      "2026-09-13T18:00:00.000Z",
+    ),
+  );
+
+  expect(
+    repositories.schedules.historyBefore("marktv-laughs", "2026-09-14"),
+  ).toEqual([
+    { mediaId: "apartment-4b-2", at: "2026-09-13T05:00:00.000Z" },
+    { mediaId: "apartment-4b-1", at: "2026-09-13T05:00:00.000Z" },
+  ]);
+  repositories.close();
+});
+
+test("does not rewind the chronological cursor when a prior date was regenerated", async () => {
+  const repositories = createRepositories(
+    openDatabase(await temporaryDirectory()),
+  );
+  const episodes: MediaItem[] = [1, 2, 3, 4, 5, 6].map((episode) => ({
+    id: `apartment-4b-${episode}`,
+    source: "local-folder",
+    path: `/media/apartment-4b-${episode}.mkv`,
+    kind: "episode",
+    title: `Episode ${episode}`,
+    showTitle: "Apartment 4B",
+    season: 1,
+    episode,
+    durationMs: 60_000,
+    durationStatus: "ok",
+    available: true,
+    tags: [],
+  }));
+  const pool: Pool = {
+    id: "apartment-4b",
+    name: "Apartment 4B",
+    kinds: ["episode"],
+    mediaIds: episodes.map(({ id }) => id),
+    mode: "chronological",
+    noRepeatMinutes: 0,
+    weight: 1,
+  };
+  // 2026-09-12 first aired through episode 1, then was regenerated and aired
+  // through episode 4. Only the replacement describes what actually aired.
+  repositories.schedules.replaceSuccessful(
+    "marktv-laughs",
+    airing("first-pass", "2026-09-12", "apartment-4b-1"),
+  );
+  repositories.schedules.replaceSuccessful(
+    "marktv-laughs",
+    airing("second-pass", "2026-09-12", "apartment-4b-4", "2026-09-12T18:00:00.000Z"),
+  );
+  const history = repositories.schedules.historyBefore(
+    "marktv-laughs",
+    "2026-09-13",
+  );
+  const selection = selectCandidate({
+    pool,
+    items: episodes,
+    kind: "episode",
+    history,
+    at: "2026-09-13T06:00:00.000Z",
+    seed: "composition",
+  });
+
+  // The plays that actually happened ended on episode 4, so the series continues
+  // at episode 5. Reading the superseded generation puts the cursor back on
+  // episode 1 and replays 2-4.
+  expect(selection.item?.episode).toBe(5);
+  expect(history).toEqual([
+    { mediaId: "apartment-4b-4", at: "2026-09-13T05:00:00.000Z" },
+  ]);
   repositories.close();
 });
 

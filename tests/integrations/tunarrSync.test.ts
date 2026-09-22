@@ -92,6 +92,7 @@ test("revalidates every snapshot before the first mutation", async () => {
         channels: [{ ...channel, name: "Changed" }],
       },
     }),
+    activeSessionCount: async () => 0,
     putChannel: mutate,
     createChannel: mutate,
     createFillerList: mutate,
@@ -125,6 +126,7 @@ test("executes fresh operations in order and resolves returned IDs", async () =>
       inventory: [],
       snapshots: emptySnapshots,
     }),
+    activeSessionCount: async () => 0,
     createChannel: async () => {
       order.push("channel-create");
       return { id: "created-channel" };
@@ -180,6 +182,7 @@ test("stops first failure and reports completed operations and state", async () 
       inventory: [],
       snapshots: fillerSnapshots,
     }),
+    activeSessionCount: async () => 0,
     putChannel: async () => ({ ok: true, status: 200 }),
     createChannel: async () => {
       throw new Error("unused");
@@ -201,6 +204,7 @@ test("stops first failure and reports completed operations and state", async () 
 test("maps an unsupported successful mutation response to a safe partial failure", async () => {
   const client = {
     snapshot: async () => ({ capabilities, inventory: [], snapshots }),
+    activeSessionCount: async () => 0,
     putChannel: async () => {
       throw Object.assign(
         new Error("Updated channel response is unsupported"),
@@ -218,16 +222,15 @@ test("maps an unsupported successful mutation response to a safe partial failure
     completed: [],
     partialFailure: true,
     error: "Updated channel response is unsupported",
-    state: { channelId: "7", fillerListId: undefined },
+    state: { channelId: "7" },
   });
 });
 
 test("resolves canonical library IDs for snapshot revalidation", async () => {
-  const mod = (await import(
-    "../../src/integrations/tunarr/types.js"
-  )) as unknown as {
-    resolveLibraryIds: (input: unknown) => string[];
-  };
+  const mod =
+    (await import("../../src/integrations/tunarr/types.js")) as unknown as {
+      resolveLibraryIds: (input: unknown) => string[];
+    };
   expect(typeof mod.resolveLibraryIds).toBe("function");
   expect(mod.resolveLibraryIds({ libraryIds: [" x ", "x", "y"] })).toEqual([
     "x",
@@ -238,7 +241,12 @@ test("resolves canonical library IDs for snapshot revalidation", async () => {
     schedule,
     [],
     capabilities,
-    { libraryId: canonical[0], libraryIds: canonical, channelId: "7", createChannel: false } as never,
+    {
+      libraryId: canonical[0],
+      libraryIds: canonical,
+      channelId: "7",
+      createChannel: false,
+    } as never,
     snapshots,
   );
   expect(canonicalPlan.mapping).toMatchObject({
@@ -251,6 +259,7 @@ test("resolves canonical library IDs for snapshot revalidation", async () => {
       seen.push(mapping);
       return { capabilities, inventory: [], snapshots };
     },
+    activeSessionCount: async () => 0,
     putChannel: async () => ({ ok: true, status: 200 }),
     createChannel: async () => ({ id: "unused" }),
     createFillerList: async () => ({ id: "unused" }),
@@ -261,4 +270,167 @@ test("resolves canonical library IDs for snapshot revalidation", async () => {
   expect(seen[0]).toMatchObject({
     libraryIds: ["lib-a", "lib-b"],
   });
+});
+
+test("refuses to mutate while the mapped channel has active viewers", async () => {
+  const mutate = vi.fn();
+  const activeSessionCount = vi.fn(async (channelId: string) => {
+    expect(channelId).toBe("7");
+    return 2;
+  });
+  const client = {
+    snapshot: async () => ({ capabilities, inventory: [], snapshots }),
+    activeSessionCount,
+    putChannel: mutate,
+    createChannel: mutate,
+    createFillerList: mutate,
+    putFillerList: mutate,
+    postProgramming: mutate,
+  } as never;
+
+  await expect(syncTunarrPlan(client, plan, schedule)).rejects.toMatchObject({
+    code: "ACTIVE_VIEWERS",
+  });
+  expect(activeSessionCount).toHaveBeenCalledTimes(1);
+  // Nothing disruptive reached Tunarr, so the viewer keeps watching.
+  expect(mutate).not.toHaveBeenCalled();
+});
+
+test("applies the plan when the mapped channel has no active viewers", async () => {
+  const client = {
+    snapshot: async () => ({ capabilities, inventory: [], snapshots }),
+    activeSessionCount: async (channelId: string) => {
+      expect(channelId).toBe("7");
+      return 0;
+    },
+    putChannel: async () => ({ ok: true, status: 200 }),
+    createChannel: async () => ({ id: "unused" }),
+    createFillerList: async () => ({ id: "unused" }),
+    putFillerList: async () => ({ ok: true, status: 200 }),
+    postProgramming: async () => ({ ok: true, status: 200 }),
+  } as never;
+
+  await expect(syncTunarrPlan(client, plan, schedule)).resolves.toMatchObject({
+    completed: ["channel-update", "filler-create", "programming"],
+    partialFailure: false,
+  });
+});
+
+test("allows channel creation without an existing channel to check", async () => {
+  const emptySnapshots = { ...snapshots, channels: [], programming: undefined };
+  const creationPlan = buildTunarrSyncPlan(
+    schedule,
+    [],
+    capabilities,
+    {
+      libraryId: "lib",
+      createChannel: true,
+      transcodeConfigId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    },
+    emptySnapshots,
+  );
+  const activeSessionCount = vi.fn(async () => 4);
+  const order: string[] = [];
+  const client = {
+    snapshot: async () => ({
+      capabilities,
+      inventory: [],
+      snapshots: emptySnapshots,
+    }),
+    activeSessionCount,
+    createChannel: async () => {
+      order.push("channel-create");
+      return { id: "created-channel" };
+    },
+    putChannel: async () => ({ ok: true, status: 200 }),
+    createFillerList: async () => {
+      order.push("filler-create");
+      return { id: "created-filler" };
+    },
+    putFillerList: async () => ({ ok: true, status: 200 }),
+    postProgramming: async () => {
+      order.push("programming");
+      return { ok: true, status: 200 };
+    },
+  } as never;
+
+  await expect(
+    syncTunarrPlan(client, creationPlan, schedule),
+  ).resolves.toMatchObject({ partialFailure: false });
+  expect(activeSessionCount).not.toHaveBeenCalled();
+  expect(order).toEqual(["channel-create", "filler-create", "programming"]);
+});
+
+test("reads the channel-keyed session arrays current Tunarr builds serve", async () => {
+  // Live shape: { "<channelId>": [{ type, state, numConnections, ... }] }.
+  // Sessions carry no channel fields of their own; the map key attributes them.
+  const fetchMock = vi.fn(async () => ({
+    ok: true,
+    json: async () => ({
+      "7": [
+        {
+          type: "hls",
+          state: "started",
+          numConnections: 2,
+          connections: [],
+        },
+      ],
+    }),
+  }));
+  vi.stubGlobal("fetch", fetchMock);
+  try {
+    const mutate = vi.fn();
+    const client = {
+      url: "http://fake",
+      snapshot: async () => ({ capabilities, inventory: [], snapshots }),
+      putChannel: mutate,
+      createChannel: mutate,
+      createFillerList: mutate,
+      putFillerList: mutate,
+      postProgramming: mutate,
+    } as never;
+    await expect(syncTunarrPlan(client, plan, schedule)).rejects.toMatchObject(
+      {
+        code: "ACTIVE_VIEWERS",
+      },
+    );
+    expect(mutate).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+test("ignores channel-keyed sessions for other channels", async () => {
+  const fetchMock = vi.fn(async () => ({
+    ok: true,
+    json: async () => ({
+      "some-other-channel": [
+        {
+          type: "hls",
+          state: "started",
+          numConnections: 3,
+          connections: [],
+        },
+      ],
+    }),
+  }));
+  vi.stubGlobal("fetch", fetchMock);
+  try {
+    const client = {
+      url: "http://fake",
+      snapshot: async () => ({ capabilities, inventory: [], snapshots }),
+      putChannel: async () => ({ ok: true, status: 200 }),
+      createChannel: async () => ({ id: "unused" }),
+      createFillerList: async () => ({ id: "unused" }),
+      putFillerList: async () => ({ ok: true, status: 200 }),
+      postProgramming: async () => ({ ok: true, status: 200 }),
+    } as never;
+    await expect(syncTunarrPlan(client, plan, schedule)).resolves.toMatchObject(
+      {
+        partialFailure: false,
+      },
+    );
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="720" viewBox="0 0 960 720" role="img" aria-label="MarkTV overnight-monitor template">
+<title>MarkTV overnight-monitor — prototype template</title>
+<rect width="960" height="720" fill="#10151e"/><path d="M0 645L960 595M0 615L960 565M0 585L960 535" stroke="#283d45" stroke-width="2"/><circle cx="65" cy="110" r="7" fill="#bd794a"/><path d="M64 376H884" stroke="#46555d" stroke-width="2"/><path d="M900 0V720" stroke="#755439" stroke-width="3"/>
+{{LOGO}}
+<text x="64" y="166" fill="#cb986a" font-family="Arial,Helvetica,sans-serif" font-size="30" font-weight="700" letter-spacing="3">{{LABEL}}</text>
+<text x="64" y="294" fill="#e5ddd0" font-family="Arial,Helvetica,sans-serif" font-size="60" font-weight="900">{{TITLE_1}}</text>
+<text x="64" y="355" fill="#e5ddd0" font-family="Arial,Helvetica,sans-serif" font-size="60" font-weight="900">{{TITLE_2}}</text>
+<g fill="#e1dfdb" font-family="Arial,Helvetica,sans-serif" font-size="28" font-weight="600">
+<text x="64" y="442">{{DETAIL_1}}</text><text x="64" y="482">{{DETAIL_2}}</text><text x="64" y="522">{{DETAIL_3}}</text><text x="64" y="562">{{DETAIL_4}}</text>
+</g>
+<text x="64" y="661" fill="#d5d8da" font-family="Arial,Helvetica,sans-serif" font-size="16" letter-spacing="1">{{FOOTER}}</text>
+</svg>

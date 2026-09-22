@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="720" viewBox="0 0 960 720" role="img" aria-label="MarkTV staged-standby template">
+<title>MarkTV staged-standby — prototype template</title>
+<rect width="960" height="720" fill="#24262a"/><rect x="38" y="36" width="884" height="648" fill="none" stroke="#929697" stroke-width="2"/><path d="M64 204H700M64 368H894" stroke="#838787" stroke-width="2"/><g fill="#b0b4b1"><rect x="64" y="574" width="135" height="16"/><rect x="204" y="574" width="135" height="16" fill="#7e8582"/><rect x="344" y="574" width="135" height="16" fill="#515957"/></g>
+{{LOGO}}
+<text x="64" y="166" fill="#d3d7d4" font-family="Arial,Helvetica,sans-serif" font-size="30" font-weight="700" letter-spacing="3">{{LABEL}}</text>
+<text x="64" y="294" fill="#e7e7df" font-family="Arial,Helvetica,sans-serif" font-size="49" font-weight="900">{{TITLE_1}}</text>
+<text x="64" y="355" fill="#e7e7df" font-family="Arial,Helvetica,sans-serif" font-size="49" font-weight="900">{{TITLE_2}}</text>
+<g fill="#e1dfdb" font-family="Arial,Helvetica,sans-serif" font-size="28" font-weight="600">
+<text x="64" y="442">{{DETAIL_1}}</text><text x="64" y="482">{{DETAIL_2}}</text><text x="64" y="522">{{DETAIL_3}}</text><text x="64" y="562">{{DETAIL_4}}</text>
+</g>
+<text x="64" y="661" fill="#d5d8da" font-family="Arial,Helvetica,sans-serif" font-size="16" letter-spacing="1">{{FOOTER}}</text>
+</svg>

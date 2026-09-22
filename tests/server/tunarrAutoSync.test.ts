@@ -22,14 +22,23 @@ import {
 const dirs: string[] = [];
 afterEach(async () => {
   vi.unstubAllGlobals();
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
+  );
 });
 
-function localProgram(id: string, path: string, durationMs: number) {
+function localProgram(
+  id: string,
+  path: string,
+  durationMs: number,
+  /** Tunarr's own verdict, when it declares one for this program. */
+  state?: string,
+) {
   return {
     type: "content",
     id,
     duration: durationMs,
+    ...(state ? { state } : {}),
     program: {
       uuid: "11111111-1111-4111-8111-111111111111",
       mediaItem: { locations: [{ type: "local", path }] },
@@ -46,7 +55,12 @@ function tunarrChannel(id: string) {
     duration: 86_400_000,
     groupTitle: "MarkTV",
     guideMinimumDuration: 0,
-    icon: { path: "", width: 0, duration: 0, position: "bottom-right" as const },
+    icon: {
+      path: "",
+      width: 0,
+      duration: 0,
+      position: "bottom-right" as const,
+    },
     startTime: 0,
     stealth: false,
     offline: { mode: "pic" as const },
@@ -69,6 +83,8 @@ function stubTunarr(
     rescanTo?: Record<string, unknown>;
     /** Set false to model a Tunarr that exposes no scannable source. */
     offerScan?: boolean;
+    /** Active Tunarr sessions, so a sync can be blocked by a live viewer. */
+    sessions?: unknown[];
   } = {},
 ) {
   let rescanned = false;
@@ -90,8 +106,11 @@ function stubTunarr(
     }
     if (/\/api\/media-sources\/[^/]+\/[^/]+\/status$/.test(url))
       return ok({ state: "not_scanning" });
-    if (url.endsWith("/api/system/health")) return ok({ database: { type: "healthy" } });
-    if (url.endsWith("/api/version")) return ok({ tunarr: "1.3.14", ffmpeg: "7", nodejs: "22" });
+    if (url.endsWith("/api/system/health"))
+      return ok({ database: { type: "healthy" } });
+    if (url.endsWith("/api/version"))
+      return ok({ tunarr: "1.3.14", ffmpeg: "7", nodejs: "22" });
+    if (url.endsWith("/api/sessions")) return ok(options.sessions ?? []);
     // Creates must answer with an id -- the sync reads created.id, and an array
     // response leaves it undefined and fails the operation.
     if (url.endsWith("/api/filler-lists"))
@@ -100,7 +119,12 @@ function stubTunarr(
     // The client throws UNSUPPORTED_SCHEMA if this one does not parse, so an
     // empty programming document has to be spelled out rather than [].
     if (/\/api\/channels\/[^/]+\/programming$/.test(url))
-      return ok({ totalPrograms: 0, programs: {}, lineup: [], startTimeOffsets: [] });
+      return ok({
+        totalPrograms: 0,
+        programs: {},
+        lineup: [],
+        startTimeOffsets: [],
+      });
     if (url.endsWith("/api/channels"))
       return init?.method === "POST"
         ? ok({ id: "created-channel" })
@@ -115,7 +139,9 @@ function stubTunarr(
       const source =
         rescanned && options.rescanTo ? options.rescanTo : programsByLibrary;
       if (id in source) return ok(source[id]);
-      return new Response(JSON.stringify({ error: "missing" }), { status: 404 });
+      return new Response(JSON.stringify({ error: "missing" }), {
+        status: 404,
+      });
     }
     return ok();
   }) as typeof fetch;
@@ -141,8 +167,15 @@ function setup(options: { pathFor?: (id: string) => string } = {}) {
   for (const base of items.filter((item) => item.kind in poolForKind)) {
     for (let copy = 1; copy <= 8; copy += 1) {
       const id = `${base.id}-copy-${copy}`;
-      items.push({ ...base, id, title: `${base.title} copy ${copy}`, path: pathFor(id) });
-      pools.find((pool) => pool.id === poolForKind[base.kind])?.mediaIds.push(id);
+      items.push({
+        ...base,
+        id,
+        title: `${base.title} copy ${copy}`,
+        path: pathFor(id),
+      });
+      pools
+        .find((pool) => pool.id === poolForKind[base.kind])
+        ?.mediaIds.push(id);
     }
   }
   // No mid-roll policy: an exact-fill pod needs matched spots whose durations
@@ -163,7 +196,10 @@ function setup(options: { pathFor?: (id: string) => string } = {}) {
     date: "2026-09-15",
     now: new Date("2026-09-14T13:00:00.000Z"),
   });
-  if (!result.ok) throw new Error(`fixture schedule failed: ${JSON.stringify(result.issues)}`);
+  if (!result.ok)
+    throw new Error(
+      `fixture schedule failed: ${JSON.stringify(result.issues)}`,
+    );
   return { channel, pools, items, schedule: result.schedule };
 }
 
@@ -178,7 +214,10 @@ async function repositoriesWithSchedule(
   repositories.channels.put(fixture.channel);
   fixture.pools.forEach((pool) => repositories.pools.put(pool));
   fixture.items.forEach((item) => repositories.media.put(item));
-  repositories.schedules.replaceSuccessful(fixture.channel.id, fixture.schedule);
+  repositories.schedules.replaceSuccessful(
+    fixture.channel.id,
+    fixture.schedule,
+  );
   if (mapping !== null)
     repositories.settings.put(TUNARR_MAPPING_SETTING, {
       libraryId: "lib-a",
@@ -247,7 +286,11 @@ test("syncs the generated schedule and records the outcome", async () => {
   const repositories = await repositoriesWithSchedule(fixture);
   const calls: string[] = [];
   stubTunarr(
-    { "lib-a": fixture.items.map((item) => localProgram(item.id, item.path!, item.durationMs ?? 60_000)) },
+    {
+      "lib-a": fixture.items.map((item) =>
+        localProgram(item.id, item.path!, item.durationMs ?? 60_000),
+      ),
+    },
     { record: calls },
   );
 
@@ -293,7 +336,13 @@ test("refuses a lineup with media Tunarr cannot resolve, and applies nothing", a
   // Inventory deliberately missing one scheduled item, and no scannable source,
   // so the rescan cannot rescue it and the refusal has to stand.
   stubTunarr(
-    { "lib-a": fixture.items.slice(1).map((item) => localProgram(item.id, item.path!, item.durationMs ?? 60_000)) },
+    {
+      "lib-a": fixture.items
+        .slice(1)
+        .map((item) =>
+          localProgram(item.id, item.path!, item.durationMs ?? 60_000),
+        ),
+    },
     { record: calls, offerScan: false },
   );
 
@@ -302,10 +351,44 @@ test("refuses a lineup with media Tunarr cannot resolve, and applies nothing", a
     now,
   });
 
-  expect({ status: outcome.status, message: outcome.message }).toMatchObject({ status: "blocked" });
+  expect({ status: outcome.status, message: outcome.message }).toMatchObject({
+    status: "blocked",
+  });
   expect(outcome.blockingErrors).toBeGreaterThan(0);
   // The gate is the point: nothing was written to Tunarr.
-  expect(calls.some((call) => call.startsWith("PUT") || call.startsWith("POST"))).toBe(false);
+  expect(
+    calls.some((call) => call.startsWith("PUT") || call.startsWith("POST")),
+  ).toBe(false);
+  expect(readTunarrMapping(repositories)?.lastSync?.status).toBe("blocked");
+  repositories.close();
+});
+
+test("blocks when the only Tunarr match is a program Tunarr cannot play", async () => {
+  const fixture = setup();
+  const repositories = await repositoriesWithSchedule(fixture);
+  const calls: string[] = [];
+  // Every absolute path still matches, so a path-only plan would be eligible -
+  // and would push a lineup whose programs Tunarr has marked missing.
+  stubTunarr(
+    {
+      "lib-a": fixture.items.map((item) =>
+        localProgram(item.id, item.path!, item.durationMs ?? 60_000, "missing"),
+      ),
+    },
+    { record: calls, offerScan: false },
+  );
+
+  const outcome = await autoSyncTunarr(repositories, {
+    channelId: fixture.channel.id,
+    now,
+  });
+
+  expect(outcome.status).toBe("blocked");
+  expect(outcome.message).toMatch(/cannot be played/);
+  expect(outcome.blockingErrors).toBeGreaterThan(0);
+  expect(
+    calls.some((call) => call.startsWith("PUT") || call.startsWith("POST")),
+  ).toBe(false);
   expect(readTunarrMapping(repositories)?.lastSync?.status).toBe("blocked");
   repositories.close();
 });
@@ -320,7 +403,9 @@ test("an unreachable Tunarr records a failure instead of throwing", async () => 
     now,
   });
 
-  expect({ status: outcome.status, message: outcome.message }).toMatchObject({ status: "failed" });
+  expect({ status: outcome.status, message: outcome.message }).toMatchObject({
+    status: "failed",
+  });
   expect(outcome.message).toBeTruthy();
   expect(readTunarrMapping(repositories)?.lastSync?.status).toBe("failed");
   repositories.close();
@@ -331,7 +416,11 @@ test("only the mapped channel is pushed", async () => {
   const repositories = await repositoriesWithSchedule(fixture);
   const calls: string[] = [];
   stubTunarr(
-    { "lib-a": fixture.items.map((item) => localProgram(item.id, item.path!, item.durationMs ?? 60_000)) },
+    {
+      "lib-a": fixture.items.map((item) =>
+        localProgram(item.id, item.path!, item.durationMs ?? 60_000),
+      ),
+    },
     { record: calls },
   );
 
@@ -347,10 +436,16 @@ test("only the mapped channel is pushed", async () => {
 
 test("automatic sync can be turned off without losing the mapping", async () => {
   const fixture = setup();
-  const repositories = await repositoriesWithSchedule(fixture, { autoSync: false });
+  const repositories = await repositoriesWithSchedule(fixture, {
+    autoSync: false,
+  });
   const calls: string[] = [];
   stubTunarr(
-    { "lib-a": fixture.items.map((item) => localProgram(item.id, item.path!, item.durationMs ?? 60_000)) },
+    {
+      "lib-a": fixture.items.map((item) =>
+        localProgram(item.id, item.path!, item.durationMs ?? 60_000),
+      ),
+    },
     { record: calls },
   );
 
@@ -392,3 +487,36 @@ test("rescans Tunarr and retries once when a stale inventory blocks the plan", a
   repositories.close();
 }, 30_000);
 
+test("blocks without mutating while the mapped channel has active viewers", async () => {
+  const fixture = setup();
+  const repositories = await repositoriesWithSchedule(fixture);
+  const calls: string[] = [];
+  stubTunarr(
+    {
+      "lib-a": fixture.items.map((item) =>
+        localProgram(item.id, item.path!, item.durationMs ?? 60_000),
+      ),
+    },
+    {
+      record: calls,
+      sessions: [{ channelId: "tunarr-channel", numConnections: 1 }],
+    },
+  );
+
+  const outcome = await autoSyncTunarr(repositories, {
+    channelId: fixture.channel.id,
+    now,
+  });
+
+  expect(outcome.status).toBe("blocked");
+  expect(outcome.message).toMatch(/viewer/i);
+  // The guard runs before the first mutation, so a live viewer keeps watching.
+  expect(
+    calls.some((call) => call.startsWith("PUT") || call.startsWith("POST")),
+  ).toBe(false);
+  const stored = readTunarrMapping(repositories);
+  expect(stored?.lastSync?.status).toBe("blocked");
+  // The plan is kept so a retry can apply it once the viewer leaves.
+  expect(stored?.plan).toBeTruthy();
+  repositories.close();
+});

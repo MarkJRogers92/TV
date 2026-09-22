@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Repositories } from "../db/repositories.js";
-import { initializeManagedPaths, pinManagedDirectory, type ManagedDirectoryIdentity, type ManagedPaths } from "../acquisition/paths.js";
+import { initializeManagedPaths, pinManagedDirectory, type ManagedDirectoryIdentity, type ManagedPathOverrides, type ManagedPaths } from "../acquisition/paths.js";
 
 export type MediaRootRecord = {
   id: string;
@@ -83,8 +83,9 @@ export function removeMediaRoot(repositories: Repositories, id: string): boolean
 export async function registerManagedLibrary(
   repositories: Repositories,
   dataDir: string,
+  overrides: ManagedPathOverrides = {},
 ): Promise<ManagedPaths & { root: MediaRootRecord }> {
-  const paths = await initializeManagedPaths(dataDir);
+  const paths = await initializeManagedPaths(dataDir, overrides);
   const id = mediaRootId(paths.library);
   const existing = getMediaRoot(repositories, id);
   const root = existing ?? putMediaRoot(repositories, {

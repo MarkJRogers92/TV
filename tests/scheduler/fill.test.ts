@@ -56,6 +56,17 @@ test('does not select station IDs except at a top-of-hour boundary', () => {
   expect(fill({ items: [id] }).entries[0]).toMatchObject({ kind: 'station-id', mediaId: 'station-id' });
 });
 
+test('never draws a schedule-scoped continuity card as generic filler', () => {
+  const scoped = {
+    ...item('continuity-card', 'bumper', 60_000),
+    tags: ['continuity', 'generated', 'schedule-scoped-continuity'],
+  };
+  const result = fill({ items: [scoped] });
+  expect(result.entries).toHaveLength(1);
+  expect(result.entries[0]).toMatchObject({ kind: 'flex' });
+  expect(result.entries.some((entry) => entry.mediaId === 'continuity-card')).toBe(false);
+});
+
 test('accepts commercials, bumpers, and general filler roles', () => {
   const result = fill({
     start: new Date('2026-09-18T12:57:00.000Z'),

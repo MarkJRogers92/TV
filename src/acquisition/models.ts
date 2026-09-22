@@ -117,6 +117,38 @@ export const wantedEpisodeSchema = z.strictObject({
 });
 export type WantedEpisode = z.infer<typeof wantedEpisodeSchema>;
 
+/**
+ * Movie identity is `normalized title + release year`. The year is part of the
+ * key because remakes legitimately share a title — "Dune" (1984) and "Dune"
+ * (2021) are different films — so a title-only key would collapse two Wanted
+ * records into one. A film added without a year keys on `yunknown`, which keeps
+ * that case from colliding with any real year.
+ *
+ * `normalizedSeriesTitle` is reused deliberately: it folds case, punctuation,
+ * separators and Unicode width for *titles* in general, and a second normalizer
+ * for movies would be free to drift from this one.
+ */
+export function movieKey(title: string, year: number | null): string {
+  return `${normalizedSeriesTitle(title)}|y${year ?? "unknown"}`;
+}
+
+/**
+ * A wanted film. Deliberately carries no season/episode/`episodeKey`: a movie is
+ * a single file, so title plus year is its whole identity. Nothing in the
+ * acquisition pipeline consumes this yet — see the README's scoping note — so no
+ * job- or import-shaped field is invented here ahead of a real consumer.
+ */
+export const wantedMovieSchema = z.strictObject({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  year: z.number().int().positive().max(9999).nullable().default(null),
+  status: technicalStateSchema.default("wanted"),
+  statusDetail: z.string().min(1).nullable().default(null),
+  createdAt: isoInstantSchema,
+  updatedAt: isoInstantSchema,
+});
+export type WantedMovie = z.infer<typeof wantedMovieSchema>;
+
 export const acquisitionJobSchema = z.strictObject({
   id: z.string().min(1),
   wantedId: z.string().min(1),

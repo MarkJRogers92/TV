@@ -13,8 +13,35 @@ export type SelectionInput = {
 };
 export type SelectionResult = { item: MediaItem | undefined; relaxed: boolean };
 
+/**
+ * The series a title belongs to, as far as selection order is concerned.
+ *
+ * One series arrives spelled several ways: files carry "Home Improvement
+ * (1991)" while a pool, a rescan, or an import may hold "home improvement".
+ * Those are one series, and ordering them by raw title interleaves them
+ * instead: "show" sorts before "Show (2019)" because it is a prefix of it, so
+ * season 2 can land ahead of season 1 and the chronological cursor jumps
+ * backwards whenever the spelling changes.
+ *
+ * Case, punctuation, spacing and an optional trailing four-digit year are
+ * folded away. This is a scheduling view only: it neither changes nor
+ * re-derives stored identity, and media that collapse to one key stay separate
+ * items.
+ */
+function seriesOrderKey(item: MediaItem) {
+  const title = item.showTitle ?? item.title;
+  if (item.kind !== "episode") return title;
+  return title
+    .normalize("NFKC")
+    .replace(/\(\s*\d{4}\s*\)\s*$/, " ")
+    .toLowerCase()
+    .replace(/[^\p{Letter}\p{Number}]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
 function chronologicalOrder(left: MediaItem, right: MediaItem) {
-  return (left.showTitle ?? left.title).localeCompare(right.showTitle ?? right.title)
+  return seriesOrderKey(left).localeCompare(seriesOrderKey(right))
     || (left.season ?? 0) - (right.season ?? 0)
     || (left.episode ?? 0) - (right.episode ?? 0)
     || left.id.localeCompare(right.id);

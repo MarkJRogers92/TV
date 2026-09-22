@@ -18,11 +18,27 @@ export async function registerScheduleRoutes(
 ) {
   const { repositories } = context;
   app.get("/api/v1/schedules/latest", async (request, reply) => {
-    const query = request.query as { channelId?: string };
+    const query = request.query as { channelId?: string; date?: string };
     const channelId = query.channelId ?? "marktv-laughs";
-    if (!repositories.channels.get(channelId))
-      return notFound(reply, "Channel");
-    return repositories.schedules.latest(channelId) ?? null;
+    const channel = repositories.channels.get(channelId);
+    if (!channel) return notFound(reply, "Channel");
+    // Answered BY DATE. `latest` is insertion order, and the quiet-hours pass
+    // writes TOMORROW's schedule into the same table, so it would report the
+    // wrong day's lineup for most of the night. A caller that names a date gets
+    // that date; one that does not gets the channel's current broadcast date,
+    // which is a different calendar day from the process's for part of every
+    // night.
+    let date: string;
+    if (query.date === undefined) {
+      date = DateTime.fromJSDate(context.now(), {
+        zone: channel.timezone,
+      }).toISODate()!;
+    } else {
+      const parsed = broadcastDateSchema.safeParse(query.date);
+      if (!parsed.success) return validationError(reply, parsed.error);
+      date = parsed.data;
+    }
+    return repositories.schedules.latestForDate(channelId, date) ?? null;
   });
   app.post("/api/v1/schedules/generate", async (request, reply) => {
     try {

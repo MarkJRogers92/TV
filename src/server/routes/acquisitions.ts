@@ -2,9 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { StaleSeasonPackReason } from "../../acquisition/coordinator.js";
-import { stremioSearchUrl } from "../../acquisition/identity.js";
+import {
+  stremioMovieSearchUrl,
+  stremioSearchUrl,
+} from "../../acquisition/identity.js";
 import {
   wantedEpisodeSchema,
+  wantedMovieSchema,
   type AcquisitionJob,
   type AcquisitionProviderId,
   type AcquisitionReview,
@@ -12,6 +16,7 @@ import {
   type AcquisitionReviewKind,
   type TechnicalState,
   type WantedEpisode,
+  type WantedMovie,
 } from "../../acquisition/models.js";
 import {
   AcquisitionConflictError,
@@ -32,6 +37,14 @@ const createWantedSchema = z.strictObject({
   season: z.number().int().nonnegative(),
   episode: z.number().int().nonnegative(),
   episodeTitle: z.string().trim().min(1).nullable().optional(),
+});
+/**
+ * A movie is identified by title plus optional year, so `year` is the only
+ * optional field. `.nullish()` lets a client send either `null` or omit it.
+ */
+const createWantedMovieSchema = z.strictObject({
+  title: z.string().trim().min(1),
+  year: z.number().int().positive().max(9999).nullish(),
 });
 const selectCandidateSchema = z.strictObject({
   candidateIndex: z.number().int().nonnegative(),
@@ -84,6 +97,14 @@ type WantedView = WantedEpisode & {
   job: JobView | null;
   review: ReviewView | null;
 };
+
+/**
+ * Movie projection: the durable record plus its Stremio link. Deliberately
+ * carries no `job`/`review` keys rather than nulls — a movie has no acquisition
+ * machinery yet, and a permanently-null field would imply one is coming without
+ * a consumer existing.
+ */
+type WantedMovieView = WantedMovie & { stremioUrl: string };
 
 type SeasonPackEpisodeView = {
   episode: number | null;
@@ -163,6 +184,10 @@ function episodeReview(
   reviews: readonly AcquisitionReview[],
 ): AcquisitionReview | null {
   return reviews.find((review) => review.kind !== "season-pack") ?? null;
+}
+
+function movieView(movie: WantedMovie): WantedMovieView {
+  return { ...movie, stremioUrl: stremioMovieSearchUrl(movie) };
 }
 
 function wantedView(
@@ -368,6 +393,63 @@ export async function registerAcquisitionRoutes(
     });
   });
 
+  app.get("/api/v1/acquisitions/wanted-movies", async () =>
+    repository.wantedMovies.list().map(movieView),
+  );
+
+  app.post("/api/v1/acquisitions/wanted-movies", async (request, reply) => {
+    let input: z.infer<typeof createWantedMovieSchema>;
+    try {
+      input = createWantedMovieSchema.parse(request.body);
+    } catch (error) {
+      return validationError(reply, error);
+    }
+    const year = input.year ?? null;
+
+    const existing = repository.wantedMovies.findByIdentity(input.title, year);
+    if (existing) {
+      return reply.code(409).send({
+        code: "ALREADY_WANTED",
+        message: "That movie is already on the Wanted list",
+        wantedId: existing.id,
+      });
+    }
+
+    const timestamp = context.now().toISOString();
+    const record = wantedMovieSchema.parse({
+      id: randomUUID(),
+      title: input.title,
+      year,
+      status: "wanted",
+      statusDetail: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    try {
+      repository.wantedMovies.create(record);
+    } catch (error) {
+      // Two concurrent adds of the same title/year race on the unique identity;
+      // the loser reports the same safe conflict as the lookup above.
+      if (error instanceof AcquisitionConflictError) {
+        return reply.code(409).send({
+          code: "ALREADY_WANTED",
+          message: "That movie is already on the Wanted list",
+        });
+      }
+      throw error;
+    }
+    return reply.code(201).send(movieView(record));
+  });
+
+  app.delete("/api/v1/acquisitions/wanted-movies/:id", async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    // Unlike a wanted episode there is no job to guard against: nothing in the
+    // acquisition pipeline references a movie, so removal is unconditional.
+    const removed = repository.wantedMovies.remove(id);
+    if (!removed) return notFound(reply, "Wanted movie");
+    return reply.code(200).send(movieView(removed));
+  });
+
   app.get("/api/v1/acquisitions/season-packs", async () =>
     repository.reviews
       .list()
@@ -505,6 +587,26 @@ export async function registerAcquisitionRoutes(
       case "conflict":
         return reply.code(409).send({ code: "SELECTION_CONFLICT", message: "This episode can no longer reserve the selected candidate" });
     }
+  });
+
+  /**
+   * Decline an offer without importing it.
+   *
+   * A season-pack offer is deliberately DURABLE: it outlives the wanted episode that
+   * surfaced it, because the pack is the useful artefact and the anchor episode is only
+   * what found it (see the delete route above, which re-saves offers for exactly this
+   * reason). That durability is correct - but until now the only thing a review supported
+   * was `import-season`, so the only ways to clear an unwanted offer were to import it, or
+   * to edit the database by hand. This is the missing answer.
+   *
+   * Deliberately narrow: it removes the offer row and nothing else. No job is cancelled
+   * (an offer with an active job is a separate concern - cancel that job first), no
+   * wanted episode is touched, and no media already on disk is affected.
+   */
+  app.post("/api/v1/acquisitions/reviews/:id/dismiss", async (request, reply) => {
+    const id = (request.params as { id: string }).id;
+    if (!repository.reviews.remove(id)) return notFound(reply, "Offer");
+    return reply.code(200).send({ dismissed: true, id });
   });
 
   /**

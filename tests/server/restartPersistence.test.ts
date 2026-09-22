@@ -25,8 +25,12 @@ test("reopens the same data directory with the generated schedule intact", async
   await app.close();
 
   app = await buildApp({ dataDir: directory });
+  // Named explicitly: this app runs on the real clock, so "the current
+  // broadcast date" is not the date generated before the restart.
   const reopened = (
-    await app.inject("/api/v1/schedules/latest?channelId=marktv-laughs")
+    await app.inject(
+      "/api/v1/schedules/latest?channelId=marktv-laughs&date=2026-09-13",
+    )
   ).json();
   expect({ id: reopened.id, entries: reopened.entries.length }).toEqual({
     id: generated.id,

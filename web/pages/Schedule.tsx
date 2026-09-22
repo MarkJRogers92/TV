@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { markTvApi, type MarkTvApi } from "../api";
+import { MovieProgrammingPanel } from "../components/MovieProgrammingPanel";
 import { ScheduleTable } from "../components/ScheduleTable";
 import type { ApiError, Schedule as ScheduleModel } from "../types";
 
@@ -18,12 +19,24 @@ export function Schedule({
   const [date, setDate] = useState(today);
   const [exportPath, setExportPath] = useState("");
   const [error, setError] = useState("");
+  // Loaded by the date the form is showing, not "the newest row": the
+  // quiet-hours pass stores tomorrow's schedule, which is newer than today's.
   useEffect(() => {
+    let current = true;
     client
-      .latestSchedule(channelId)
-      .then(setSchedule)
-      .catch(() => setError("Could not load the latest schedule."));
-  }, [client, channelId]);
+      .latestSchedule(channelId, date)
+      // Ignored when the date moved on while this read was in flight, so a slow
+      // answer for one day cannot replace the day being shown.
+      .then((loaded) => {
+        if (current) setSchedule(loaded);
+      })
+      .catch(() => {
+        if (current) setError("Could not load the schedule for that date.");
+      });
+    return () => {
+      current = false;
+    };
+  }, [client, channelId, date]);
   const generate = async () => {
     setError("");
     try {
@@ -81,6 +94,7 @@ export function Schedule({
       ) : (
         <p>Generate a schedule to preview the EPG.</p>
       )}
+      <MovieProgrammingPanel client={client} channelId={channelId} />
     </section>
   );
 }

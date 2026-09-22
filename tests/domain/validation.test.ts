@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import { demo } from "../../src/demo/marktvLaughs.js";
 import { channelSchema, scheduleEntrySchema } from "../../src/domain/models.js";
 import { validateChannelConfiguration } from "../../src/domain/validation.js";
+import { movieFixture } from "../support/movieFixture.js";
 
 test("rejects an invalid IANA timezone at the domain boundary", () => {
   const { channel } = demo();
@@ -150,6 +151,38 @@ describe("validateChannelConfiguration", () => {
     ).toEqual([
       expect.objectContaining({ path: "breakPolicy.poolIds" }),
       expect.objectContaining({ path: "breakPolicy.stationIdPoolIds" }),
+    ]);
+  });
+
+  test("an enabled movie feature needs a pool and a folder", () => {
+    const { channel, pools, media } = movieFixture();
+    expect(validateChannelConfiguration(channel, pools, media)).toEqual([]);
+
+    const noPool = movieFixture();
+    noPool.channel.movieProgramming!.poolIds = [];
+    expect(validateChannelConfiguration(noPool.channel, noPool.pools, noPool.media)).toEqual(
+      [expect.objectContaining({ path: "movieProgramming.poolIds" })],
+    );
+
+    const noRoot = movieFixture();
+    delete noRoot.channel.movieProgramming!.rootPath;
+    expect(validateChannelConfiguration(noRoot.channel, noRoot.pools, noRoot.media)).toEqual(
+      [expect.objectContaining({ path: "movieProgramming.rootPath" })],
+    );
+  });
+
+  test("a movie bridge pool must be able to supply whole spots", () => {
+    const { channel, pools, media } = movieFixture();
+    // The episode pool cannot fill a 60-120 second bridge, so naming it as the
+    // bridge source has to fail here rather than at generation time.
+    channel.movieProgramming!.bridgePoolIds = ["apartment-4b"];
+    expect(
+      validateChannelConfiguration(channel, pools, media),
+    ).toEqual([
+      expect.objectContaining({
+        code: "POOL_KIND_MISMATCH",
+        path: "movieProgramming.bridgePoolIds",
+      }),
     ]);
   });
 });

@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
 import { markTvApi, type MarkTvApi } from "../api";
 import { AcquisitionStatus, formatBytes } from "../components/AcquisitionStatus";
-import type { ApiError, SeasonPackView, WantedView } from "../types";
+import type {
+  ApiError,
+  SeasonPackView,
+  WantedMovieView,
+  WantedView,
+} from "../types";
 
 function episodeCode(season: number, episode: number): string {
   return `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`;
@@ -37,12 +42,20 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
   const [episodeTitle, setEpisodeTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [selectedCandidates, setSelectedCandidates] = useState<Record<string, { candidateIndex: number; reviewUpdatedAt: string } | undefined>>({});
+  const [movies, setMovies] = useState<WantedMovieView[]>([]);
+  const [movieTitle, setMovieTitle] = useState("");
+  const [movieYear, setMovieYear] = useState("");
 
   useEffect(() => {
-    Promise.all([client.listWanted(), client.listSeasonPacks()])
-      .then(([loadedWanted, loadedPacks]) => {
+    Promise.all([
+      client.listWanted(),
+      client.listSeasonPacks(),
+      client.listWantedMovies(),
+    ])
+      .then(([loadedWanted, loadedPacks, loadedMovies]) => {
         setWanted(loadedWanted);
         setPacks(loadedPacks);
+        setMovies(loadedMovies);
       })
       .catch(() => setLoadError("Wanted data is unavailable."));
   }, [client]);
@@ -148,6 +161,46 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
     }
   };
 
+  const addMovie = async () => {
+    setActionError("");
+    setNotice("");
+    const title = movieTitle.trim();
+    if (!title) {
+      setActionError("Enter a movie title.");
+      return;
+    }
+    const yearValue = movieYear.trim();
+    const year = yearValue ? Number(yearValue) : null;
+    if (year !== null && (!Number.isInteger(year) || year <= 0)) {
+      setActionError("Enter a valid release year, or leave it blank.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const created = await client.addWantedMovie({ title, year });
+      setMovies((current) => [...current, created]);
+      setMovieTitle("");
+      setMovieYear("");
+      setNotice(`Added ${created.title}${created.year === null ? "" : ` (${created.year})`}.`);
+    } catch (caught) {
+      setActionError((caught as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeMovie = async (movie: WantedMovieView) => {
+    setActionError("");
+    setNotice("");
+    try {
+      await client.removeWantedMovie(movie.id);
+      setMovies((current) => current.filter((item) => item.id !== movie.id));
+      setNotice(`Removed ${movie.title}${movie.year === null ? "" : ` (${movie.year})`}.`);
+    } catch (caught) {
+      setActionError((caught as ApiError).message);
+    }
+  };
+
   const retry = async (jobId: string) => {
     setActionError("");
     setNotice("");
@@ -186,6 +239,18 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
     }
   };
 
+  const dismissOffer = async (packId: string) => {
+    setActionError("");
+    setNotice("");
+    try {
+      await client.dismissReview(packId);
+      setNotice("Offer dismissed.");
+      await refresh();
+    } catch (caught) {
+      setActionError((caught as ApiError).message);
+    }
+  };
+
   const selectCandidate = async (reviewId: string, reviewUpdatedAt: string) => {
     const selection = selectedCandidates[reviewId];
     if (!selection || selection.reviewUpdatedAt !== reviewUpdatedAt) return;
@@ -203,7 +268,7 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
   return (
     <section>
       <h2>Wanted</h2>
-      <p>Track episodes MarkTV should acquire. Links open the Stremio search for each episode.</p>
+      <p>Track episodes and movies MarkTV should acquire. Links open the Stremio search for each entry.</p>
       {loadError ? <p role="alert">{loadError}</p> : null}
       {actionError ? <p role="alert">{actionError}</p> : null}
       {notice ? <p className="success">{notice}</p> : null}
@@ -353,6 +418,64 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
           ))}
         </div>
       )}
+      <h3>Wanted movies ({movies.length})</h3>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void addMovie();
+        }}
+      >
+        <fieldset>
+          <legend>Add a wanted movie</legend>
+          <div className="form-grid">
+            <label>
+              Movie title
+              <input
+                aria-label="Movie title"
+                value={movieTitle}
+                onChange={(event) => setMovieTitle(event.target.value)}
+              />
+            </label>
+            <label>
+              Year (optional)
+              <input
+                aria-label="Year (optional)"
+                inputMode="numeric"
+                value={movieYear}
+                onChange={(event) => setMovieYear(event.target.value)}
+              />
+            </label>
+          </div>
+          <button type="submit" disabled={busy}>
+            Add movie
+          </button>
+        </fieldset>
+      </form>
+      {movies.length === 0 ? (
+        <p>No wanted movies yet.</p>
+      ) : (
+        <div className="cards">
+          {movies.map((movie) => (
+            <article key={movie.id}>
+              <h4>
+                {movie.title}
+                {movie.year === null ? null : ` (${movie.year})`}
+              </h4>
+              <p>
+                Movie status: <AcquisitionStatus state={movie.status} />
+              </p>
+              <p>
+                <a href={movie.stremioUrl}>Open in Stremio</a>
+              </p>
+              <div>
+                <button className="secondary" onClick={() => void removeMovie(movie)}>
+                  Remove movie
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
       <h3>
         Season packs ({packs.length} season pack offer{packs.length === 1 ? "" : "s"})
       </h3>
@@ -395,6 +518,9 @@ export function Wanted({ client = markTvApi }: { client?: MarkTvApi }) {
               <button onClick={() => void importSeason(pack.id)}>
                 {pack.season !== null ? `Import Season ${pack.season}` : "Import season"}
               </button>
+              {/* Offers are durable by design, so an unwanted one had no way out
+                  except importing it. This is the other answer. */}
+              <button onClick={() => void dismissOffer(pack.id)}>Dismiss</button>
             </article>
           ))}
         </div>

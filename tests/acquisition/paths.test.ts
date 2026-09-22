@@ -54,6 +54,26 @@ describe("initializeManagedPaths", () => {
     expect(paths.library).toBe(await realpath(join(dataDir, "library")));
   });
 
+  test("uses explicit absolute inbox and library directories outside the data directory", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "marktv-data-"));
+    const externalDir = await mkdtemp(join(tmpdir(), "marktv-external-"));
+    const inbox = join(externalDir, "Inbox");
+    const library = join(externalDir, "Shows");
+
+    const paths = await initializeManagedPaths(dataDir, { inbox, library });
+
+    expect(paths.inbox).toBe(await realpath(inbox));
+    expect(paths.library).toBe(await realpath(library));
+    await expect(lstat(join(dataDir, "inbox"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(join(dataDir, "library"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("rejects relative managed path overrides", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "marktv-data-"));
+    await expect(initializeManagedPaths(dataDir, { inbox: "relative-inbox" })).rejects.toThrow(/absolute/i);
+    await expect(initializeManagedPaths(dataDir, { library: "relative-library" })).rejects.toThrow(/absolute/i);
+  });
+
   test("rejects a symlinked inbox", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "marktv-paths-"));
     const target = join(dataDir, "target");

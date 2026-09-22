@@ -1,10 +1,15 @@
 import { describe, expect, test } from "vitest";
 import {
   episodeKey,
+  movieKey,
   normalizedSeriesTitle,
+  stremioMovieSearchUrl,
   stremioSearchUrl,
 } from "../../src/acquisition/identity.js";
-import { episodeKey as modelEpisodeKey } from "../../src/acquisition/models.js";
+import {
+  episodeKey as modelEpisodeKey,
+  movieKey as modelMovieKey,
+} from "../../src/acquisition/models.js";
 
 describe("normalizedSeriesTitle", () => {
   test("folds case, punctuation, separators, whitespace and Unicode width", () => {
@@ -114,5 +119,68 @@ describe("stremioSearchUrl", () => {
         episode: 2,
       }),
     ).toBe("stremio:///search?search=Severance%20S01E02");
+  });
+});
+
+describe("movieKey", () => {
+  test("keeps remakes that share a title apart by release year", () => {
+    expect(movieKey("Dune", 1984)).toBe("dune|y1984");
+    expect(movieKey("Dune", 2021)).toBe("dune|y2021");
+    expect(movieKey("Dune", 1984)).not.toBe(movieKey("Dune", 2021));
+  });
+
+  test("folds title spelling exactly as episode identity does", () => {
+    expect(movieKey("  The  Thing!! ", 1982)).toBe("the thing|y1982");
+    expect(movieKey("Star Trek: First Contact", 1996)).toBe(
+      "star trek first contact|y1996",
+    );
+    expect(movieKey("Ｓｅｖｅｒａｎｃｅ", 2018)).toBe("severance|y2018");
+  });
+
+  test("keys an unknown year distinctly so it cannot collide with a real one", () => {
+    expect(movieKey("Dune", null)).toBe("dune|yunknown");
+    expect(movieKey("Dune", null)).not.toBe(movieKey("Dune", 1984));
+  });
+
+  test("re-exports the model helper instead of defining a second normalizer", () => {
+    expect(movieKey).toBe(modelMovieKey);
+    expect(movieKey("Pokémon: The Movie", 1998)).toBe(
+      modelMovieKey("Pokémon: The Movie", 1998),
+    );
+  });
+});
+
+describe("stremioMovieSearchUrl", () => {
+  test("uses the exact stremio:///search?search= prefix with title and year", () => {
+    const url = stremioMovieSearchUrl({ title: "Dune", year: 2021 });
+    expect(url).toBe("stremio:///search?search=Dune%202021");
+    expect(url.startsWith("stremio:///search?search=")).toBe(true);
+    expect(
+      decodeURIComponent(url.slice("stremio:///search?search=".length)),
+    ).toBe("Dune 2021");
+  });
+
+  test("omits an unknown year rather than inventing one", () => {
+    expect(stremioMovieSearchUrl({ title: "Dune", year: null })).toBe(
+      "stremio:///search?search=Dune",
+    );
+    expect(stremioMovieSearchUrl({ title: "  Dune  ", year: null })).toBe(
+      "stremio:///search?search=Dune",
+    );
+  });
+
+  test("encodes Unicode and punctuation without pre-normalizing the title", () => {
+    expect(
+      stremioMovieSearchUrl({ title: "Pokémon: The Movie", year: 1998 }),
+    ).toBe("stremio:///search?search=Pok%C3%A9mon%3A%20The%20Movie%201998");
+    expect(stremioMovieSearchUrl({ title: "Law & Order", year: null })).toBe(
+      "stremio:///search?search=Law%20%26%20Order",
+    );
+  });
+
+  test("distinguishes two films that share a title only when the year is known", () => {
+    expect(stremioMovieSearchUrl({ title: "Dune", year: 1984 })).not.toBe(
+      stremioMovieSearchUrl({ title: "Dune", year: 2021 }),
+    );
   });
 });

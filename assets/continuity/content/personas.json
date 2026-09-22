@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "reuseExistingVoicesFirst": true,
+  "bindingPolicy": "The local agent inventories existing voice assets/provider settings and binds these jobs to available approved voices. Null voice IDs are intentionally unbound; they are not API-ready credentials.",
+  "personas": [
+    {
+      "id": "network",
+      "label": "The Network Voice",
+      "primaryHoursLocal": "18:00–00:00",
+      "delivery": "Warm, confident regional television announcer. Medium-low register; clear American English; measured delivery. Light authority, not a movie-trailer growl. Finish titles cleanly.",
+      "preferredRoles": [
+        "next",
+        "lineup",
+        "movie-intro",
+        "weekend"
+      ],
+      "humor": "Mostly sincere. An occasional understated final line.",
+      "targetWordsPerMinute": 145,
+      "providerVoiceId": null
+    },
+    {
+      "id": "local",
+      "label": "The Local Guy",
+      "primaryHoursLocal": "06:00–18:00",
+      "delivery": "Friendly local independent-station announcer. Medium register, conversational American English, a little salesmanship, never shouting. A smile in the read, no forced sitcom laugh.",
+      "preferredRoles": [
+        "break",
+        "return",
+        "next",
+        "station-id"
+      ],
+      "humor": "Small domestic observations; not a stand-up routine.",
+      "targetWordsPerMinute": 150,
+      "providerVoiceId": null
+    },
+    {
+      "id": "overnight",
+      "label": "The Overnight Voice",
+      "primaryHoursLocal": "00:00–06:00",
+      "delivery": "Low-energy but clearly intelligible late-night announcer. Dry American delivery; lower-middle register; slight fatigue, not slurring or whispering. Let one short pause do the joke. Maintain normal audible volume.",
+      "preferredRoles": [
+        "break",
+        "return",
+        "next",
+        "movie-intro",
+        "overnight"
+      ],
+      "humor": "Deadpan. The station is still running; the staff may not be.",
+      "targetWordsPerMinute": 135,
+      "providerVoiceId": null
+    },
+    {
+      "id": "odd",
+      "label": "The Odd Promo Voice",
+      "primaryHoursLocal": "Rare; normally 01:00–05:00",
+      "delivery": "Quietly formal, slightly too precise station employee reading a mundane notice. Different timbre from the main voices. Strange through timing, not a cartoon monster. No celebrity imitation.",
+      "preferredRoles": [
+        "odd-id",
+        "staged-interruption"
+      ],
+      "humor": "One odd observation, delivered without comment.",
+      "targetWordsPerMinute": 140,
+      "providerVoiceId": null
+    }
+  ]
+}

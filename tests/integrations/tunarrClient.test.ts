@@ -499,6 +499,52 @@ describe("TunarrClient local contract", () => {
     });
   });
 
+  test("keeps Tunarr's own verdict on a program it cannot play", async () => {
+    const fetcher = (async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith("/api/media-libraries/lib/programs"))
+        return new Response(
+          JSON.stringify([
+            {
+              type: "content",
+              id: "missing-media",
+              duration: 60_000,
+              program: {
+                uuid: "11111111-1111-4111-8111-111111111111",
+                sourceType: "local",
+                externalId: "/media/gone.mkv",
+                mediaItem: {
+                  state: "missing",
+                  locations: [{ type: "local", path: "/media/gone.mkv" }],
+                },
+              },
+            },
+          ]),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ error: "missing" }), {
+        status: 404,
+      });
+    }) as typeof fetch;
+
+    // The planner is what decides that "missing" cannot be programmed. What
+    // matters here is that the client does not drop the field saying so: an
+    // unparsed field would make a file Tunarr cannot play look playable.
+    await expect(
+      new TunarrClient("http://fake", fetcher).inventory("lib"),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "missing-media",
+        path: "/media/gone.mkv",
+        program: expect.objectContaining({
+          program: expect.objectContaining({
+            mediaItem: expect.objectContaining({ state: "missing" }),
+          }),
+        }),
+      }),
+    ]);
+  });
+
   test("rejects relative local inventory paths instead of resolving against cwd", async () => {
     const state: FakeState = {
       requests: [],

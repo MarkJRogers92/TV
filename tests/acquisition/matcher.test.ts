@@ -1214,3 +1214,55 @@ describe("matchCompletedFiles determinism", () => {
     expect(offers).toHaveLength(1);
     expect(offers[0]!.packPreview).toMatchObject({ remoteItemId: "night-court", season: 1 });
   });
+
+  test("routes a single-season pack to the pack path, not the collection offers", () => {
+    // Deliberate, and worth pinning because it looks like a bug from the outside: a
+    // "season pack OFFER" means a multi-season collection, which the user chooses
+    // between. A pack holding only the requested season is NOT one of those - it is
+    // handled by the single `season-pack` path below. So a viewer looking for their
+    // smaller Season-2-only download will not find it in the Season packs section, and
+    // that is by design rather than the pack being unseen.
+    const seasonTwo = Array.from({ length: 6 }, (_, index) =>
+      file({
+        remoteItemId: "that-70s-show-s2",
+        remoteFileId: `t7s-s2e${index + 1}`,
+        originalFilename: `That 70s Show - S02E0${index + 1} - Episode.mkv`,
+        bytes: 224 * megabyte,
+      }),
+    );
+    const plan = matchCompletedFiles(
+      [wanted({ id: "wanted-t7s", seriesTitle: "That 70s Show", season: 2, episode: 1 })],
+      [
+        item(seasonTwo, {
+          remoteItemId: "that-70s-show-s2",
+          originalName: "That 70s Show Season 2",
+        }),
+      ],
+      [],
+    );
+
+    expect(plan.kind).toBe("season-pack");
+    expect(
+      (plan as Extract<MatchPlan, { kind: "season-pack" }>).packPreview,
+    ).toMatchObject({ season: 2, recognizedEpisodeCount: 6 });
+  });
+
+  test("still ignores a pack with too few episodes of the wanted season", () => {
+    // The loosened gate must not turn every stray pair of episodes into a collection
+    // offer: coverage of the requested season is still required.
+    const tooFew = Array.from({ length: 2 }, (_, index) =>
+      file({
+        remoteItemId: "thin-s2",
+        remoteFileId: `thin-s2e${index + 1}`,
+        originalFilename: `That 70s Show - S02E0${index + 1} - Episode.mkv`,
+        bytes: 224 * megabyte,
+      }),
+    );
+    const plan = matchCompletedFiles(
+      [wanted({ id: "wanted-t7s", seriesTitle: "That 70s Show", season: 2, episode: 1 })],
+      [item(tooFew, { remoteItemId: "thin-s2", originalName: "That 70s Show S02" })],
+      [],
+    );
+
+    expect(plan.kind).not.toBe("season-packs");
+  });

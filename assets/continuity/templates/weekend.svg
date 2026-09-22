@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="720" viewBox="0 0 960 720" role="img" aria-label="MarkTV double-bill template">
+<title>MarkTV double-bill — prototype template</title>
+<rect width="960" height="720" fill="#63302a"/><path d="M0 0H960V120L0 238Z" fill="#8d4933"/><rect x="45" y="215" width="872" height="367" fill="#291b26" stroke="#e1b652" stroke-width="5"/><path d="M45 395H917" stroke="#a47444" stroke-width="2"/>
+{{LOGO}}
+<text x="64" y="166" fill="#ffd971" font-family="Arial,Helvetica,sans-serif" font-size="30" font-weight="700" letter-spacing="3">{{LABEL}}</text>
+<text x="64" y="294" fill="#fff0d9" font-family="Arial,Helvetica,sans-serif" font-size="62" font-weight="900">{{TITLE_1}}</text>
+<text x="64" y="355" fill="#fff0d9" font-family="Arial,Helvetica,sans-serif" font-size="62" font-weight="900">{{TITLE_2}}</text>
+<g fill="#e1dfdb" font-family="Arial,Helvetica,sans-serif" font-size="28" font-weight="600">
+<text x="64" y="442">{{DETAIL_1}}</text><text x="64" y="482">{{DETAIL_2}}</text><text x="64" y="522">{{DETAIL_3}}</text><text x="64" y="562">{{DETAIL_4}}</text>
+</g>
+<text x="64" y="661" fill="#d5d8da" font-family="Arial,Helvetica,sans-serif" font-size="16" letter-spacing="1">{{FOOTER}}</text>
+</svg>

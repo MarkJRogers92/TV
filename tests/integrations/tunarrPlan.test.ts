@@ -141,6 +141,31 @@ const schedule: Schedule = {
   ],
 };
 
+test("preserved mapping replaces a day without replacing the full channel timeline", () => {
+  const start = Date.parse(schedule.entries[0].start);
+  const day: Schedule = { ...schedule, durationMs: 120_000, entries: [
+    { ...schedule.entries[0], durationMs: 120_000, contentDurationMs: undefined, midrolls: undefined,
+      end: new Date(start + 120_000).toISOString() },
+  ] };
+  const remote: TunarrSnapshots = { ...snapshots,
+    channels: [{ ...existingChannel, startTime: start - 60_000, duration: 300_000 }],
+    programming: { ...programming, totalPrograms: 3, lineup: [
+      { type: "content", id: "ad", duration: 60_000 },
+      { type: "content", id: "movie", duration: 120_000 },
+      { type: "content", id: "future", duration: 120_000 },
+    ] },
+  };
+  const mapping = { libraryId: "lib", channelId: "7", createChannel: false, preserveExistingLineup: true };
+  const plan = buildTunarrSyncPlan(day, inventory, capabilities, mapping, remote);
+  expect(plan.blockingErrors).toEqual([]);
+  expect(plan.operations[0]).toMatchObject({ payload: { startTime: start - 60_000, duration: 300_000 } });
+  const programmed = plan.operations.find(operation => operation.type === "programming");
+  expect(programmed).toMatchObject({ payload: remote.programming!.lineup });
+  const changed = structuredClone(remote);
+  changed.programming!.lineup[1] = { type: "content", id: "different", duration: 120_000 };
+  expect(buildTunarrSyncPlan(day, inventory, capabilities, mapping, changed).syncEligible).toBe(false);
+});
+
 test("plans channel/filler updates and the exact midroll lineup", () => {
   const plan = buildTunarrSyncPlan(
     schedule,
@@ -193,6 +218,92 @@ test("plans channel/filler updates and the exact midroll lineup", () => {
     },
     { type: "content", id: "ad", duration: 60_000 },
   ]);
+});
+
+test("breaks inside one programme do not reuse the same spot when others fit", () => {
+  const ads = ["ad-a", "ad-b", "ad-c", "ad-d"];
+  const adInventory: TunarrInventory = [
+    {
+      id: "movie",
+      path: "/media/movie.mkv",
+      program: wrapper("movie", "/media/movie.mkv"),
+    },
+    ...ads.map((id) => ({
+      id,
+      path: `/media/${id}.mkv`,
+      program: wrapper(id, `/media/${id}.mkv`),
+    })),
+  ];
+  const clock = (minute: number) => `2026-09-13T02:${String(minute).padStart(2, "0")}:00.000Z`;
+  const adEntries: Schedule["entries"] = ads.map((id, index) => ({
+    id: `entry-${id}`,
+    start: clock(4 + index),
+    end: clock(5 + index),
+    localStart: `02:0${4 + index}`,
+    localEnd: `02:0${5 + index}`,
+    durationMs: 60_000,
+    kind: "commercial" as const,
+    title: id,
+    path: `/media/${id}.mkv`,
+  }));
+  const fourBreaks: Schedule = {
+    ...schedule,
+    durationMs: 7_740_000,
+    entries: [
+      {
+        id: "movie-entry",
+        start: clock(0),
+        end: clock(4),
+        localStart: "00:00",
+        localEnd: "02:04",
+        durationMs: 7_440_000,
+        contentDurationMs: 7_200_000,
+        kind: "movie",
+        title: "Movie",
+        path: "/media/movie.mkv",
+        midrolls: [
+          { offsetMs: 1_200_000, durationMs: 60_000 },
+          { offsetMs: 2_400_000, durationMs: 60_000 },
+          { offsetMs: 3_600_000, durationMs: 60_000 },
+          { offsetMs: 4_800_000, durationMs: 60_000 },
+        ],
+      },
+      ...adEntries,
+      {
+        id: "tail",
+        start: clock(8),
+        end: clock(9),
+        localStart: "02:08",
+        localEnd: "02:09",
+        durationMs: 60_000,
+        kind: "flex",
+        title: "Flexible programming",
+      },
+    ],
+  };
+  const plan = buildTunarrSyncPlan(
+    fourBreaks,
+    adInventory,
+    capabilities,
+    { libraryId: "lib", channelId: "7", createChannel: false },
+    snapshots,
+  );
+  expect(plan.syncEligible).toBe(true);
+  const operation = plan.operations[2];
+  if (operation.type !== "programming")
+    throw new Error("expected a programming operation");
+  const lineup = operation.payload;
+  // The movie is split into five content pieces with one pod between each pair,
+  // so the first nine items are the film and its four breaks. (The schedule's own
+  // commercial entries come after them and are not break fill.)
+  const usedIds = lineup
+    .slice(0, 9)
+    .filter((item) => item.type === "content" && item.id !== "movie")
+    .map((item) => item.id);
+  expect(usedIds).toHaveLength(4);
+  // Four one-minute breaks with four distinct one-minute spots available: the
+  // bag is not emptied onto the first break and repeated for the rest.
+  expect(new Set(usedIds).size).toBe(4);
 });
 
 test("splits an episode at exact source offsets and preserves broadcast duration", () => {
@@ -644,4 +755,159 @@ test("preserves canonical libraryIds in the sync plan mapping", async () => {
   );
   expect(plan.mapping).toMatchObject({ libraryIds: ["lib-a", "lib-b"] });
   expect(plan.syncEligible).toBe(true);
+});
+
+const TERMINAL_UUID = "11111111-1111-4111-8111-111111111111";
+
+/** The mapped plan inputs the Tunarr page would send for the existing channel. */
+const mapping = {
+  libraryId: "lib",
+  channelId: "7",
+  createChannel: false,
+} as const;
+
+test("refuses a schedule path whose only Tunarr match Tunarr reports as missing", () => {
+  // The path looks right - the movie entry says /media/movie.mkv and so does
+  // this inventory item - but Tunarr has marked the file it points at missing,
+  // so a lineup built on it would air offline time.
+  const missing: TunarrInventory = inventory.map((item) =>
+    item.id === "movie"
+      ? { ...item, program: { ...item.program, state: "missing" } }
+      : item,
+  );
+
+  const plan = buildTunarrSyncPlan(
+    schedule,
+    missing,
+    capabilities,
+    mapping,
+    snapshots,
+  );
+
+  expect(plan.syncEligible).toBe(false);
+  expect(plan.blockingErrors).toContainEqual(
+    expect.objectContaining({
+      code: "UNUSABLE_MEDIA_STATE",
+      message: expect.stringContaining("/media/movie.mkv"),
+    }),
+  );
+  // Counted as a miss rather than a match: nothing playable answers that path.
+  expect(plan.matchCounts).toMatchObject({ matched: 1, unmatched: 1 });
+  expect(
+    plan.operations.find((operation) => operation.type === "programming")
+      ?.payload,
+  ).not.toContainEqual(expect.objectContaining({ id: "movie" }));
+});
+
+test("treats a program Tunarr declares unusable as no match, wherever it says so", () => {
+  const path = "/media/movie.mkv";
+  const unusable: Array<[string, TunarrInventory[number]["program"]]> = [
+    [
+      "a wrapper state",
+      {
+        type: "content",
+        id: "movie",
+        duration: 60_000,
+        state: "missing",
+        program: { uuid: TERMINAL_UUID, sourceType: "local", externalId: path },
+      },
+    ],
+    [
+      "a terminal program state",
+      {
+        type: "content",
+        id: "movie",
+        duration: 60_000,
+        program: {
+          uuid: TERMINAL_UUID,
+          sourceType: "local",
+          externalId: path,
+          state: "missing",
+        },
+      },
+    ],
+    [
+      "a media-item state",
+      {
+        type: "content",
+        id: "movie",
+        duration: 60_000,
+        program: {
+          uuid: TERMINAL_UUID,
+          sourceType: "local",
+          externalId: path,
+          mediaItem: {
+            state: "missing",
+            locations: [{ type: "local", path }],
+          },
+        },
+      },
+    ],
+    [
+      "an explicit unavailable flag",
+      {
+        type: "content",
+        id: "movie",
+        duration: 60_000,
+        available: false,
+        program: { uuid: TERMINAL_UUID, sourceType: "local", externalId: path },
+      },
+    ],
+    [
+      "a state MarkTV does not recognize",
+      {
+        type: "content",
+        id: "movie",
+        duration: 60_000,
+        state: "quarantined",
+        program: { uuid: TERMINAL_UUID, sourceType: "local", externalId: path },
+      },
+    ],
+  ];
+
+  for (const [where, program] of unusable) {
+    const plan = buildTunarrSyncPlan(
+      schedule,
+      [
+        { id: "movie", path, program },
+        ...inventory.filter((item) => item.id !== "movie"),
+      ],
+      capabilities,
+      mapping,
+      snapshots,
+    );
+    expect(plan.syncEligible, `${where} must block`).toBe(false);
+    expect(plan.blockingErrors, `${where} must block`).toContainEqual(
+      expect.objectContaining({ code: "UNUSABLE_MEDIA_STATE" }),
+    );
+    expect(
+      plan.operations.find((operation) => operation.type === "programming")
+        ?.payload,
+      `${where} must not be programmed`,
+    ).not.toContainEqual(expect.objectContaining({ id: "movie" }));
+  }
+});
+
+test("still matches a playable program when an unusable one shares its path", () => {
+  // Two Tunarr rows exposing one path is Tunarr's own business. Only the one it
+  // can actually play can satisfy the schedule, so this stays eligible rather
+  // than becoming ambiguous.
+  const movie = inventory[0]!;
+  const plan = buildTunarrSyncPlan(
+    schedule,
+    [
+      ...inventory,
+      {
+        ...movie,
+        id: "movie-copy",
+        program: { ...movie.program, state: "missing" },
+      },
+    ],
+    capabilities,
+    mapping,
+    snapshots,
+  );
+
+  expect(plan.syncEligible).toBe(true);
+  expect(plan.matchCounts).toMatchObject({ matched: 2, unmatched: 0 });
 });

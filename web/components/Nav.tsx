@@ -4,6 +4,7 @@ export const pageNames = [
   "Channel",
   "Library",
   "Schedule",
+  "Continuity",
   "Tunarr",
   "Wanted",
   "Integrations",

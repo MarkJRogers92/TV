@@ -5,13 +5,16 @@ import {
   acquisitionReviewSchema,
   completedImportSchema,
   episodeKey,
+  movieKey,
   wantedEpisodeSchema,
+  wantedMovieSchema,
   type AcquisitionJob,
   type AcquisitionJobState,
   type AcquisitionProviderId,
   type AcquisitionReview,
   type CompletedImport,
   type WantedEpisode,
+  type WantedMovie,
   type WantedStatus,
 } from "./models.js";
 
@@ -107,6 +110,20 @@ export type AcquisitionRepository = {
      */
     remove(id: string): WantedRemovalResult;
   };
+  /**
+   * Wanted films. Deliberately a smaller surface than `wanted`: nothing in the
+   * acquisition pipeline consumes a movie yet, so there are no jobs, reviews or
+   * imports to keep consistent, and `remove` needs no `ACTIVE_JOB` guard.
+   */
+  wantedMovies: {
+    list(): WantedMovie[];
+    get(id: string): WantedMovie | undefined;
+    findByIdentity(title: string, year: number | null): WantedMovie | undefined;
+    create(record: WantedMovie): WantedMovie;
+    save(record: WantedMovie): WantedMovie;
+    /** The removed record, so a route can 404 on `undefined` and echo it back. */
+    remove(id: string): WantedMovie | undefined;
+  };
   jobs: {
     list(): AcquisitionJob[];
     listByWanted(wantedId: string): AcquisitionJob[];
@@ -177,6 +194,39 @@ export function createAcquisitionRepository(
     seriesTitle: record.seriesTitle,
     season: record.season,
     episode: record.episode,
+    status: record.status,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    json: JSON.stringify(record),
+  });
+
+  const selectMovie = database.prepare(
+    "SELECT json FROM wanted_movies WHERE id = ?",
+  );
+  const insertMovie = database.prepare(
+    `INSERT INTO wanted_movies
+       (id, movie_key, title, year, status, created_at, updated_at, json)
+     VALUES (@id, @movieKey, @title, @year, @status, @createdAt, @updatedAt, @json)`,
+  );
+  const upsertMovie = database.prepare(
+    `INSERT INTO wanted_movies
+       (id, movie_key, title, year, status, created_at, updated_at, json)
+     VALUES (@id, @movieKey, @title, @year, @status, @createdAt, @updatedAt, @json)
+     ON CONFLICT(id) DO UPDATE SET
+       movie_key = excluded.movie_key,
+       title = excluded.title,
+       year = excluded.year,
+       status = excluded.status,
+       created_at = excluded.created_at,
+       updated_at = excluded.updated_at,
+       json = excluded.json`,
+  );
+
+  const movieColumns = (record: WantedMovie) => ({
+    id: record.id,
+    movieKey: movieKey(record.title, record.year),
+    title: record.title,
+    year: record.year,
     status: record.status,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
@@ -268,6 +318,7 @@ export function createAcquisitionRepository(
   });
 
   const parseWanted = (value: unknown) => wantedEpisodeSchema.parse(value);
+  const parseMovie = (value: unknown) => wantedMovieSchema.parse(value);
   const parseJob = (value: unknown) => acquisitionJobSchema.parse(value);
   const parseReview = (value: unknown) => acquisitionReviewSchema.parse(value);
   const parseImport = (value: unknown) => completedImportSchema.parse(value);
@@ -435,6 +486,57 @@ export function createAcquisitionRepository(
             .run(id);
           database.prepare("DELETE FROM wanted_episodes WHERE id = ?").run(id);
           return { kind: "removed", wanted: wantedRecord } as WantedRemovalResult;
+        }),
+    },
+    wantedMovies: {
+      list: () =>
+        listJson("SELECT json FROM wanted_movies ORDER BY created_at, id").map(
+          (row) => parseMovie(JSON.parse(row.json)),
+        ),
+      get: (id) =>
+        parseJson(selectMovie.get(id) as { json: string } | undefined, parseMovie),
+      findByIdentity: (title, year) =>
+        parseJson(
+          database
+            .prepare("SELECT json FROM wanted_movies WHERE movie_key = ?")
+            .get(movieKey(title, year)) as { json: string } | undefined,
+          parseMovie,
+        ),
+      create: (record) => {
+        const validated = parseMovie(record);
+        try {
+          insertMovie.run(movieColumns(validated));
+        } catch (error) {
+          asConflict(
+            error,
+            `A Wanted movie already exists for ${validated.title}${
+              validated.year === null ? "" : ` (${validated.year})`
+            }`,
+          );
+        }
+        return validated;
+      },
+      save: (record) => {
+        const validated = parseMovie(record);
+        try {
+          upsertMovie.run(movieColumns(validated));
+        } catch (error) {
+          asConflict(
+            error,
+            `A different Wanted movie already claims ${validated.title}${
+              validated.year === null ? "" : ` (${validated.year})`
+            }`,
+          );
+        }
+        return validated;
+      },
+      remove: (id) =>
+        transaction(() => {
+          const row = selectMovie.get(id) as { json: string } | undefined;
+          if (!row) return undefined;
+          const removed = parseMovie(JSON.parse(row.json));
+          database.prepare("DELETE FROM wanted_movies WHERE id = ?").run(id);
+          return removed;
         }),
     },
     jobs: {

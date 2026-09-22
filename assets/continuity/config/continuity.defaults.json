@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "enabled": false,
+  "mode": "preview",
+  "timezone": "America/Chicago",
+  "contentVoice": "sincere regional independent station; restrained dry humor",
+  "existingAssets": "reuse-first",
+  "canonicalLogo": {
+    "path": "assets/branding/marktv-logo-canonical.png",
+    "sha256": "403487d8d5690d4cc31c5a2d3a8f45a944d5437557b5f3b2f8812b1487d05f2b",
+    "approvedAt": "2026-09-21"
+  },
+  "voiceGeneration": {
+    "mode": "existing-assets-first",
+    "networkCallsAllowed": false,
+    "paidGenerationAllowed": false,
+    "maxConcurrentJobs": 1,
+    "maxRetries": 2,
+    "cacheByContentHash": true
+  },
+  "rendering": {
+    "offlineOnly": true,
+    "maxConcurrentJobs": 1,
+    "mediaProfile": "infer-from-known-good-local-clip",
+    "overwriteOriginals": false,
+    "prototypeCanvas": {
+      "width": 960,
+      "height": 720,
+      "purpose": "4:3 design coordinates only; not a required playback encoding"
+    }
+  },
+  "rotation": {
+    "clipCooldownMinutes": 60,
+    "targetPromoCooldownMinutes": 30,
+    "maxInformationalCardsPerBreak": 1,
+    "maxSpokenContinuityClipsPerBreak": 2,
+    "maxContinuitySecondsPerBreak": 20,
+    "oddVoiceMinGapHours": 6,
+    "preserveExistingBreakBudget": true
+  },
+  "promos": {
+    "source": "finalized-committed-schedule",
+    "maximumLookaheadHours": 48,
+    "exactClockClaimsDefault": false,
+    "clockApproximationToleranceMinutes": 15,
+    "expiredAssets": "ineligible",
+    "onInvalidContext": "use-evergreen-or-original-break",
+    "onUnmanagedLineupLoop": "suppress-time-relative-promos",
+    "fallbackMayUseStaleDatedPromos": false
+  },
+  "fakeFailures": {
+    "enabled": false,
+    "enableAfterPlaybackGate": true,
+    "eligibleHoursLocal": [
+      1,
+      5
+    ],
+    "eligiblePlacement": "between-programs-only",
+    "probabilityPerEligibleBreak": 0.02,
+    "maxPerRolling24Hours": 1,
+    "minimumGapHours": 12,
+    "durationSeconds": 5,
+    "requireKnownHealthyPlayback": true,
+    "allowEmergencyTones": false,
+    "allowRealStreamFailure": false
+  },
+  "protectedMovieRules": {
+    "purpose": "Read-only preservation contract, NOT a second scheduler configuration.",
+    "nightlyStartApproxLocal": "02:00",
+    "nightlyDays": [
+      "Mon",
+      "Tue",
+      "Wed",
+      "Thu",
+      "Fri",
+      "Sat",
+      "Sun"
+    ],
+    "weekendDoubleFeatureDays": [
+      "Sat",
+      "Sun"
+    ],
+    "weekendDoubleFeatureStartApproxLocal": "19:00",
+    "weekendDoubleFeatureCount": 2,
+    "resumeSitcomsAfterDoubleFeature": true,
+    "sunday02RepeatsSaturdayOpener": true,
+    "monday02RepeatsSundayOpener": true,
+    "rotation": "Preserve existing shuffle and anti-repeat state; do not select movies independently."
+  }
+}

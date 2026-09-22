@@ -8,7 +8,8 @@ export type ConfigurationIssue = {
     | "MISSING_MEDIA_ITEM"
     | "MISSING_DURATION"
     | "POOL_KIND_MISMATCH"
-    | "INVALID_BREAK_POLICY";
+    | "INVALID_BREAK_POLICY"
+    | "INVALID_CONFIGURATION";
   path: string;
   message: string;
 };
@@ -186,6 +187,82 @@ export function validateChannelConfiguration(
         code: "INVALID_BREAK_POLICY",
         path: "breakPolicy.stationIdPoolIds",
         message: `Pool ${poolId} is not a station-ID pool`,
+      });
+    }
+  }
+
+  // The movie-programming feature schedules against pools of its own, so a
+  // misconfigured id has to fail here rather than at generation time - a channel
+  // that says it has movie programming but cannot find its movies should not be
+  // allowed to look healthy.
+  const movieProgramming = channel.movieProgramming;
+  if (movieProgramming) {
+    // Enabled with nothing to draw from is the one configuration that looks
+    // healthy and can never work: the feature would report "on" and schedule no
+    // films at all. Refused here rather than discovered at generation time.
+    if (movieProgramming.enabled && !movieProgramming.poolIds.length) {
+      issues.push({
+        code: "INVALID_CONFIGURATION",
+        path: "movieProgramming.poolIds",
+        message:
+          "Movie programming needs at least one movie pool to draw its rotation from",
+      });
+    }
+    if (movieProgramming.enabled && !movieProgramming.rootPath) {
+      issues.push({
+        code: "INVALID_CONFIGURATION",
+        path: "movieProgramming.rootPath",
+        message: "Movie programming needs the folder its films are scanned from",
+      });
+    }
+    movieProgramming.poolIds.forEach((poolId) =>
+      requirePool(poolId, "movieProgramming.poolIds"),
+    );
+    movieProgramming.bridgePoolIds.forEach((poolId) =>
+      requirePool(poolId, "movieProgramming.bridgePoolIds"),
+    );
+    for (const poolId of movieProgramming.poolIds) {
+      const pool = poolsById.get(poolId);
+      if (pool && !pool.kinds.includes("movie")) {
+        issues.push({
+          code: "POOL_KIND_MISMATCH",
+          path: "movieProgramming.poolIds",
+          message: `Pool ${poolId} does not allow movie`,
+        });
+      }
+    }
+    // A bridge is whole spots or nothing: a pool of episodes or films cannot fill
+    // it, and asking Tunarr for a duration the library cannot make is dead air.
+    for (const poolId of movieProgramming.bridgePoolIds) {
+      const pool = poolsById.get(poolId);
+      if (
+        pool &&
+        !pool.kinds.some((kind) =>
+          ["commercial", "filler", "bumper"].includes(kind),
+        )
+      ) {
+        issues.push({
+          code: "POOL_KIND_MISMATCH",
+          path: "movieProgramming.bridgePoolIds",
+          message: `Pool ${poolId} holds no whole spots a bridge can be built from`,
+        });
+      }
+    }
+    if (movieProgramming.bridgeMinSeconds > movieProgramming.bridgeMaxSeconds) {
+      issues.push({
+        code: "INVALID_BREAK_POLICY",
+        path: "movieProgramming.bridgeMinSeconds",
+        message: "The movie bridge minimum cannot exceed its maximum",
+      });
+    }
+    if (
+      movieProgramming.breakPolicy.targetMinutes >
+      movieProgramming.breakPolicy.maxMinutes
+    ) {
+      issues.push({
+        code: "INVALID_BREAK_POLICY",
+        path: "movieProgramming.breakPolicy.targetMinutes",
+        message: "The target movie break cannot exceed the maximum break",
       });
     }
   }

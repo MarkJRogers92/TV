@@ -41,6 +41,8 @@ const importSeasonUrl = (id: string) =>
   `/api/v1/acquisitions/reviews/${id}/import-season`;
 const selectCandidateUrl = (id: string) =>
   `/api/v1/acquisitions/reviews/${id}/select-candidate`;
+const dismissReviewUrl = (id: string) =>
+  `/api/v1/acquisitions/reviews/${id}/dismiss`;
 
 const NOW = "2026-09-14T10:00:00.000Z";
 const UUID_V4 =
@@ -828,6 +830,53 @@ describe("DELETE /api/v1/acquisitions/wanted/:id", () => {
     }
   });
 
+  test("dismisses a season-pack offer that will not be imported", async () => {
+    const { app } = await rig();
+    const database = directDatabase();
+    database.acquisitions.wanted.create(wantedRecord("wanted-e2", 2));
+    database.acquisitions.reviews.save(
+      packOffer({ id: "pack-dismiss", wantedId: "wanted-e2" }),
+    );
+    database.close();
+
+    try {
+      expect((await app.inject(SEASON_PACKS_URL)).json()).toHaveLength(1);
+
+      const dismissed = await app.inject({
+        method: "POST",
+        url: dismissReviewUrl("pack-dismiss"),
+      });
+      expect(dismissed.statusCode).toBe(200);
+      expect(dismissed.json()).toMatchObject({
+        dismissed: true,
+        id: "pack-dismiss",
+      });
+
+      expect((await app.inject(SEASON_PACKS_URL)).json()).toHaveLength(0);
+      const after = directDatabase();
+      expect(after.acquisitions.reviews.get("pack-dismiss")).toBeUndefined();
+      // Dismissing an OFFER must not touch the wanted episode it was anchored to:
+      // offers are durable precisely so that removing one is an independent act.
+      expect(after.acquisitions.wanted.get("wanted-e2")).toBeDefined();
+      after.close();
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("dismissing an offer that does not exist reports not found", async () => {
+    const { app } = await rig();
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: dismissReviewUrl("no-such-offer"),
+      });
+      expect(response.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
   test("keeps a durable season-pack offer when its anchor episode is removed", async () => {
     const { app } = await rig();
     const database = directDatabase();
@@ -1551,4 +1600,162 @@ test("persists Wanted records across an app restart with the same data directory
   } finally {
     await second.app.close();
   }
+});
+
+const WANTED_MOVIES_URL = "/api/v1/acquisitions/wanted-movies";
+
+function postMovie(app: FastifyInstance, payload: object) {
+  return app.inject({ method: "POST", url: WANTED_MOVIES_URL, payload });
+}
+
+describe("GET/POST/DELETE /api/v1/acquisitions/wanted-movies", () => {
+  test("creates a wanted movie with a server id, wanted status and Stremio link", async () => {
+    const { app } = await rig();
+    try {
+      expect((await app.inject(WANTED_MOVIES_URL)).json()).toEqual([]);
+
+      const created = await postMovie(app, { title: "Dune", year: 2021 });
+      expect(created.statusCode).toBe(201);
+      const record = created.json();
+      expect(record).toMatchObject({
+        title: "Dune",
+        year: 2021,
+        status: "wanted",
+        statusDetail: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      expect(record.id).toMatch(UUID_V4);
+      expect(record.stremioUrl).toBe("stremio:///search?search=Dune%202021");
+
+      const listed = (await app.inject(WANTED_MOVIES_URL)).json();
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).toEqual(record);
+      expectNoLeaks(listed);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("defaults an omitted year to null and drops it from the search query", async () => {
+    const { app } = await rig();
+    try {
+      const created = await postMovie(app, { title: "Dune" });
+      expect(created.statusCode).toBe(201);
+      expect(created.json()).toMatchObject({ title: "Dune", year: null });
+      expect(created.json().stremioUrl).toBe("stremio:///search?search=Dune");
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("treats title plus year as the identity, so remakes stay separate", async () => {
+    const { app } = await rig();
+    try {
+      expect((await postMovie(app, { title: "Dune", year: 1984 })).statusCode).toBe(201);
+      expect((await postMovie(app, { title: "Dune", year: 2021 })).statusCode).toBe(201);
+
+      const listed = (await app.inject(WANTED_MOVIES_URL)).json();
+      expect(listed).toHaveLength(2);
+      expect(listed.map((movie: { year: number }) => movie.year).sort()).toEqual([1984, 2021]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("conflicts on a duplicate identity, including a case-only respelling", async () => {
+    const { app } = await rig();
+    try {
+      const original = (await postMovie(app, { title: "The Thing", year: 1982 })).json();
+
+      const exact = await postMovie(app, { title: "The Thing", year: 1982 });
+      expect(exact.statusCode).toBe(409);
+      expect(exact.json()).toMatchObject({ code: "ALREADY_WANTED" });
+
+      const respelled = await postMovie(app, { title: "the  THING!", year: 1982 });
+      expect(respelled.statusCode).toBe(409);
+      expect(respelled.json()).toMatchObject({ code: "ALREADY_WANTED" });
+
+      // A different year is a different film, not a duplicate.
+      expect((await postMovie(app, { title: "The Thing", year: 2011 })).statusCode).toBe(201);
+
+      const listed = (await app.inject(WANTED_MOVIES_URL)).json();
+      expect(listed).toHaveLength(2);
+      // Both records use the test's fixed clock, so the repository's secondary
+      // UUID ordering is intentionally not insertion ordering.
+      expect(listed.some((movie: { id: string }) => movie.id === original.id)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("distinguishes an unknown year from a real one", async () => {
+    const { app } = await rig();
+    try {
+      expect((await postMovie(app, { title: "Solaris", year: null })).statusCode).toBe(201);
+      expect((await postMovie(app, { title: "Solaris", year: 1972 })).statusCode).toBe(201);
+      // Repeating the unknown-year entry is still a duplicate of itself.
+      expect((await postMovie(app, { title: "Solaris" })).statusCode).toBe(409);
+      expect((await app.inject(WANTED_MOVIES_URL)).json()).toHaveLength(2);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("removes a movie and reports an unknown id as missing", async () => {
+    const { app } = await rig();
+    try {
+      const created = (await postMovie(app, { title: "Dune", year: 2021 })).json();
+
+      const removed = await app.inject({
+        method: "DELETE",
+        url: `${WANTED_MOVIES_URL}/${created.id}`,
+      });
+      expect(removed.statusCode).toBe(200);
+      expect(removed.json()).toEqual(created);
+      expect((await app.inject(WANTED_MOVIES_URL)).json()).toEqual([]);
+
+      const missing = await app.inject({
+        method: "DELETE",
+        url: `${WANTED_MOVIES_URL}/no-such-movie`,
+      });
+      expect(missing.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("rejects a blank title, an unknown key, and a non-positive year", async () => {
+    const { app } = await rig();
+    try {
+      expect((await postMovie(app, { title: "   " })).statusCode).toBe(422);
+      expect((await postMovie(app, { title: "Dune", year: 0 })).statusCode).toBe(422);
+      expect((await postMovie(app, { title: "Dune", year: -4 })).statusCode).toBe(422);
+      expect((await postMovie(app, { title: "Dune", year: 2021.5 })).statusCode).toBe(422);
+      // The record shape is server-owned, so an injected status can never be stored.
+      expect(
+        (await postMovie(app, { title: "Dune", status: "imported" })).statusCode,
+      ).toBe(422);
+      expect((await app.inject(WANTED_MOVIES_URL)).json()).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("persists a wanted movie across a restart, like a wanted episode", async () => {
+    const first = await rig();
+    const created = (
+      await postMovie(first.app, { title: "Dune", year: 2021 })
+    ).json();
+    await first.app.close();
+
+    const second = await rig();
+    try {
+      const listed = (await second.app.inject(WANTED_MOVIES_URL)).json();
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).toEqual(created);
+    } finally {
+      await second.app.close();
+    }
+  });
 });

@@ -31,7 +31,7 @@ test("explains when live TV has not been connected to a Tunarr channel", async (
   await app.close();
 });
 
-test("respects the channel stream mode and rewrites the Tunarr HLS stream for the browser", async () => {
+test.each(["legacy", "per-channel"])("respects the channel stream mode and rewrites the Tunarr HLS stream for the browser (%s)", async (storage) => {
   const upstream = createServer((request, response) => {
     if (request.url === "/stream/channels/tunarr-channel.m3u8") {
       response.setHeader("content-type", "application/vnd.apple.mpegurl");
@@ -62,11 +62,13 @@ test("respects the channel stream mode and rewrites the Tunarr HLS stream for th
   const dataDir = await mkdtemp(join(tmpdir(), "marktv-watch-route-"));
   directories.push(dataDir);
   const repositories = createRepositories(openDatabase(dataDir));
-  repositories.settings.put("tunarr-mapping", {
+  const mapping = {
     url: `http://127.0.0.1:${address.port}`,
     marktvChannelId: "marktv-laughs",
     channelId: "tunarr-channel",
-  });
+  };
+  if (storage === "legacy") repositories.settings.put("tunarr-mapping", mapping);
+  else repositories.settings.put("tunarr-mappings", { "marktv-laughs": mapping });
   repositories.close();
   const app = await buildApp({ dataDir });
 
