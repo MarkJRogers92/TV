@@ -12,8 +12,11 @@ import { generateSchedule } from "../../src/scheduler/generate.js";
 import {
   autoSyncTunarr,
   readTunarrMapping,
+  readTunarrMappingForChannel,
+  readTunarrMappings,
   TUNARR_MAPPING_SETTING,
   type StoredTunarrMapping,
+  upsertTunarrMapping,
 } from "../../src/server/tunarrAutoSync.js";
 
 const dirs: string[] = [];
@@ -188,6 +191,54 @@ async function repositoriesWithSchedule(
     });
   return repositories;
 }
+
+test("stores independent Tunarr mappings for each MarkTV channel", async () => {
+  const fixture = setup();
+  const repositories = await repositoriesWithSchedule(fixture);
+  const channel7: StoredTunarrMapping = {
+    libraryId: "lib-a",
+    libraryIds: ["lib-a"],
+    channelId: "tunarr-channel-7",
+    createChannel: false,
+    url: "http://tunarr.test",
+    marktvChannelId: "marktv-laughs",
+    lastSync: {
+      status: "synced",
+      at: "2026-09-14T18:00:00.000Z",
+      marktvChannelId: "marktv-laughs",
+      scheduleId: "schedule-7",
+    },
+  };
+  const channel9: StoredTunarrMapping = {
+    ...channel7,
+    channelId: "tunarr-channel-9",
+    marktvChannelId: "marktv-cult-movies",
+    lastSync: {
+      status: "blocked",
+      at: "2026-09-14T19:00:00.000Z",
+      marktvChannelId: "marktv-cult-movies",
+      scheduleId: "schedule-9",
+    },
+  };
+
+  repositories.settings.put(TUNARR_MAPPING_SETTING, channel7);
+  expect(readTunarrMappingForChannel(repositories, "marktv-laughs")).toEqual(
+    channel7,
+  );
+
+  upsertTunarrMapping(repositories, channel9);
+
+  expect(readTunarrMappings(repositories)).toEqual(
+    expect.arrayContaining([channel7, channel9]),
+  );
+  expect(
+    readTunarrMappingForChannel(repositories, "marktv-laughs")?.lastSync,
+  ).toEqual(channel7.lastSync);
+  expect(
+    readTunarrMappingForChannel(repositories, "marktv-cult-movies"),
+  ).toEqual(channel9);
+  repositories.close();
+});
 
 const now = () => new Date("2026-09-14T18:00:00.000Z");
 

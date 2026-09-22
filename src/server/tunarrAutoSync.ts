@@ -25,6 +25,7 @@ import {
  */
 
 export const TUNARR_MAPPING_SETTING = "tunarr-mapping";
+export const TUNARR_MAPPINGS_SETTING = "tunarr-mappings";
 
 export type TunarrAutoSyncOutcome = {
   status: "synced" | "skipped" | "blocked" | "failed";
@@ -46,12 +47,68 @@ export type StoredTunarrMapping = TunarrMappingInput & {
   lastSync?: TunarrAutoSyncOutcome;
 };
 
-export function readTunarrMapping(
+type StoredTunarrMappingCollection = Record<string, StoredTunarrMapping>;
+
+function isMappingCollection(
+  value: unknown,
+): value is StoredTunarrMappingCollection {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readLegacyTunarrMapping(
   repositories: Repositories,
 ): StoredTunarrMapping | undefined {
   return repositories.settings.get(TUNARR_MAPPING_SETTING)?.value as
     | StoredTunarrMapping
     | undefined;
+}
+
+export function readTunarrMappings(
+  repositories: Repositories,
+): StoredTunarrMapping[] {
+  const value = repositories.settings.get(TUNARR_MAPPINGS_SETTING)?.value;
+  const mappings = isMappingCollection(value) ? Object.values(value) : [];
+  const legacy = readLegacyTunarrMapping(repositories);
+  if (
+    legacy?.marktvChannelId &&
+    !mappings.some(
+      (mapping) => mapping.marktvChannelId === legacy.marktvChannelId,
+    )
+  ) {
+    mappings.push(legacy);
+  }
+  return mappings;
+}
+
+export function readTunarrMappingForChannel(
+  repositories: Repositories,
+  marktvChannelId: string,
+): StoredTunarrMapping | undefined {
+  return readTunarrMappings(repositories).find(
+    (mapping) => mapping.marktvChannelId === marktvChannelId,
+  );
+}
+
+export function readTunarrMapping(
+  repositories: Repositories,
+): StoredTunarrMapping | undefined {
+  return readTunarrMappings(repositories)[0];
+}
+
+export function upsertTunarrMapping(
+  repositories: Repositories,
+  mapping: StoredTunarrMapping,
+): void {
+  const mappings = readTunarrMappings(repositories).filter(
+    (candidate) => candidate.marktvChannelId !== mapping.marktvChannelId,
+  );
+  mappings.push(mapping);
+  repositories.settings.put(
+    TUNARR_MAPPINGS_SETTING,
+    Object.fromEntries(
+      mappings.map((candidate) => [candidate.marktvChannelId, candidate]),
+    ),
+  );
 }
 
 /** The subset of the stored mapping the plan builder consumes. */
@@ -71,7 +128,7 @@ function persist(
   mapping: StoredTunarrMapping,
   outcome: TunarrAutoSyncOutcome,
 ): TunarrAutoSyncOutcome {
-  repositories.settings.put(TUNARR_MAPPING_SETTING, {
+  upsertTunarrMapping(repositories, {
     ...mapping,
     lastSync: outcome,
   });
@@ -117,7 +174,7 @@ export async function autoSyncTunarr(
   options: { channelId: string; now: () => Date; scheduleId?: string },
 ): Promise<TunarrAutoSyncOutcome> {
   const at = options.now().toISOString();
-  const stored = readTunarrMapping(repositories);
+  const stored = readTunarrMappingForChannel(repositories, options.channelId);
   if (!stored?.url)
     return {
       status: "skipped",
@@ -126,22 +183,13 @@ export async function autoSyncTunarr(
       message: "Tunarr has not been configured",
     };
 
-  const base = { at, marktvChannelId: stored.marktvChannelId };
+  const base = { at, marktvChannelId: options.channelId };
   if (stored.autoSync === false)
     return persist(repositories, stored, {
       ...base,
       status: "skipped",
       message: "Automatic sync is turned off",
     });
-  // Only the mapped channel is pushed; generating a different one must not
-  // rewrite this channel's programming.
-  if (stored.marktvChannelId !== options.channelId)
-    return persist(repositories, stored, {
-      ...base,
-      status: "skipped",
-      message: `Only ${stored.marktvChannelId} is synced automatically`,
-    });
-
   // A caller that knows which day it means passes the id. The fallback to
   // `latest` is insertion order, and the quiet-hours pre-generation puts
   // TOMORROW's schedule newest - so resolving "the newest" here would push a
