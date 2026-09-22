@@ -129,6 +129,27 @@ test("persists, scans, and removes explicit read-only media roots with safe erro
     result: { items: [expect.objectContaining({ title: "Pilot S01E01" })] },
   });
 
+  // A manually registered voiced classification must survive a later library
+  // scan of the same canonical path.
+  const scannedMedia = (await app.inject("/api/v1/media")).json() as Array<{
+    id: string;
+    path?: string;
+    kind: string;
+    tags: string[];
+  }>;
+  const imported = scannedMedia.find((item) => item.path?.endsWith("Pilot_S01E01.mp4"));
+  expect(imported).toBeDefined();
+  const voicedTags = [...imported!.tags, "voiced-continuity", "continuity-channel=marktv-laughs"];
+  expect((await app.inject({
+    method: "PUT",
+    url: `/api/v1/media/${imported!.id}`,
+    payload: { ...imported, kind: "bumper", tags: voicedTags },
+  })).statusCode).toBe(200);
+  expect((await app.inject({ method: "POST", url: `/api/v1/media/roots/${root.id}/scan` })).statusCode).toBe(200);
+  const rescanned = ((await app.inject("/api/v1/media")).json() as typeof scannedMedia)
+    .find((item) => item.path?.endsWith("Pilot_S01E01.mp4"));
+  expect(rescanned).toMatchObject({ kind: "bumper", tags: voicedTags });
+
   const unsafe = await app.inject({
     method: "POST",
     url: "/api/v1/media/roots",

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Schedule, ScheduleEntry } from "../../domain/models.js";
+import type { MediaItem, Schedule, ScheduleEntry } from "../../domain/models.js";
 import { normalizeLocalPath } from "./client.js";
 import { assertPreservedMovies, splicePreservedLineup } from "./preserveLineup.js";
 import type {
@@ -67,6 +67,11 @@ export type TunarrSyncPlan = {
 export const PENDING_FILLER_ID = "__MARKTV_FILLER_ID__";
 const fillerKinds = new Set(["commercial", "filler", "bumper"]);
 type MidrollCandidate = { id: string; duration: number };
+type VoicedCandidate = MidrollCandidate & {
+  role: "break" | "return";
+};
+const voicedCooldownMs = 60 * 60_000;
+const maxVoicedDurationPerPodMs = 20_000;
 const hash = (value: unknown) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const fillerName = (schedule: Schedule) =>
@@ -355,6 +360,146 @@ function selectExactMidrollFill(
   return undefined;
 }
 
+function tagValues(item: MediaItem, prefix: string) {
+  return item.tags
+    .filter((tag) => tag.startsWith(prefix))
+    .map((tag) => tag.slice(prefix.length));
+}
+
+function isInsideVoicedAssetRoot(path: string | undefined) {
+  if (!path) return false;
+  const normalized = path.replaceAll("\\", "/").replace(/\/$/, "");
+  const parts = normalized.split("/");
+  return parts.some(
+    (part, index) =>
+      part === "generated" && /^voiced-canon-[^/]+$/.test(parts[index + 1] ?? ""),
+  );
+}
+
+function isImportedVoicedItem(item: MediaItem | undefined, path?: string) {
+  return (
+    item?.tags.includes("voiced-continuity") === true ||
+    isInsideVoicedAssetRoot(item?.path ?? path)
+  );
+}
+
+function makeVoicedCandidates(
+  catalog: readonly MediaItem[],
+  inventory: TunarrInventory,
+  channelId: string,
+): VoicedCandidate[] {
+  const candidates: VoicedCandidate[] = [];
+  const seenPaths = new Set<string>();
+  for (const item of catalog) {
+    const roles = tagValues(item, "continuity-role=");
+    const scopes = tagValues(item, "continuity-scope=");
+    const maps = tagValues(item, "continuity-map=");
+    const channels = tagValues(item, "continuity-channel=");
+    if (
+      !item.tags.includes("voiced-continuity") ||
+      item.tags.some((tag) => tag.startsWith("continuity-staged")) ||
+      !item.available ||
+      item.durationStatus !== "ok" ||
+      !item.durationMs ||
+      !Number.isInteger(item.durationMs) ||
+      !item.path ||
+      roles.length !== 1 ||
+      (roles[0] !== "break" && roles[0] !== "return") ||
+      scopes.length !== 1 ||
+      scopes[0] !== "evergreen" ||
+      maps.length !== 1 ||
+      !/^MARKTV_[A-Z0-9_]+$/.test(maps[0]!) ||
+      channels.length !== 1 ||
+      channels[0] !== channelId
+    )
+      continue;
+    let normalizedPath: string;
+    try {
+      normalizedPath = normalizeLocalPath(item.path);
+    } catch {
+      continue;
+    }
+    if (seenPaths.has(normalizedPath)) continue;
+    const matches = inventory.filter((candidate) => {
+      try {
+        return (
+          normalizeLocalPath(candidate.path) === normalizedPath &&
+          unusableInventoryReason(candidate) === undefined
+        );
+      } catch {
+        return false;
+      }
+    });
+    if (matches.length !== 1) continue;
+    // Catalog durations use integer milliseconds; Tunarr may retain a
+    // fractional millisecond from a 30-fps container duration.
+    if (Math.round(matches[0]!.program.duration) !== item.durationMs) continue;
+    seenPaths.add(normalizedPath);
+    candidates.push({
+      id: matches[0]!.id,
+      duration: item.durationMs,
+      role: roles[0],
+    });
+  }
+  return candidates;
+}
+
+function selectVoicedMidrollFill(
+  voicedCandidates: readonly VoicedCandidate[],
+  commercialCandidates: MidrollCandidate[],
+  targetDuration: number,
+  seed: string,
+  usedWithinEntry: ReadonlySet<string>,
+  broadcastTime: number,
+  placements: Map<string, number[]>,
+): TunarrLineup | undefined {
+  const eligible = (candidate: VoicedCandidate) =>
+    (placements.get(candidate.id) ?? []).every(
+      (placedAt) => broadcastTime - placedAt >= voicedCooldownMs,
+    );
+  const rank = (role: VoicedCandidate["role"]) =>
+    voicedCandidates
+      .filter((candidate) => candidate.role === role && eligible(candidate))
+      .sort((left, right) =>
+        hash(`${seed}:${role}:${left.id}`).localeCompare(
+          hash(`${seed}:${role}:${right.id}`),
+        ),
+      );
+  const breaks = rank("break");
+  const returns = rank("return");
+  for (const breakClip of breaks) {
+    for (const returnClip of returns) {
+      if (breakClip.id === returnClip.id) continue;
+      const voicedDuration = breakClip.duration + returnClip.duration;
+      if (
+        voicedDuration > maxVoicedDurationPerPodMs ||
+        voicedDuration * 2 >= targetDuration
+      )
+        continue;
+      const commercialDuration = targetDuration - voicedDuration;
+      const commercials =
+        selectExactMidrollFill(
+          commercialCandidates,
+          commercialDuration,
+          `${seed}:commercials`,
+          usedWithinEntry,
+        ) ??
+        selectExactMidrollFill(
+          commercialCandidates,
+          commercialDuration,
+          `${seed}:commercials`,
+        );
+      if (!commercials) continue;
+      return [
+        { type: "content", id: breakClip.id, duration: breakClip.duration },
+        ...commercials,
+        { type: "content", id: returnClip.id, duration: returnClip.duration },
+      ];
+    }
+  }
+  return undefined;
+}
+
 export function resolveFillerId(lineup: TunarrLineup, fillerListId: string) {
   return lineup.map((item) =>
     item.type === "flex" && item.fillerConfig?.fillerListIds
@@ -377,6 +522,7 @@ export function buildTunarrSyncPlan(
   capabilities: TunarrCapabilities,
   mapping: TunarrMappingInput,
   snapshots: TunarrSnapshots,
+  catalog: readonly MediaItem[] = [],
 ): TunarrSyncPlan {
   const blockingErrors: Diagnostic[] = [];
   const matchCounts = {
@@ -468,21 +614,43 @@ export function buildTunarrSyncPlan(
   const matches = new Map<string, TunarrContentProgram>();
   const entryMatches = new Map<string, TunarrInventory[number]>();
   const midrollCandidates = new Map<string, MidrollCandidate>();
+  const commercialMidrollCandidates = new Map<string, MidrollCandidate>();
+  const catalogById = new Map(catalog.map((item) => [item.id, item]));
+  const voicedCandidates = makeVoicedCandidates(
+    catalog,
+    inventory,
+    schedule.channelId,
+  );
+  const voicedPlacements = new Map<string, number[]>();
   for (const entry of schedule.entries) {
     if (entry.kind === "flex") continue;
     const match = matchEntry(entry, inventory, blockingErrors, matchCounts);
     if (!match) continue;
     entryMatches.set(entry.id, match);
+    const catalogItem =
+      catalogById.get(entry.mediaId ?? "") ??
+      catalog.find((item) => item.path === entry.path);
     // These cards describe one exact airing. Keep their explicit lineup slot,
     // but never let the ordinary mid-roll/filler bag replay them elsewhere.
     const scheduleBoundCard = entry.id.startsWith("continuity:generated:")
       || entry.path?.replaceAll("\\", "/").includes("/generated/continuity/");
-    if (!scheduleBoundCard && fillerKinds.has(entry.kind) && match.program.duration > 0) {
+    const importedVoice = isImportedVoicedItem(catalogItem, entry.path);
+    if (
+      !scheduleBoundCard &&
+      !importedVoice &&
+      fillerKinds.has(entry.kind) &&
+      match.program.duration > 0
+    ) {
       matches.set(match.id, match.program);
       midrollCandidates.set(match.id, {
         id: match.id,
         duration: entry.durationMs,
       });
+      if (entry.kind === "commercial")
+        commercialMidrollCandidates.set(match.id, {
+          id: match.id,
+          duration: entry.durationMs,
+        });
     }
   }
   const lineup: TunarrLineup = [];
@@ -509,9 +677,51 @@ export function buildTunarrSyncPlan(
       // exact duration, so a film with four breaks does not play the same
       // commercial four times. Episodes get the same treatment.
       const usedWithinEntry = new Set<string>();
+      const entryStart = Date.parse(entry.start);
       midrollPods = entry.midrolls.map((midroll, index) => {
         const candidates = [...midrollCandidates.values()];
+        const commercials = [...commercialMidrollCandidates.values()];
         const seed = `${schedule.seed}:${entry.id}:${index}`;
+        const priorPodDuration = entry.midrolls!
+          .slice(0, index)
+          .reduce((total, prior) => total + prior.durationMs, 0);
+        const broadcastTime =
+          entryStart + midroll.offsetMs + priorPodDuration;
+        const voicedPod = selectVoicedMidrollFill(
+          voicedCandidates,
+          commercials,
+          midroll.durationMs,
+          seed,
+          usedWithinEntry,
+          broadcastTime,
+          voicedPlacements,
+        );
+        if (voicedPod) {
+          const breakClip = voicedCandidates.find(
+            (candidate) => candidate.id === voicedPod[0]?.id,
+          )!;
+          const returnClip = voicedCandidates.find(
+            (candidate) => candidate.id === voicedPod.at(-1)?.id,
+          )!;
+          const commercialDuration = voicedPod
+            .slice(1, -1)
+            .reduce((total, item) => total + item.duration, 0);
+          for (const [candidate, placedAt] of [
+            [breakClip, broadcastTime],
+            [
+              returnClip,
+              broadcastTime + breakClip.duration + commercialDuration,
+            ],
+          ] as const) {
+            const times = voicedPlacements.get(candidate.id) ?? [];
+            times.push(placedAt);
+            voicedPlacements.set(candidate.id, times);
+          }
+          for (const item of voicedPod)
+            if (item.type === "content" && item.id)
+              usedWithinEntry.add(item.id);
+          return voicedPod;
+        }
         const preferred = usedWithinEntry.size
           ? selectExactMidrollFill(candidates, midroll.durationMs, seed, usedWithinEntry)
           : selectExactMidrollFill(candidates, midroll.durationMs, seed);
@@ -533,6 +743,15 @@ export function buildTunarrSyncPlan(
       });
     }
     lineup.push(...splitContent(entry, match.id, midrollPods));
+    const explicitVoice = voicedCandidates.find(
+      (candidate) => candidate.id === match.id,
+    );
+    const explicitStart = Date.parse(entry.start);
+    if (explicitVoice && Number.isFinite(explicitStart)) {
+      const times = voicedPlacements.get(explicitVoice.id) ?? [];
+      times.push(explicitStart);
+      voicedPlacements.set(explicitVoice.id, times);
+    }
   }
   const programs = [...matches.values()];
   if (knownFiller) {
@@ -613,6 +832,7 @@ export function buildTunarrSyncPlan(
     snapshots,
     inventory,
     schedule,
+    catalog,
   });
   return {
     fingerprint,

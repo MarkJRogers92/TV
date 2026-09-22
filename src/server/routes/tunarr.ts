@@ -178,6 +178,7 @@ export async function registerTunarrRoutes(
         remote.capabilities,
         mapping,
         remote.snapshots,
+        context.repositories.media.list(),
       );
       // Preserve stored state this dry run is not replacing (lastSync,
       // autoSync, fillerListId). Spread the mapping first, then remove the
@@ -228,6 +229,7 @@ export async function registerTunarrRoutes(
         new TunarrClient(stored.url),
         stored.plan,
         schedule,
+        context.repositories.media.list(),
       );
       // Re-read rather than writing back the snapshot taken before the network
       // work. A dry run that completed while this was in flight may have stored a

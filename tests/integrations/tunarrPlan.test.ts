@@ -1,9 +1,10 @@
 import { expect, test } from "vitest";
-import type { Schedule } from "../../src/domain/models.js";
+import type { MediaItem, Schedule } from "../../src/domain/models.js";
 import { buildTunarrSyncPlan } from "../../src/integrations/tunarr/plan.js";
 import type {
   TunarrCapabilities,
   TunarrInventory,
+  TunarrLineup,
   TunarrSnapshots,
 } from "../../src/integrations/tunarr/types.js";
 
@@ -218,6 +219,349 @@ test("plans channel/filler updates and the exact midroll lineup", () => {
     },
     { type: "content", id: "ad", duration: 60_000 },
   ]);
+});
+
+const voicedCatalogItem = (
+  id: string,
+  path: string,
+  role: "break" | "return",
+  extraTags: string[] = [],
+  durationMs = role === "break" ? 10_000 : 8_000,
+): MediaItem => ({
+  id,
+  source: "local-folder",
+  path,
+  kind: "bumper",
+  title: id,
+  durationMs,
+  durationStatus: "ok",
+  available: true,
+  tags: [
+    "voiced-continuity",
+    `continuity-role=${role}`,
+    "continuity-scope=evergreen",
+    role === "break"
+      ? "continuity-map=MARKTV_BREAK_OUT_001"
+      : "continuity-map=MARKTV_RETURN_APOLOGY_001",
+    "continuity-channel=marktv-laughs",
+    ...extraTags,
+  ],
+});
+
+function voicedMidrollSchedule(
+  adDurationMs = 42_000,
+  withExplicitVoice = false,
+): Schedule {
+  const start = "2026-09-22T12:00:00.000Z";
+  const episodeDurationMs = 660_000;
+  const episode = {
+    id: "episode-entry",
+    start,
+    end: new Date(Date.parse(start) + episodeDurationMs).toISOString(),
+    localStart: "12:00",
+    localEnd: "12:11",
+    durationMs: episodeDurationMs,
+    contentDurationMs: 600_000,
+    kind: "episode" as const,
+    title: "Episode",
+    mediaId: "episode",
+    path: "/media/episode.mkv",
+    midrolls: [{ offsetMs: 300_000, durationMs: 60_000 }],
+  };
+  const ad = {
+    id: "ad-entry",
+    start: episode.end,
+    end: new Date(Date.parse(episode.end) + adDurationMs).toISOString(),
+    localStart: "12:11",
+    localEnd: "12:12",
+    durationMs: adDurationMs,
+    kind: "commercial" as const,
+    title: "Commercial",
+    mediaId: "ad",
+    path: "/media/ad.mkv",
+  };
+  const explicitVoice = withExplicitVoice
+    ? [{
+        id: "explicit-voice-entry",
+        start: new Date(Date.parse(start) - 30_000).toISOString(),
+        end: start,
+        localStart: "11:59",
+        localEnd: "12:00",
+        durationMs: 30_000,
+        kind: "bumper" as const,
+        title: "Scheduled voice",
+        mediaId: "voice-break",
+        path: "/media/voices/break.mp4",
+      }]
+    : [];
+  const entries = [...explicitVoice, episode, ad];
+  return {
+    id: "voiced-midroll",
+    channelId: "marktv-laughs",
+    channelName: "Laughs",
+    channelNumber: 7,
+    date: "2026-09-22",
+    timezone: "UTC",
+    seed: "voiced-seed",
+    revision: "revision-1",
+    generatedAt: start,
+    durationMs: entries.reduce((total, entry) => total + entry.durationMs, 0),
+    diagnostics: [],
+    entries,
+  };
+}
+
+const voicedInventory: TunarrInventory = [
+  ...inventory,
+  {
+    id: "voice-break",
+    path: "/media/voices/break.mp4",
+    program: { ...wrapper("voice-break", "/media/voices/break.mp4"), duration: 10_000 },
+  },
+  {
+    id: "voice-return",
+    path: "/media/voices/return.mp4",
+    program: { ...wrapper("voice-return", "/media/voices/return.mp4"), duration: 8_000 },
+  },
+];
+
+const voicedCatalog = [
+  voicedCatalogItem("voice-break", "/media/voices/break.mp4", "break"),
+  voicedCatalogItem("voice-return", "/media/voices/return.mp4", "return"),
+];
+
+function plannedLineup(plan: ReturnType<typeof buildTunarrSyncPlan>): TunarrLineup {
+  const operation = plan.operations.find(
+    (candidate) => candidate.type === "programming",
+  );
+  return operation?.type === "programming" ? operation.payload : [];
+}
+
+test("places voiced break and return at the edges of a midroll and preserves exact duration", () => {
+  const plan = buildTunarrSyncPlan(
+    voicedMidrollSchedule(),
+    voicedInventory,
+    capabilities,
+    mapping,
+    snapshots,
+    voicedCatalog,
+  );
+  const lineup = plannedLineup(plan);
+  expect(plan.blockingErrors).toEqual([]);
+  expect(plan.syncEligible).toBe(true);
+  expect(lineup).toContainEqual({ type: "content", id: "voice-break", duration: 10_000 });
+  expect(lineup).toContainEqual({ type: "content", id: "voice-return", duration: 8_000 });
+  expect(lineup).toEqual([
+    { type: "content", id: "episode", duration: 300_000, startOffsetMs: 0 },
+    { type: "content", id: "voice-break", duration: 10_000 },
+    { type: "content", id: "ad", duration: 42_000 },
+    { type: "content", id: "voice-return", duration: 8_000 },
+    { type: "content", id: "episode", duration: 300_000, startOffsetMs: 300_000 },
+    { type: "content", id: "ad", duration: 42_000 },
+  ]);
+  expect(lineup?.reduce((total, item) => total + item.duration, 0)).toBe(
+    voicedMidrollSchedule().durationMs,
+  );
+});
+
+test("normalizes fractional container milliseconds without accepting a different clip duration", () => {
+  const fractionalInventory = voicedInventory.map((item) => item.id === "voice-break"
+    ? { ...item, program: { ...item.program, duration: 10_000.333 } }
+    : item);
+  const plan = buildTunarrSyncPlan(voicedMidrollSchedule(), fractionalInventory, capabilities, mapping, snapshots, voicedCatalog);
+  expect(plan.syncEligible).toBe(true);
+  expect(plannedLineup(plan)).toContainEqual({ type: "content", id: "voice-break", duration: 10_000 });
+});
+
+test.each([
+  ["missing inventory", voicedInventory.filter((item) => item.id !== "voice-break"), voicedCatalog],
+  ["staged media", voicedInventory, [
+    voicedCatalogItem("voice-break", "/media/voices/break.mp4", "break", ["continuity-staged-reason=needs-review"]),
+    voicedCatalog[1]!,
+  ]],
+  ["unhealthy inventory", voicedInventory.map((item) => item.id === "voice-break"
+    ? { ...item, program: { ...item.program, program: { ...item.program.program, state: "missing" } } }
+    : item), voicedCatalog],
+  ["duration mismatch", voicedInventory.map((item) => item.id === "voice-break"
+    ? { ...item, program: { ...item.program, duration: 10_001 } }
+    : item), voicedCatalog],
+])("fails closed for %s even when the voiced combination would otherwise fit", (_name, candidateInventory, catalog) => {
+  const plan = buildTunarrSyncPlan(
+    voicedMidrollSchedule(),
+    candidateInventory as TunarrInventory,
+    capabilities,
+    mapping,
+    snapshots,
+    catalog as MediaItem[],
+  );
+  const lineup = plannedLineup(plan);
+  expect(plan.syncEligible).toBe(false);
+  expect(lineup?.some((item) => item.id === "voice-break" || item.id === "voice-return")).toBe(false);
+  expect(plan.blockingErrors).toContainEqual(expect.objectContaining({ code: "MIDROLL_EXACT_FILL_UNAVAILABLE" }));
+});
+
+test("does not use a voiced clip assigned to another MarkTV channel", () => {
+  const schedule: Schedule = {
+    ...voicedMidrollSchedule(60_000),
+    channelId: "marktv-movies",
+  };
+  const plan = buildTunarrSyncPlan(
+    schedule,
+    voicedInventory,
+    capabilities,
+    mapping,
+    snapshots,
+    voicedCatalog,
+  );
+  const lineup = plannedLineup(plan);
+  expect(plan.syncEligible).toBe(true);
+  expect(lineup).not.toContainEqual(expect.objectContaining({ id: "voice-break" }));
+  expect(lineup).not.toContainEqual(expect.objectContaining({ id: "voice-return" }));
+  expect(lineup).toContainEqual({ type: "content", id: "ad", duration: 60_000 });
+});
+
+test("uses only actual commercials for the nested pod remainder", () => {
+  const schedule = voicedMidrollSchedule(42_000);
+  const filler = schedule.entries[1]!;
+  filler.kind = "bumper";
+  filler.mediaId = "bumper42";
+  filler.path = "/media/bumper42.mkv";
+  const commercial = {
+    ...filler,
+    id: "commercial60-entry",
+    start: filler.end,
+    end: new Date(Date.parse(filler.end) + 60_000).toISOString(),
+    localStart: "12:12",
+    localEnd: "12:13",
+    durationMs: 60_000,
+    kind: "commercial" as const,
+    mediaId: "commercial60",
+    path: "/media/commercial60.mkv",
+  };
+  schedule.entries.push(commercial);
+  schedule.durationMs = schedule.entries.reduce(
+    (total, entry) => total + entry.durationMs,
+    0,
+  );
+  const plan = buildTunarrSyncPlan(
+    schedule,
+    [...voicedInventory,
+      { id: "bumper42", path: filler.path!, program: wrapper("bumper42", filler.path!) },
+      { id: "commercial60", path: commercial.path!, program: wrapper("commercial60", commercial.path!) },
+    ],
+    capabilities,
+    mapping,
+    snapshots,
+    voicedCatalog,
+  );
+  const lineup = plannedLineup(plan);
+  expect(plan.syncEligible).toBe(true);
+  expect(lineup).not.toContainEqual(expect.objectContaining({ id: "voice-break" }));
+  expect(lineup).not.toContainEqual(expect.objectContaining({ id: "voice-return" }));
+  expect(lineup).toContainEqual({ type: "content", id: "commercial60", duration: 60_000 });
+});
+
+test("falls back to the unchanged exact pod when voiced clips leave no exact commercial fill", () => {
+  const plan = buildTunarrSyncPlan(
+    voicedMidrollSchedule(60_000),
+    voicedInventory,
+    capabilities,
+    mapping,
+    snapshots,
+    voicedCatalog,
+  );
+  const lineup = plannedLineup(plan);
+  expect(lineup).not.toContainEqual(expect.objectContaining({ id: "voice-break" }));
+  expect(lineup).not.toContainEqual(expect.objectContaining({ id: "voice-return" }));
+  expect(lineup).toContainEqual({ type: "content", id: "ad", duration: 60_000 });
+});
+
+test("applies the clip cooldown at each actual pod broadcast time", () => {
+  const schedule = voicedMidrollSchedule(42_000);
+  const episode = schedule.entries[0]!;
+  const ad42 = schedule.entries[1]!;
+  const ad60 = {
+    ...ad42,
+    id: "ad60-entry",
+    start: episode.end,
+    end: new Date(Date.parse(episode.end) + 60_000).toISOString(),
+    durationMs: 60_000,
+    mediaId: "ad60",
+    path: "/media/ad60.mkv",
+  };
+  episode.durationMs = 720_000;
+  episode.end = new Date(Date.parse(episode.start) + episode.durationMs).toISOString();
+  episode.midrolls = [
+    { offsetMs: 100_000, durationMs: 60_000 },
+    { offsetMs: 400_000, durationMs: 60_000 },
+  ];
+  ad42.start = episode.end;
+  ad42.end = new Date(Date.parse(ad42.start) + ad42.durationMs).toISOString();
+  ad60.start = ad42.end;
+  ad60.end = new Date(Date.parse(ad60.start) + ad60.durationMs).toISOString();
+  schedule.entries.push(ad60);
+  schedule.durationMs = schedule.entries.reduce(
+    (total, entry) => total + entry.durationMs,
+    0,
+  );
+  const plan = buildTunarrSyncPlan(
+    schedule,
+    [...voicedInventory, {
+      id: "ad60",
+      path: "/media/ad60.mkv",
+      program: wrapper("ad60", "/media/ad60.mkv"),
+    }],
+    capabilities,
+    mapping,
+    snapshots,
+    voicedCatalog,
+  );
+  const lineup = plannedLineup(plan);
+  expect(plan.syncEligible).toBe(true);
+  expect(lineup.filter((item) => item.id === "voice-break")).toHaveLength(1);
+  expect(lineup.filter((item) => item.id === "voice-return")).toHaveLength(1);
+  expect(lineup).toContainEqual({ type: "content", id: "ad60", duration: 60_000 });
+});
+
+test("never puts voiced clips in generic filler even when they are scheduled explicitly", () => {
+  const plan = buildTunarrSyncPlan(
+    voicedMidrollSchedule(42_000, true),
+    voicedInventory,
+    capabilities,
+    mapping,
+    snapshots,
+    voicedCatalog,
+  );
+  const filler = plan.operations.find(
+    (operation) =>
+      operation.type === "filler-update" || operation.type === "filler-create",
+  );
+  expect(filler?.payload.programs.map((program) => program.id)).toEqual(["ad"]);
+  expect(plannedLineup(plan)[0]).toMatchObject({ id: "voice-break" });
+});
+
+test("excludes the installed voiced root from generic filler when the catalog is absent", () => {
+  const schedule = voicedMidrollSchedule(60_000, true);
+  const voiceEntry = schedule.entries[0]!;
+  const path = "/media/generated/voiced-canon-install-a/break.mp4";
+  voiceEntry.path = path;
+  voiceEntry.mediaId = "voice-root";
+  const plan = buildTunarrSyncPlan(
+    schedule,
+    [...voicedInventory, {
+      id: "voice-root",
+      path,
+      program: wrapper("voice-root", path),
+    }],
+    capabilities,
+    mapping,
+    snapshots,
+  );
+  const filler = plan.operations.find(
+    (operation) =>
+      operation.type === "filler-update" || operation.type === "filler-create",
+  );
+  expect(filler?.payload.programs.map((program) => program.id)).toEqual(["ad"]);
 });
 
 test("breaks inside one programme do not reuse the same spot when others fit", () => {

@@ -68,7 +68,12 @@ function persistScanned(
     if (item.path?.replaceAll("\\", "/").includes("/generated/continuity/")) continue;
     if (item.path && generatedPaths.has(item.path)) continue;
     const existing = repositories.media.get(item.id);
-    repositories.media.put(existing ? { ...item, kind: existing.kind } : item);
+    repositories.media.put(existing ? {
+      ...item,
+      kind: existing.kind,
+      // Scans own path-derived metadata, not the imported voiced classification.
+      tags: existing.tags.includes("voiced-continuity") ? existing.tags : item.tags,
+    } : item);
   }
 }
 

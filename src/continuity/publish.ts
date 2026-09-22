@@ -76,6 +76,18 @@ type Placement =
   | { type: "fill"; entry: ScheduleEntry }
   | { type: "card" };
 
+function placedCardStartMs(placements: Placement[], breakEntries: ScheduleEntry[], startMs = Date.parse(breakEntries[0]?.start ?? "")) {
+  const cardIndex = placements.findIndex((placement) => placement.type === "card");
+  if (cardIndex < 0) return undefined;
+  let start = startMs;
+  for (const placement of placements.slice(0, cardIndex)) {
+    start += placement.type === "keep"
+      ? breakEntries[placement.index]?.durationMs ?? 0
+      : placement.type === "fill" ? placement.entry.durationMs : 0;
+  }
+  return Number.isFinite(start) ? start : undefined;
+}
+
 function breakFillItems(input: {
   environment?: ContinuityEnvironment;
   media: MediaItem[];
@@ -128,6 +140,7 @@ export function buildBreakPlacements(input: {
   maximumSpokenElements: number;
   maximumContinuityMs: number;
   seed: string;
+  replaceInformational?: boolean;
 }): Placement[] | undefined {
   const original = input.breakEntries.map(input.classify);
   if (!original.length) return undefined;
@@ -136,7 +149,10 @@ export function buildBreakPlacements(input: {
   if (cardMs <= 0 || cardMs >= totalMs) return undefined;
   // Refuse a second information card, including a legacy information bumper
   // that means the break is already spent.
-  if (original.some((entry) => entry.kind === "continuity" && entry.informational))
+  if (
+    original.some((entry) => entry.kind === "continuity" && entry.informational) &&
+    !input.replaceInformational
+  )
     return undefined;
   const originalCommercialMs = original
     .filter((entry) => entry.kind === "commercial")
@@ -201,7 +217,14 @@ export function buildBreakPlacements(input: {
     const spoken =
       kept.filter((entry) => entry.kind === "continuity" && entry.spoken).length +
       (input.card.spoken ? 1 : 0);
-    if (continuityMs > input.maximumContinuityMs || spoken > input.maximumSpokenElements)
+    const informational =
+      kept.filter((entry) => entry.kind === "continuity" && entry.informational).length +
+      (input.card.informational ? 1 : 0);
+    if (
+      continuityMs > input.maximumContinuityMs ||
+      spoken > input.maximumSpokenElements ||
+      informational > 1
+    )
       continue;
     const keptDuration = kept.reduce((sum, entry) => sum + entry.durationMs, 0);
     const gapMs = plan.total - cardMs;
@@ -217,6 +240,8 @@ export function buildBreakPlacements(input: {
         seed: `${input.seed}:refill:${fillStart}`,
         source: "continuity-refill",
         stationIdsEligible,
+        timezone: environment.channel.timezone,
+        channelId: environment.channel.id,
         exclude: environment.exclude,
       });
       if (filled.entries.some((entry) => entry.kind === "flex")) continue;
@@ -326,19 +351,27 @@ export function canPlaceCard(input: {
   config: ContinuityConfig;
   /** Actual duration of the asset that will be inserted; defaults to the plan's. */
   durationMs?: number;
+  spoken?: boolean;
+  requiredLocalTime?: string;
+  requiresSameLocalDateAsTarget?: boolean;
 }): boolean {
   const { classify } = continuityBreakClassifier(input.media);
   const located = locateBreak(input.schedule.entries, input.plan.breakEntryId);
   if (!located) return false;
-  return Boolean(
-    buildBreakPlacements({
-      breakEntries: input.schedule.entries.slice(located.start, located.end),
+  const breakEntries = input.schedule.entries.slice(located.start, located.end);
+  const targetTitle = input.plan.target.titles[0];
+  const replaceInformational = input.plan.cardType === "next" && breakEntries.some(
+    (entry) => entry.source === "continuity:next" &&
+      entry.selectionExplanation === `Schedule-scoped next continuity for ${targetTitle}`,
+  );
+  const placements = buildBreakPlacements({
+      breakEntries,
       card: {
         id: `continuity:${input.plan.id}`,
         durationMs: input.durationMs ?? input.plan.durationMs,
         kind: "continuity",
         role: input.plan.role,
-        spoken: false,
+        spoken: input.spoken ?? false,
         informational: true,
       },
       classify,
@@ -347,8 +380,26 @@ export function canPlaceCard(input: {
       maximumSpokenElements: input.config.maximumSpokenElementsPerBreak,
       maximumContinuityMs: input.config.maximumContinuitySecondsPerBreak * 1_000,
       seed: `${input.schedule.id}:${input.plan.breakEntryId}`,
-    }),
-  );
+      replaceInformational,
+    });
+  if (!placements) return false;
+  const cardStart = placedCardStartMs(placements, breakEntries, Date.parse(input.plan.insertionInstant));
+  if (cardStart === undefined) return false;
+  if (input.requiredLocalTime &&
+    DateTime.fromMillis(cardStart).setZone(input.schedule.timezone).toFormat("HH:mm") !== input.requiredLocalTime)
+    return false;
+  if (input.requiresSameLocalDateAsTarget) {
+    const targetStart = Date.parse(input.plan.target.times[0] ?? "");
+    if (!Number.isFinite(targetStart) ||
+      DateTime.fromMillis(cardStart).setZone(input.schedule.timezone).toISODate() !==
+      DateTime.fromMillis(targetStart).setZone(input.schedule.timezone).toISODate()) return false;
+  }
+  if (input.requiresSameLocalDateAsTarget && input.plan.cardType === "weekend" && input.plan.target.times.length > 1) {
+    const firstDate = DateTime.fromISO(input.plan.target.times[0]!, { setZone: true }).setZone(input.schedule.timezone).toISODate();
+    const secondDate = DateTime.fromISO(input.plan.target.times[1]!, { setZone: true }).setZone(input.schedule.timezone).toISODate();
+    if (firstDate !== secondDate) return false;
+  }
+  return true;
 }
 
 /**
@@ -405,7 +456,7 @@ export function applyContinuityToSchedule(input: ApplyContinuityInput): {
    * repeat cooldowns and interruption gating all still apply.
    */
   const matchExisting = (plan: ContinuityCardPlan) => {
-    if (plan.cardType !== "next") return undefined;
+    if (!["next", "tonight", "weekend"].includes(plan.cardType)) return undefined;
     const context = contextAt(plan.insertionInstant);
     const { candidates } = rankContinuityCandidates(context, existing, input.history, {
       now: plan.insertionInstant,
@@ -416,7 +467,7 @@ export function applyContinuityToSchedule(input: ApplyContinuityInput): {
       oddPersonaCooldownHours: input.config.oddPersonaCooldownHours,
       promoFrequency: 1,
     });
-    return candidates.find(
+    const compatible = candidates.filter(
       (asset) =>
         asset.role === plan.cardType &&
         asset.airReady &&
@@ -424,9 +475,38 @@ export function applyContinuityToSchedule(input: ApplyContinuityInput): {
         Boolean(asset.path) &&
         Boolean(asset.durationMs),
     );
+    // Explicitly title-scoped spoken promos should win over a silent generated
+    // card for the same exact NEXT airing. Generic assets remain a later choice.
+    compatible.sort((left, right) => Number(right.scope === "title") - Number(left.scope === "title"));
+    return compatible.find((asset) => {
+      if (!asset.lastBeforeTarget) return true;
+      const targetId = plan.target.airingIds[0];
+      const targetEntry = input.schedule.entries.find((entry) =>
+        entry.id === targetId || entry.movieOccurrenceKey === targetId,
+      );
+      const placementConstraintsHold = (
+        plan.cardType === "next" &&
+        targetEntry?.kind === "movie" &&
+        (targetEntry.sourceOffsetMs ?? 0) === 0
+      );
+      if (asset.lastBeforeTarget && !placementConstraintsHold) return false;
+      return canPlaceCard({
+        schedule: input.schedule,
+        media: input.media,
+        plan,
+        environment,
+        config: input.config,
+        durationMs: asset.durationMs,
+        spoken: Boolean(asset.voicePresent),
+        requiredLocalTime: asset.requiredLocalTime,
+        requiresSameLocalDateAsTarget: asset.requiresSameLocalDateAsTarget,
+      });
+    });
   };
-  const matchAsset = (plan: ContinuityCardPlan) =>
-    matchGenerated(plan, generated) ?? matchExisting(plan);
+  const matchAsset = (plan: ContinuityCardPlan) => {
+    const voiced = matchExisting(plan);
+    return (plan.cardType === "next" && voiced) || matchGenerated(plan, generated) || voiced;
+  };
 
   const entries = [...input.schedule.entries];
   const usedMediaIds = new Set(
@@ -452,6 +532,9 @@ export function applyContinuityToSchedule(input: ApplyContinuityInput): {
       environment,
       config: input.config,
       durationMs,
+      spoken: Boolean(asset.voicePresent),
+      requiredLocalTime: asset.requiredLocalTime,
+      requiresSameLocalDateAsTarget: asset.requiresSameLocalDateAsTarget,
     });
   };
 
@@ -475,6 +558,11 @@ export function applyContinuityToSchedule(input: ApplyContinuityInput): {
     const assetMedia = asset?.mediaId ? mediaById.get(asset.mediaId) : undefined;
     const durationMs = asset?.durationMs ?? assetMedia?.durationMs;
     if (!asset || !assetMedia || !durationMs) continue;
+    const targetTitle = card.target.titles[0];
+    const replaceInformational = card.cardType === "next" && originalEntries.some(
+      (entry) => entry.source === "continuity:next" &&
+        entry.selectionExplanation === `Schedule-scoped next continuity for ${targetTitle}`,
+    );
     const placements = buildBreakPlacements({
       breakEntries: originalEntries,
       card: {
@@ -491,8 +579,39 @@ export function applyContinuityToSchedule(input: ApplyContinuityInput): {
       maximumSpokenElements: input.config.maximumSpokenElementsPerBreak,
       maximumContinuityMs: input.config.maximumContinuitySecondsPerBreak * 1_000,
       seed: `${input.schedule.id}:${card.breakEntryId}`,
+      replaceInformational,
     });
     if (!placements) continue;
+    if (asset.lastBeforeTarget) {
+      const targetStart = Date.parse(card.target.times[0] ?? "");
+      const breakEnd = Date.parse(originalEntries.at(-1)!.end);
+      if (
+        card.cardType !== "next" ||
+        !input.schedule.entries.some((entry) =>
+          (entry.id === card.target.airingIds[0] || entry.movieOccurrenceKey === card.target.airingIds[0]) &&
+          entry.kind === "movie" && (entry.sourceOffsetMs ?? 0) === 0,
+        ) ||
+        targetStart !== breakEnd
+      ) continue;
+      const cardPlacement = placements.findIndex((placement) => placement.type === "card");
+      if (cardPlacement < 0) continue;
+      const [lastCard] = placements.splice(cardPlacement, 1);
+      placements.push(lastCard!);
+    }
+
+    const actualCardStart = placedCardStartMs(placements, originalEntries, Date.parse(card.insertionInstant));
+    if (actualCardStart === undefined) continue;
+    if (asset.requiredLocalTime &&
+      DateTime.fromMillis(actualCardStart).setZone(input.schedule.timezone).toFormat("HH:mm") !== asset.requiredLocalTime)
+      continue;
+    if (asset.requiresSameLocalDateAsTarget &&
+      DateTime.fromMillis(actualCardStart).setZone(input.schedule.timezone).toISODate() !==
+      DateTime.fromISO(card.target.times[0]!, { setZone: true }).setZone(input.schedule.timezone).toISODate())
+      continue;
+    if (card.cardType === "weekend" && card.target.times.length > 1 &&
+      DateTime.fromISO(card.target.times[0]!, { setZone: true }).setZone(input.schedule.timezone).toISODate() !==
+      DateTime.fromISO(card.target.times[1]!, { setZone: true }).setZone(input.schedule.timezone).toISODate())
+      continue;
 
     let at = Date.parse(card.insertionInstant);
     const replacement = placements.map((placement): ScheduleEntry => {

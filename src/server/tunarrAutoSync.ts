@@ -219,6 +219,7 @@ export async function autoSyncTunarr(
       snapshot.capabilities,
       input,
       snapshot.snapshots,
+      repositories.media.list(),
     );
     // A plan that cannot resolve its media usually means Tunarr has not scanned
     // since those files arrived. Rescanning turns a refusal the user would have
@@ -235,6 +236,7 @@ export async function autoSyncTunarr(
           refreshed.capabilities,
           input,
           refreshed.snapshots,
+          repositories.media.list(),
         );
       }
     }
@@ -251,7 +253,12 @@ export async function autoSyncTunarr(
         },
       );
 
-    const result = await syncTunarrPlan(client, plan, schedule).catch(
+    const result = await syncTunarrPlan(
+      client,
+      plan,
+      schedule,
+      repositories.media.list(),
+    ).catch(
       (error: unknown) => {
         if ((error as { code?: string }).code === "ACTIVE_VIEWERS")
           return "blocked" as const;

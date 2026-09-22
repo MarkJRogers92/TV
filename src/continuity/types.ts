@@ -67,6 +67,19 @@ export type ContinuityAsset = {
   lifecycle: ContinuityLifecycle;
   scope: "evergreen" | "title" | "airing" | "schedule";
   targetSlug?: string;
+  /** Optional media kind required by a spoken claim such as "the movie". */
+  targetKind?: "episode" | "movie";
+  /** Local broadcast clock constraints for spoken time claims. */
+  requiredLocalTime?: string;
+  requiredTargetLocalTime?: string;
+  /** Place this card after every other spot in a break before its target. */
+  lastBeforeTarget?: boolean;
+  requiresUnstartedTarget?: boolean;
+  requiresSameSeriesAsCurrent?: boolean;
+  requiresSameLocalDateAsTarget?: boolean;
+  channelId?: string;
+  /** A staged catalog entry remains visible for audit but cannot air. */
+  stagedReason?: string;
   targetAiringIds?: string[];
   scheduleRevision?: string;
   validFrom?: string;
@@ -142,6 +155,8 @@ export type RejectCode =
   | "UNMANAGED_LINEUP_LOOP"
   | "BREAK_BUDGET"
   | "UNHEALTHY_PLAYBACK"
+  | "STAGED_UNSUPPORTED_CONTEXT"
+  | "INVALID_ASSET_METADATA"
   | "UNSCOPED_CLOCK_CLAIM"
   | "TARGET_MISMATCH"
   | "FREQUENCY_GATE";

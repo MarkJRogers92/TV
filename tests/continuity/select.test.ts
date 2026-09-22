@@ -115,6 +115,13 @@ test("matches NEXT against the editorial next airing during a mid-roll", () => {
   expect(result.rejections).not.toContainEqual({ assetId: "next-roseanne", reason: "TARGET_MISMATCH" });
 });
 
+test("requires same-series evidence for a 'more Roseanne' voiced promo", () => {
+  const roseanne = asset({ requiresSameSeriesAsCurrent: true });
+  expect(selectContinuity(context, [roseanne], [], { now: context.insertionInstant }).selected).toBeNull();
+  const sameSeries = { ...context, next: { ...context.next!, sameSeriesAsCurrent: true } };
+  expect(selectContinuity(sameSeries, [roseanne], [], { now: context.insertionInstant }).selected?.id).toBe(roseanne.id);
+});
+
 test("applies the configured promo-frequency gate deterministically", () => {
   const result = selectContinuity(context, [asset()], [], {
     now: context.insertionInstant,

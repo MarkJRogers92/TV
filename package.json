@@ -20,6 +20,7 @@
     "continuity:prepare-general-cards": "tsx scripts/prepare-general-bumper-cards.ts",
     "continuity:render-general-cards": "tsx scripts/render-general-bumper-cards.ts",
     "continuity:register-general-cards": "tsx scripts/register-general-bumper-cards.ts",
+    "continuity:import-voiced": "tsx scripts/import-voiced-continuity.ts",
     "continuity:activate-general-cards": "tsx scripts/activate-general-station-cards.ts",
     "continuity:deactivate-general-cards": "tsx scripts/deactivate-general-station-cards.ts"
   },

@@ -27,6 +27,17 @@ const roleFor = (title: string, kind: MediaItem["kind"]): ContinuityRole => {
   return kind === "station-id" ? "station-id" : "break";
 };
 
+const tagValue = (tags: string[], name: string) =>
+  tags.find((tag) => tag.startsWith(`${name}=`))?.slice(name.length + 1);
+const uniqueTagValue = (tags: string[], name: string) => {
+  const matches = tags.filter((tag) => tag.startsWith(`${name}=`));
+  return matches.length === 1 ? matches[0]!.slice(name.length + 1) : undefined;
+};
+const validVoicedRole = (value: string | undefined): value is ContinuityRole =>
+  Boolean(value && ["next", "next-later", "tonight", "weekend", "after-dark", "break", "return", "station-id", "interruption"].includes(value));
+const validContinuityScope = (value: string | undefined): value is ContinuityAsset["scope"] =>
+  Boolean(value && ["evergreen", "title", "airing", "schedule"].includes(value));
+
 export function classifyExistingContinuityAssets(media: MediaItem[]): ContinuityAsset[] {
   return media
     .filter((item) => item.kind === "bumper" || item.kind === "station-id")
@@ -38,13 +49,26 @@ export function classifyExistingContinuityAssets(media: MediaItem[]): Continuity
       const visualOnly = item.tags.includes("visual-only");
       const inferredTarget = role === "next" ? slug.replace(/^marktv-up-next-/, "") : undefined;
       const targetSlug = inferredTarget === "generic" ? undefined : inferredTarget;
+      const declaredRole = tagValue(item.tags, "continuity-role") as ContinuityRole | undefined;
+      const declaredScope = tagValue(item.tags, "continuity-scope") as ContinuityAsset["scope"] | undefined;
+      const voiced = item.tags.includes("voiced-continuity");
+      const voicedChannel = uniqueTagValue(item.tags, "continuity-channel");
+      const voicedRole = uniqueTagValue(item.tags, "continuity-role");
+      const voicedScope = uniqueTagValue(item.tags, "continuity-scope");
+      const invalidVoicedMetadata = voiced && (
+        !voicedChannel || !/^marktv-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(voicedChannel) ||
+        !validVoicedRole(voicedRole) || !validContinuityScope(voicedScope)
+      );
+      const stagedReason = tagValue(item.tags, "continuity-staged-reason");
       const ready = Boolean(
         item.available &&
           item.path &&
           item.durationStatus === "ok" &&
           item.durationMs &&
           !clockClaim &&
-          !staged,
+          !staged &&
+          !stagedReason &&
+          !invalidVoicedMetadata,
       );
       return {
         id: `existing:${item.id}`,
@@ -55,16 +79,27 @@ export function classifyExistingContinuityAssets(media: MediaItem[]): Continuity
           .digest("hex"),
         path: item.path,
         durationMs: item.durationMs ?? undefined,
-        role,
+        role: declaredRole ?? role,
         personaId: personaFor(slug),
         lifecycle: "registered" as const,
-        scope: targetSlug ? ("title" as const) : ("evergreen" as const),
-        targetSlug,
+        scope: declaredScope ?? (targetSlug ? ("title" as const) : ("evergreen" as const)),
+        targetSlug: tagValue(item.tags, "continuity-target") ?? targetSlug,
+        targetKind: tagValue(item.tags, "continuity-target-kind") as "episode" | "movie" | undefined,
+        requiredLocalTime: tagValue(item.tags, "continuity-local-time"),
+        requiredTargetLocalTime: tagValue(item.tags, "continuity-target-local-time"),
+        lastBeforeTarget: item.tags.includes("continuity-last-before-target=true"),
+        requiresUnstartedTarget: item.tags.includes("continuity-requires-unstarted-target=true"),
+        requiresSameSeriesAsCurrent: item.tags.includes("continuity-requires-same-series-as-current=true"),
+        requiresSameLocalDateAsTarget: item.tags.includes("continuity-requires-same-local-date-as-target=true"),
+        channelId: tagValue(item.tags, "continuity-channel"),
+        ...(stagedReason ? { stagedReason } : {}),
         available: item.available,
         voicePresent: !visualOnly,
         airReady: ready,
         ...(clockClaim ? { rejectReason: "UNSCOPED_CLOCK_CLAIM" as const } : {}),
         ...(staged ? { rejectReason: "UNHEALTHY_PLAYBACK" as const } : {}),
+        ...(stagedReason ? { rejectReason: "STAGED_UNSUPPORTED_CONTEXT" as const } : {}),
+        ...(invalidVoicedMetadata ? { rejectReason: "INVALID_ASSET_METADATA" as const } : {}),
       };
     });
 }

@@ -398,6 +398,8 @@ export function generateSchedule(
       seed: `${seed}:filler:${from.toMillis()}`,
       source: "interstitial",
       stationIdsEligible: boundary.minute === 0,
+      timezone: input.channel.timezone,
+      channelId: input.channel.id,
       exclude: usedInterstitials,
     }).entries.map((fillerEntry) => ({
       ...fillerEntry,
@@ -966,6 +968,8 @@ export function generateSchedule(
           start: at.toJSDate(),
           boundary: boundary.toJSDate(),
           items: [],
+          timezone: input.channel.timezone,
+          channelId: input.channel.id,
         }).entries.map((entry) => ({
           ...entry,
           localStart: localTime(

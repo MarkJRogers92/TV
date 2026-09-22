@@ -67,6 +67,25 @@ test('never draws a schedule-scoped continuity card as generic filler', () => {
   expect(result.entries.some((entry) => entry.mediaId === 'continuity-card')).toBe(false);
 });
 
+test('uses channel-scoped voiced station IDs only within their entire daypart window', () => {
+  const morningId = {
+    ...item('morning-id', 'station-id', 480_000),
+    tags: ['voiced-continuity', 'continuity-channel=marktv-laughs', 'continuity-hourly-ids-eligible', 'continuity-daypart=morning'],
+  };
+  const common = { items: [morningId], timezone: 'America/Chicago', channelId: 'marktv-laughs' };
+  expect(fill(common).entries[0]).toMatchObject({ mediaId: 'morning-id' });
+  expect(fill({ ...common, channelId: 'other-channel' }).entries[0]?.mediaId).not.toBe('morning-id');
+  expect(fill({ ...common, start: new Date('2026-09-18T11:58:00.000Z'), boundary: new Date('2026-09-18T12:06:00.000Z') }).entries[0]?.mediaId).not.toBe('morning-id');
+});
+
+test('does not use contextual voiced clips as generic fallback filler', () => {
+  const contextual = {
+    ...item('title-promo', 'bumper', 480_000),
+    tags: ['voiced-continuity', 'continuity-channel=marktv-laughs', 'continuity-role=next'],
+  };
+  expect(fill({ items: [contextual] }).entries[0]?.mediaId).not.toBe('title-promo');
+});
+
 test('accepts commercials, bumpers, and general filler roles', () => {
   const result = fill({
     start: new Date('2026-09-18T12:57:00.000Z'),

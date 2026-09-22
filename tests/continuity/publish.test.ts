@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import type { MediaItem, Schedule, ScheduleEntry } from "../../src/domain/models.js";
 import { generatedContinuityTags, generatedFileName } from "../../src/continuity/assets.js";
 import { planContinuityCards, type ContinuityCardPlan } from "../../src/continuity/director.js";
-import { applyContinuityToSchedule } from "../../src/continuity/publish.js";
+import { applyContinuityToSchedule, canPlaceCard } from "../../src/continuity/publish.js";
 import { defaultContinuityConfig } from "../../src/continuity/types.js";
 import { publishedContinuityHash } from "../../src/continuity/identity.js";
 
@@ -113,6 +113,37 @@ test("leaves the validated break unchanged when continuity cannot fit exactly", 
   });
   expect(result.decisions).toEqual([]);
   expect(result.schedule).toEqual(fixtureSchedule);
+});
+
+test("checks clock claims against the composed bumper start rather than break start", () => {
+  const base = singleBreakSchedule(new Date(start + 20 * 60_000 + 30_000).toISOString());
+  const desiredBreakStart = Date.parse("2026-09-21T06:59:35.000Z"); // 01:59:35 local; composed card follows the 25-second commercial
+  const delta = desiredBreakStart - (start + 20 * 60_000);
+  const schedule: Schedule = {
+    ...base,
+    entries: base.entries.map((entry) => ({
+      ...entry,
+      start: new Date(Date.parse(entry.start) + delta).toISOString(),
+      end: new Date(Date.parse(entry.end) + delta).toISOString(),
+    })),
+  };
+  const [plan] = planContinuityCards({
+    schedule,
+    media: generatedCatalog(),
+    config: { ...defaultContinuityConfig, enabled: true, promoFrequency: 1 },
+  }).plans;
+  expect(plan).toBeDefined();
+  expect(plan!.insertionInstant).toBe(new Date(desiredBreakStart).toISOString());
+  const shared = {
+    schedule,
+    media: generatedCatalog(),
+    plan: plan!,
+    config: { ...defaultContinuityConfig, enabled: true, promoFrequency: 1 },
+    durationMs: 5_000,
+  };
+  expect(canPlaceCard(shared)).toBe(true);
+  expect(canPlaceCard({ ...shared, requiredLocalTime: "02:00" })).toBe(true);
+  expect(canPlaceCard({ ...shared, requiredLocalTime: "01:59" })).toBe(false);
 });
 
 test("disabled continuity is a byte-equivalent no-op", () => {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Schedule } from "../../domain/models.js";
+import type { MediaItem, Schedule } from "../../domain/models.js";
 import type { TunarrClient } from "./client.js";
 import { tunarrClientLimits } from "./client.js";
 import {
@@ -106,6 +106,7 @@ export async function syncTunarrPlan(
   client: SyncClient,
   plan: TunarrSyncPlan,
   currentSchedule: Schedule,
+  catalog: readonly MediaItem[] = [],
 ) {
   if (!plan.syncEligible || Date.now() - Date.parse(plan.createdAt) > 300_000) {
     throw tunarrError("STALE_DRY_RUN", "Dry run is stale or blocked");
@@ -136,6 +137,7 @@ export async function syncTunarrPlan(
     freshSnapshot.capabilities,
     plan.mapping,
     freshSnapshot.snapshots,
+    catalog,
   );
   if (fresh.fingerprint !== plan.fingerprint)
     throw tunarrError(

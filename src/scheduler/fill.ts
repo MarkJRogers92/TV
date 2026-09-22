@@ -15,6 +15,9 @@ export type FillInput = {
   seed?: string;
   source?: string;
   stationIdsEligible?: boolean;
+  /** Required to safely place voiced daypart IDs in a local broadcast clock. */
+  timezone?: string;
+  channelId?: string;
   /**
    * Interstitials already used elsewhere in the same schedule, so a short pool
    * rotates through itself instead of repeating while unused items exist.
@@ -52,6 +55,36 @@ function rankedEligibleItems(input: FillInput): MediaItem[] {
   const stationIdsEligible =
     input.stationIdsEligible ?? input.boundary.getUTCMinutes() === 0;
   const random = createSeededRandom(input.seed ?? "filler");
+  const daypartEligible = (item: MediaItem) => {
+    if (
+      item.tags.includes("voiced-continuity") &&
+      !item.tags.includes(`continuity-channel=${input.channelId ?? ""}`)
+    ) return false;
+    const daypartPrefix = "continuity-daypart=";
+    const daypart = item.tags.find((tag) => tag.startsWith(daypartPrefix))?.slice(daypartPrefix.length);
+    if (!daypart) return true;
+    if (!input.timezone) return false;
+    const localStart = new Date(input.start.getTime());
+    const lastInstant = new Date(Math.max(input.start.getTime(), input.boundary.getTime() - 1));
+    const toMinute = (instant: Date) => {
+      const parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone: input.timezone,
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }).formatToParts(instant);
+      return Number(parts.find((part) => part.type === "hour")?.value) * 60 +
+        Number(parts.find((part) => part.type === "minute")?.value);
+    };
+    const matches = (minute: number) =>
+      daypart === "morning" ? minute >= 360 && minute < 720 :
+      daypart === "primetime" ? minute >= 1140 && minute < 1380 :
+      daypart === "after-hours" ? minute >= 1380 || minute < 360 :
+      daypart === "overnight" ? minute >= 1380 || minute < 360 : false;
+    // Requiring both ends inside one window prevents a long break across the
+    // boundary from being treated as a valid daypart placement.
+    return matches(toMinute(localStart)) && matches(toMinute(lastInstant));
+  };
   const seen = new Set<string>();
   return input.items
     .filter(
@@ -62,6 +95,9 @@ function rankedEligibleItems(input: FillInput): MediaItem[] {
         // schedule. It is placed by the continuity pass, never drawn as generic
         // filler on some other day.
         !item.tags.includes(scheduleScopedContinuityTag) &&
+        (!item.tags.includes("voiced-continuity") ||
+          item.tags.includes("continuity-hourly-ids-eligible")) &&
+        daypartEligible(item) &&
         (fillerKinds.has(item.kind) ||
           (stationIdsEligible && item.kind === "station-id")),
     )

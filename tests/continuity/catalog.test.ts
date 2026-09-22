@@ -69,3 +69,18 @@ test("does not report rendered silent general cards as voice coverage", () => {
     voicePresent: false,
   });
 });
+
+test("fails closed on voiced assets with missing or invalid channel, role, or scope tags", () => {
+  const base = item("Unclassified voiced asset");
+  base.tags = [
+    "voiced-continuity",
+    "continuity-channel=marktv-laughs",
+    "continuity-channel=marktv-laughs",
+    "continuity-role=surprise",
+    "continuity-scope=clock",
+  ];
+  expect(classifyExistingContinuityAssets([base])[0]).toMatchObject({
+    airReady: false,
+    rejectReason: "INVALID_ASSET_METADATA",
+  });
+});

@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import type { Schedule } from "../../src/domain/models.js";
+import type { MediaItem, Schedule } from "../../src/domain/models.js";
 import { buildTunarrSyncPlan } from "../../src/integrations/tunarr/plan.js";
 import { syncTunarrPlan } from "../../src/integrations/tunarr/sync.js";
 import type {
@@ -100,6 +100,47 @@ test("revalidates every snapshot before the first mutation", async () => {
     postProgramming: mutate,
   } as never;
   await expect(syncTunarrPlan(client, plan, schedule)).rejects.toMatchObject({
+    code: "STALE_DRY_RUN",
+  });
+  expect(mutate).not.toHaveBeenCalled();
+});
+
+test("invalidates a dry run when the catalog changes before fresh sync", async () => {
+  const catalog: MediaItem[] = [{
+    id: "voice",
+    source: "local-folder",
+    path: "/media/voice.mp4",
+    kind: "bumper",
+    title: "Voice",
+    durationMs: 10_000,
+    durationStatus: "ok",
+    available: true,
+    tags: [
+      "voiced-continuity",
+      "continuity-role=break",
+      "continuity-scope=evergreen",
+      "continuity-map=MARKTV_MAIN",
+    ],
+  }];
+  const catalogPlan = buildTunarrSyncPlan(
+    schedule,
+    [],
+    capabilities,
+    mapping,
+    snapshots,
+    catalog,
+  );
+  const mutate = vi.fn();
+  const client = {
+    snapshot: async () => ({ capabilities, inventory: [], snapshots }),
+    activeSessionCount: async () => 0,
+    putChannel: mutate,
+    createChannel: mutate,
+    createFillerList: mutate,
+    putFillerList: mutate,
+    postProgramming: mutate,
+  } as never;
+  await expect(syncTunarrPlan(client, catalogPlan, schedule, [])).rejects.toMatchObject({
     code: "STALE_DRY_RUN",
   });
   expect(mutate).not.toHaveBeenCalled();

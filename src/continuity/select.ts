@@ -6,6 +6,7 @@ import type {
   ContinuityHistoryEntry,
   RejectCode,
 } from "./types.js";
+import { DateTime } from "luxon";
 
 type Options = {
   now: string;
@@ -55,12 +56,16 @@ export function rankContinuityCandidates(
     const target = targetForRole(asset);
     if (!asset.airReady || asset.available === false || !asset.path || !asset.durationMs)
       reason = asset.rejectReason ?? "MISSING_SOURCE";
+    else if (asset.channelId && asset.channelId !== context.channelId)
+      reason = "TARGET_MISMATCH";
     else if (asset.scheduleRevision && asset.scheduleRevision !== context.scheduleRevision)
       reason = "STALE_SCHEDULE";
     else if (asset.validFrom && options.now < asset.validFrom) reason = "TARGET_NOT_FUTURE";
     else if (asset.validUntil && options.now >= asset.validUntil) reason = "STALE_SCHEDULE";
     else if (asset.role === "interruption" && (!options.stagedInterruptionsEnabled || !options.playbackHealthy))
       reason = "UNHEALTHY_PLAYBACK";
+    else if (asset.stagedReason)
+      reason = "STAGED_UNSUPPORTED_CONTEXT";
     else if (!context.managedLineup && ["tonight", "weekend", "after-dark"].includes(asset.role))
       reason = "UNMANAGED_LINEUP_LOOP";
     else if (asset.role === "tonight" && (!context.allowTimeRelativePromos || !context.tonight.length))
@@ -81,6 +86,22 @@ export function rankContinuityCandidates(
       asset.scope === "title" &&
       (!target || asset.targetSlug !== titleSlug(target.showTitle ?? target.title))
     )
+      reason = "TARGET_MISMATCH";
+    else if (asset.targetKind && target?.kind !== asset.targetKind)
+      reason = "TARGET_MISMATCH";
+    else if (asset.requiresUnstartedTarget && target?.alreadyStarted)
+      reason = "TARGET_MISMATCH";
+    else if (asset.requiresSameSeriesAsCurrent && !target?.sameSeriesAsCurrent)
+      reason = "TARGET_MISMATCH";
+    else if (
+      asset.requiredTargetLocalTime && target &&
+      DateTime.fromISO(target.start, { setZone: true })
+        .setZone(context.timezone).toFormat("HH:mm") !== asset.requiredTargetLocalTime
+    )
+      reason = "INVALID_TIME_LABEL";
+    else if (asset.role === "weekend" && context.weekendPair &&
+      DateTime.fromISO(context.weekendPair[0].start, { setZone: true }).setZone(context.timezone).toISODate() !==
+        DateTime.fromISO(context.weekendPair[1].start, { setZone: true }).setZone(context.timezone).toISODate())
       reason = "TARGET_MISMATCH";
     else if (asset.role === "return" && !context.returnTarget)
       reason = "WRONG_RESUME_TARGET";
