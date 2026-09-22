@@ -245,6 +245,7 @@ export async function autoSyncTunarr(
 
     const result = await syncTunarrPlan(client, plan, schedule);
     const state = { ...stored, ...result.state, plan };
+    if (result.state.channelId) state.createChannel = false;
     if (result.partialFailure)
       return persist(repositories, state, {
         ...base,

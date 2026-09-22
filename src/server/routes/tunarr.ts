@@ -240,6 +240,7 @@ export async function registerTunarrRoutes(
         ...(current ?? stored),
         ...result.state,
       };
+      if (result.state.channelId) next.createChannel = false;
       if (current?.plan?.fingerprint === stored.plan.fingerprint)
         delete next.plan;
       else if (current?.plan) next.plan = current.plan;

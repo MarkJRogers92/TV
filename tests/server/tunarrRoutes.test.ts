@@ -529,6 +529,10 @@ test("routes Cult dry-runs and syncs without changing channel 7", async () => {
     expect(
       readTunarrMappingForChannel(finalRepositories, channel7.id),
     ).toEqual(channel7Mapping);
+    expect(
+      readTunarrMappingForChannel(finalRepositories, channel9.id)
+        ?.createChannel,
+    ).toBe(false);
     finalRepositories.close();
   } finally {
     await app.close();
