@@ -35,12 +35,13 @@ Create a dedicated `cult-movies` pool with `kind: movie`, `mode: shuffle`, and
 Cult folder only.
 
 Extend movie-root enrollment so a narrower configured root takes precedence
-over a broader configured root. When one enabled movie root is a strict child of
-another enabled movie root, the broader channel excludes files claimed by the
-narrower channel. This keeps the existing `movies` pool at its current 29
+over a broader configured root. When one configured movie root is a strict child
+of another configured movie root, the broader channel excludes files claimed by
+the narrower channel. This keeps the existing `movies` pool at its current 29
 members while allowing the Cult pool to claim the 20 nested files. The rule is
-path-based and applies only to enabled movie-programming roots; it does not
-change ordinary pool editing or delete media records.
+path-based and applies to configured roots even when the narrower channel's
+movie-programming feature is disabled; it does not change ordinary pool editing
+or delete media records.
 
 The channel's ordinary all-day movie slot references only `cult-movies`. Its
 break policy references only the shared `ads` pool, so no show, general movie,
@@ -57,7 +58,11 @@ Add a channel document with:
 - one all-day daypart and one movie slot;
 - `cult-movies` as the only primary pool;
 - the shared `ads` pool as the only break pool;
-- no fallback pool and no movie-programming feature block.
+- no fallback pool; and
+- a disabled movie-programming scope block carrying `poolIds: ["cult-movies"]`
+  and the Cult `rootPath`. This block reserves the root for enrollment
+  isolation but does not invoke the separate nightly/weekend movie-programming
+  scheduler.
 
 The existing deterministic scheduler will generate a full broadcast date. The
 shuffled pool and 24-hour no-repeat window provide daily variety without
