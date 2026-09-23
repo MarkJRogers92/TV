@@ -78,6 +78,8 @@ export type ContinuityAsset = {
   requiresSameSeriesAsCurrent?: boolean;
   requiresSameLocalDateAsTarget?: boolean;
   channelId?: string;
+  /** Explicit cross-channel allowlist; never inferred from shared pools. */
+  channelIds?: string[];
   /** A staged catalog entry remains visible for audit but cannot air. */
   stagedReason?: string;
   targetAiringIds?: string[];

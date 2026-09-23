@@ -364,6 +364,30 @@ test("places voiced break and return at the edges of a midroll and preserves exa
   );
 });
 
+test.each(["marktv-movies", "marktv-cult-movies"])(
+  "uses only allowlisted shared break/return clips for %s midrolls",
+  (channelId) => {
+    const sharedCatalog = voicedCatalog.map((item) => ({
+      ...item,
+      tags: [...item.tags, "continuity-shared-channels=marktv-movies,marktv-cult-movies"],
+    }));
+    const sharedSchedule = { ...voicedMidrollSchedule(), channelId };
+    const sharedMapping = { ...mapping, channelId: channelId === "marktv-movies" ? "8" : "9" };
+    const sharedSnapshots = { ...snapshots, channels: [{ ...existingChannel, id: sharedMapping.channelId }] };
+    const plan = buildTunarrSyncPlan(
+      sharedSchedule,
+      voicedInventory,
+      capabilities,
+      sharedMapping,
+      sharedSnapshots,
+      sharedCatalog,
+    );
+    expect(plan.syncEligible).toBe(true);
+    expect(plannedLineup(plan)).toContainEqual({ type: "content", id: "voice-break", duration: 10_000 });
+    expect(plannedLineup(plan)).toContainEqual({ type: "content", id: "voice-return", duration: 8_000 });
+  },
+);
+
 test("normalizes fractional container milliseconds without accepting a different clip duration", () => {
   const fractionalInventory = voicedInventory.map((item) => item.id === "voice-break"
     ? { ...item, program: { ...item.program, duration: 10_000.333 } }
@@ -1023,6 +1047,21 @@ test("fingerprints remote snapshots and user creation inputs", () => {
     buildTunarrSyncPlan(schedule, inventory, capabilities, mapping, {
       ...snapshots,
       transcodeConfigs: [],
+    }).fingerprint,
+  ).not.toBe(base.fingerprint);
+  expect(
+    buildTunarrSyncPlan(schedule, inventory, capabilities, mapping, {
+      ...snapshots,
+      channels: [{
+        ...existingChannel,
+        sessions: [{ connections: [{ lastHeartbeat: 1, lastHeartbeatStr: "before" }] }],
+      }],
+    }).fingerprint,
+  ).toBe(base.fingerprint);
+  expect(
+    buildTunarrSyncPlan(schedule, inventory, capabilities, mapping, {
+      ...snapshots,
+      channels: [{ ...existingChannel, name: "Updated channel configuration" }],
     }).fingerprint,
   ).not.toBe(base.fingerprint);
   expect(

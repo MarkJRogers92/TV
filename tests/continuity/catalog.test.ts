@@ -84,3 +84,23 @@ test("fails closed on voiced assets with missing or invalid channel, role, or sc
     rejectReason: "INVALID_ASSET_METADATA",
   });
 });
+
+test("classifies only an explicit shared-channel allowlist", () => {
+  const shared = item("MarkTV break bumper");
+  shared.tags = [
+    "voiced-continuity", "continuity-channel=marktv-laughs",
+    "continuity-shared-channels=marktv-movies,marktv-cult-movies",
+    "continuity-role=break", "continuity-scope=evergreen",
+    "continuity-map=MARKTV_BREAK_OUT_001",
+  ];
+  expect(classifyExistingContinuityAssets([shared])[0]).toMatchObject({
+    airReady: true,
+    channelId: "marktv-laughs",
+    channelIds: ["marktv-movies", "marktv-cult-movies"],
+  });
+  shared.tags[2] = "continuity-shared-channels=marktv-unknown";
+  expect(classifyExistingContinuityAssets([shared])[0]).toMatchObject({
+    airReady: false,
+    rejectReason: "INVALID_ASSET_METADATA",
+  });
+});

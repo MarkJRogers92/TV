@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { MediaItem, Schedule, ScheduleEntry } from "../../domain/models.js";
+import { parseVoicedChannelScope, voicedChannelAllows } from "../../continuity/voicedChannels.js";
 import { normalizeLocalPath } from "./client.js";
 import { assertPreservedMovies, splicePreservedLineup } from "./preserveLineup.js";
 import type {
@@ -394,7 +395,7 @@ function makeVoicedCandidates(
     const roles = tagValues(item, "continuity-role=");
     const scopes = tagValues(item, "continuity-scope=");
     const maps = tagValues(item, "continuity-map=");
-    const channels = tagValues(item, "continuity-channel=");
+    const channelScope = parseVoicedChannelScope(item.tags);
     if (
       !item.tags.includes("voiced-continuity") ||
       item.tags.some((tag) => tag.startsWith("continuity-staged")) ||
@@ -409,8 +410,7 @@ function makeVoicedCandidates(
       scopes[0] !== "evergreen" ||
       maps.length !== 1 ||
       !/^MARKTV_[A-Z0-9_]+$/.test(maps[0]!) ||
-      channels.length !== 1 ||
-      channels[0] !== channelId
+      !voicedChannelAllows(channelScope, channelId)
     )
       continue;
     let normalizedPath: string;
@@ -829,7 +829,18 @@ export function buildTunarrSyncPlan(
     version: capabilities.version,
     capabilities,
     mapping,
-    snapshots,
+    // The channel listing includes live session state (notably per-connection
+    // heartbeat timestamps). Those fields change continuously and may belong
+    // to an unrelated channel; sync guards the mapped channel's active viewers
+    // independently immediately before any writes.
+    snapshots: {
+      ...snapshots,
+      channels: snapshots.channels.map((channel) => {
+        const stableChannel = { ...channel } as Record<string, unknown>;
+        delete stableChannel.sessions;
+        return stableChannel;
+      }),
+    },
     inventory,
     schedule,
     catalog,

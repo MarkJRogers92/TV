@@ -40,3 +40,24 @@ It limits voice to two clips and twenty seconds per pod, retains a commercial
 majority, and applies a sixty-minute clip cooldown. A failed fit keeps the
 original commercial selection. Daypart windows are morning 06:00–12:00,
 primetime 19:00–23:00, and overnight/after-hours 23:00–06:00, in channel time.
+
+## Shared general clips (channels 8 and 9)
+
+Seven approved clips can additionally carry
+`continuity-shared-channels=marktv-movies,marktv-cult-movies`: MAIN, NOSTALGIA,
+STAY_MARKED and SLOGAN_NATURE station IDs, plus BREAK_OUT and the two RETURN
+clips. Their primary channel remains `marktv-laughs`. The shared-channel parser
+rejects duplicate or malformed scope tags, other assets, and timing/title claims.
+
+`scripts/prepare-shared-voiced-channels.ts` previews the existing today/tomorrow
+schedules. `--apply` backs up and freshness-checks affected records, adds separate
+station ID pools to channels 8/9, and inserts full IDs into future breaks using
+exact refills or reduced existing flex. It preserves editorial entries and break
+windows, and refuses a metadata-only activation. It does not sync Tunarr; each
+channel must subsequently use the normal guarded sync. The break/return clips
+remain eligible only for actual nested midrolls, which the activation schedules
+currently do not contain.
+
+Activation evidence and rollback data are in
+`~/Downloads/MarkTV_Shared_Voiced_Backup_2026-09-22`. Original media is reused;
+channel 7's lineup and pools are untouched.

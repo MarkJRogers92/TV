@@ -70,7 +70,7 @@ test('never draws a schedule-scoped continuity card as generic filler', () => {
 test('uses channel-scoped voiced station IDs only within their entire daypart window', () => {
   const morningId = {
     ...item('morning-id', 'station-id', 480_000),
-    tags: ['voiced-continuity', 'continuity-channel=marktv-laughs', 'continuity-hourly-ids-eligible', 'continuity-daypart=morning'],
+    tags: ['voiced-continuity', 'continuity-channel=marktv-laughs', 'continuity-role=station-id', 'continuity-scope=evergreen', 'continuity-map=MARKTV_DAYPART_MORNING_001', 'continuity-hourly-ids-eligible', 'continuity-daypart=morning'],
   };
   const common = { items: [morningId], timezone: 'America/Chicago', channelId: 'marktv-laughs' };
   expect(fill(common).entries[0]).toMatchObject({ mediaId: 'morning-id' });
@@ -84,6 +84,19 @@ test('does not use contextual voiced clips as generic fallback filler', () => {
     tags: ['voiced-continuity', 'continuity-channel=marktv-laughs', 'continuity-role=next'],
   };
   expect(fill({ items: [contextual] }).entries[0]?.mediaId).not.toBe('title-promo');
+});
+
+test('allows explicitly shared evergreen station IDs without exposing channel-7 daypart media', () => {
+  const sharedId = {
+    ...item('shared-evergreen-id', 'station-id', 480_000),
+    tags: ['voiced-continuity', 'continuity-channel=marktv-laughs',
+      'continuity-shared-channels=marktv-movies,marktv-cult-movies',
+      'continuity-role=station-id', 'continuity-scope=evergreen',
+      'continuity-map=MARKTV_ID_MAIN_001', 'continuity-hourly-ids-eligible'],
+  };
+  expect(fill({ items: [sharedId], channelId: 'marktv-movies' }).entries[0]?.mediaId).toBe('shared-evergreen-id');
+  expect(fill({ items: [sharedId], channelId: 'marktv-cult-movies' }).entries[0]?.mediaId).toBe('shared-evergreen-id');
+  expect(fill({ items: [sharedId], channelId: 'marktv-sports' }).entries[0]?.mediaId).not.toBe('shared-evergreen-id');
 });
 
 test('accepts commercials, bumpers, and general filler roles', () => {

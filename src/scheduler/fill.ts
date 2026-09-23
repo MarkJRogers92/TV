@@ -4,6 +4,7 @@ import {
   type ScheduleEntry,
 } from "../domain/models.js";
 import { createSeededRandom } from "./random.js";
+import { parseVoicedChannelScope, voicedChannelAllows } from "../continuity/voicedChannels.js";
 
 export type FillerHistory = { mediaId: string; at: string };
 export type FillInput = {
@@ -56,10 +57,10 @@ function rankedEligibleItems(input: FillInput): MediaItem[] {
     input.stationIdsEligible ?? input.boundary.getUTCMinutes() === 0;
   const random = createSeededRandom(input.seed ?? "filler");
   const daypartEligible = (item: MediaItem) => {
-    if (
-      item.tags.includes("voiced-continuity") &&
-      !item.tags.includes(`continuity-channel=${input.channelId ?? ""}`)
-    ) return false;
+    if (item.tags.includes("voiced-continuity")) {
+      const scope = parseVoicedChannelScope(item.tags);
+      if (!voicedChannelAllows(scope, input.channelId ?? "")) return false;
+    }
     const daypartPrefix = "continuity-daypart=";
     const daypart = item.tags.find((tag) => tag.startsWith(daypartPrefix))?.slice(daypartPrefix.length);
     if (!daypart) return true;

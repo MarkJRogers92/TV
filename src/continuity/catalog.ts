@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { MediaItem } from "../domain/models.js";
 import { parseGeneratedContinuityTags } from "./assets.js";
 import type { ContinuityAsset, ContinuityPersona, ContinuityRole } from "./types.js";
+import { parseVoicedChannelScope } from "./voicedChannels.js";
 
 export const titleSlug = (value: string) =>
   value
@@ -29,10 +30,6 @@ const roleFor = (title: string, kind: MediaItem["kind"]): ContinuityRole => {
 
 const tagValue = (tags: string[], name: string) =>
   tags.find((tag) => tag.startsWith(`${name}=`))?.slice(name.length + 1);
-const uniqueTagValue = (tags: string[], name: string) => {
-  const matches = tags.filter((tag) => tag.startsWith(`${name}=`));
-  return matches.length === 1 ? matches[0]!.slice(name.length + 1) : undefined;
-};
 const validVoicedRole = (value: string | undefined): value is ContinuityRole =>
   Boolean(value && ["next", "next-later", "tonight", "weekend", "after-dark", "break", "return", "station-id", "interruption"].includes(value));
 const validContinuityScope = (value: string | undefined): value is ContinuityAsset["scope"] =>
@@ -52,12 +49,12 @@ export function classifyExistingContinuityAssets(media: MediaItem[]): Continuity
       const declaredRole = tagValue(item.tags, "continuity-role") as ContinuityRole | undefined;
       const declaredScope = tagValue(item.tags, "continuity-scope") as ContinuityAsset["scope"] | undefined;
       const voiced = item.tags.includes("voiced-continuity");
-      const voicedChannel = uniqueTagValue(item.tags, "continuity-channel");
-      const voicedRole = uniqueTagValue(item.tags, "continuity-role");
-      const voicedScope = uniqueTagValue(item.tags, "continuity-scope");
+      const channelScope = parseVoicedChannelScope(item.tags);
+      const voicedChannel = channelScope.primaryChannel;
+      const voicedRole = tagValue(item.tags, "continuity-role");
+      const voicedScope = tagValue(item.tags, "continuity-scope");
       const invalidVoicedMetadata = voiced && (
-        !voicedChannel || !/^marktv-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(voicedChannel) ||
-        !validVoicedRole(voicedRole) || !validContinuityScope(voicedScope)
+        !channelScope.valid || !validVoicedRole(voicedRole) || !validContinuityScope(voicedScope)
       );
       const stagedReason = tagValue(item.tags, "continuity-staged-reason");
       const ready = Boolean(
@@ -91,7 +88,8 @@ export function classifyExistingContinuityAssets(media: MediaItem[]): Continuity
         requiresUnstartedTarget: item.tags.includes("continuity-requires-unstarted-target=true"),
         requiresSameSeriesAsCurrent: item.tags.includes("continuity-requires-same-series-as-current=true"),
         requiresSameLocalDateAsTarget: item.tags.includes("continuity-requires-same-local-date-as-target=true"),
-        channelId: tagValue(item.tags, "continuity-channel"),
+        channelId: voiced ? voicedChannel : tagValue(item.tags, "continuity-channel"),
+        ...(channelScope.shared && channelScope.valid ? { channelIds: channelScope.allowedChannels.slice(1) } : {}),
         ...(stagedReason ? { stagedReason } : {}),
         available: item.available,
         voicePresent: !visualOnly,

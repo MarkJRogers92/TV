@@ -122,6 +122,18 @@ test("requires same-series evidence for a 'more Roseanne' voiced promo", () => {
   expect(selectContinuity(sameSeries, [roseanne], [], { now: context.insertionInstant }).selected?.id).toBe(roseanne.id);
 });
 
+test("permits only explicitly shared voiced assets on movie channel contexts", () => {
+  const shared = asset({ channelId: "marktv-laughs", channelIds: ["marktv-movies", "marktv-cult-movies"] });
+  const moviesContext = { ...context, channelId: "marktv-movies" };
+  const cultContext = { ...context, channelId: "marktv-cult-movies" };
+  const ownerContext = { ...context, channelId: "marktv-laughs" };
+  const otherContext = { ...context, channelId: "marktv-sports" };
+  expect(selectContinuity(moviesContext, [shared], [], { now: context.insertionInstant }).selected).toBe(shared);
+  expect(selectContinuity(cultContext, [shared], [], { now: context.insertionInstant }).selected).toBe(shared);
+  expect(selectContinuity(ownerContext, [shared], [], { now: context.insertionInstant }).selected).toBe(shared);
+  expect(selectContinuity(otherContext, [shared], [], { now: context.insertionInstant }).selected).toBeNull();
+});
+
 test("applies the configured promo-frequency gate deterministically", () => {
   const result = selectContinuity(context, [asset()], [], {
     now: context.insertionInstant,

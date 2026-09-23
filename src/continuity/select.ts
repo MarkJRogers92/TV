@@ -7,6 +7,7 @@ import type {
   RejectCode,
 } from "./types.js";
 import { DateTime } from "luxon";
+import { voicedChannelAssetAllows } from "./voicedChannels.js";
 
 type Options = {
   now: string;
@@ -56,7 +57,7 @@ export function rankContinuityCandidates(
     const target = targetForRole(asset);
     if (!asset.airReady || asset.available === false || !asset.path || !asset.durationMs)
       reason = asset.rejectReason ?? "MISSING_SOURCE";
-    else if (asset.channelId && asset.channelId !== context.channelId)
+    else if ((asset.channelId || asset.channelIds) && !voicedChannelAssetAllows(asset.channelId, asset.channelIds, context.channelId))
       reason = "TARGET_MISMATCH";
     else if (asset.scheduleRevision && asset.scheduleRevision !== context.scheduleRevision)
       reason = "STALE_SCHEDULE";
