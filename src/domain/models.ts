@@ -219,13 +219,24 @@ export type MovieRole = z.infer<typeof movieRoleSchema>;
  * owns the airing, and read back by the day that continues it.
  */
 export const movieCarrySchema = z.object({
-  /** Tail of a feature that stopped at the day boundary, from its source offset. */
+  /** Tail of a movie that stopped at the day boundary, from its source offset. */
   continuation: z
     .object({
       mediaId: z.string().min(1),
       sourceOffsetMs: z.number().int().nonnegative(),
       occurrenceKey: z.string().min(1).optional(),
       role: movieRoleSchema.optional(),
+      /** The ordinary movie slot that selected a movie crossing midnight. */
+      slotId: z.string().min(1).optional(),
+      /** Mid-rolls still owed, measured from the carried source offset. */
+      midrolls: z
+        .array(
+          z.object({
+            offsetMs: z.number().int().nonnegative(),
+            durationMs: z.number().int().positive(),
+          }),
+        )
+        .optional(),
     })
     .optional(),
   /**

@@ -287,6 +287,107 @@ test("fills periods without an active slot and a final overrun with safe flex", 
   ).toBe(false);
 });
 
+test("continues an ordinary movie slot across midnight and preserves remaining mid-rolls", () => {
+  const base = demo();
+  base.channel.dayparts = [
+    {
+      id: "all-day",
+      name: "All day",
+      days: [0, 1, 2, 3, 4, 5, 6],
+      start: "00:00",
+      end: "00:00",
+      priority: 1,
+    },
+  ];
+  base.channel.slots = [
+    {
+      id: "all-day-episodes",
+      daypartId: "all-day",
+      days: [],
+      poolIds: ["apartment-4b"],
+      fallbackPoolIds: [],
+      kind: "episode",
+    },
+    {
+      id: "late-movie",
+      days: [0, 1, 2, 3, 4, 5, 6],
+      time: "23:00",
+      poolIds: ["movies"],
+      fallbackPoolIds: [],
+      kind: "movie",
+      movieMidroll: {
+        intervalMinutes: 30,
+        breakMinutes: 3,
+        minimumMinutes: 30,
+        maxBreaks: 2,
+        tailBufferMinutes: 15,
+        strategy: "lazy",
+      },
+    },
+  ];
+  const movie = base.media.find((item) => item.kind === "movie")!;
+  movie.durationMs = 100 * 60_000;
+  const episode = base.media.find((item) => item.kind === "episode")!;
+  episode.durationMs = 60 * 60_000;
+  const moviePool = base.pools.find((item) => item.id === "movies")!;
+  moviePool.mediaIds = [movie.id];
+  moviePool.noRepeatMinutes = 0;
+  const episodePool = base.pools.find((item) => item.id === "apartment-4b")!;
+  episodePool.mediaIds = [episode.id];
+  episodePool.noRepeatMinutes = 0;
+
+  const result = generateSchedule({
+    ...base,
+    items: base.media,
+    date: "2026-09-14",
+  });
+
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  const last = result.schedule.entries.at(-1)!;
+  expect(last).toMatchObject({
+    kind: "movie",
+    mediaId: movie.id,
+    sourceSlotId: "late-movie",
+    localEnd: "00:00",
+  });
+  expect(last.midrolls).toEqual([
+    { offsetMs: 30 * 60_000, durationMs: 3 * 60_000 },
+  ]);
+  expect(last.contentDurationMs ?? last.durationMs).toBeLessThan(movie.durationMs!);
+  const nextSourceOffset =
+    (last.sourceOffsetMs ?? 0) +
+    (last.contentDurationMs ?? last.durationMs);
+  expect(result.schedule.movieCarry).toMatchObject({
+    continuation: {
+      mediaId: movie.id,
+      sourceOffsetMs: nextSourceOffset,
+      slotId: "late-movie",
+    },
+  });
+  const continuation = result.schedule.movieCarry?.continuation;
+  if (!continuation?.slotId) return;
+
+  const tomorrow = generateSchedule({
+    ...base,
+    items: base.media,
+    date: "2026-09-15",
+    slotMovieContinuation: { ...continuation, slotId: continuation.slotId },
+  });
+  expect(tomorrow.ok).toBe(true);
+  if (!tomorrow.ok) return;
+  expect(tomorrow.schedule.entries[0]).toMatchObject({
+    kind: "movie",
+    mediaId: movie.id,
+    localStart: "00:00",
+    sourceOffsetMs: nextSourceOffset,
+    sourceSlotId: "late-movie",
+  });
+  expect(tomorrow.schedule.entries[0]?.midrolls).toEqual([
+    { offsetMs: 3 * 60_000, durationMs: 3 * 60_000 },
+  ]);
+});
+
 test("records source daypart, source slot, and selection explanation", () => {
   const base = demo();
   const result = generateSchedule({

@@ -54,6 +54,13 @@ export type GenerateScheduleInput = {
    * what survives a restart.
    */
   movieProgramming?: MovieProgrammingRuntime;
+  /**
+   * An ordinary movie-slot airing that crossed midnight on the previous day.
+   * It resumes before the next day's slots.
+   */
+  slotMovieContinuation?: NonNullable<MovieCarry["continuation"]> & {
+    slotId: string;
+  };
 };
 
 export type MovieProgrammingRuntime = {
@@ -124,6 +131,7 @@ function generationFingerprint(input: GenerateScheduleInput) {
     // The movie assignments are part of the plan, not decoration: a different
     // assignment must produce a different generation fingerprint.
     movieProgramming: input.movieProgramming,
+    slotMovieContinuation: input.slotMovieContinuation,
     episodeBreakAnalyses: Object.fromEntries(
       Object.entries(input.episodeBreakAnalyses ?? {}).sort(([left], [right]) =>
         left.localeCompare(right),
@@ -543,6 +551,76 @@ export function generateSchedule(
     role: entry.movieRole,
   });
 
+  /** Emit as much of an ordinary movie slot as this broadcast day can hold. */
+  const emitSlotMovie = (options: {
+    item: MediaItem;
+    start: DateTime;
+    sourceOffsetMs: number;
+    sourceSlotId: string;
+    sourceDaypartId?: string;
+    selectionExplanation: string;
+    midrolls: NonNullable<ScheduleEntry["midrolls"]>;
+  }) => {
+    if (!options.item.durationMs) return undefined;
+    const remainingContentMs = options.item.durationMs - options.sourceOffsetMs;
+    const availableMs = dayEnd.toMillis() - options.start.toMillis();
+    if (remainingContentMs <= 0 || availableMs <= 0) return undefined;
+
+    let contentMs = Math.min(remainingContentMs, availableMs);
+    for (let guard = 0; guard < 64; guard += 1) {
+      const inside = options.midrolls.filter(
+        (midroll) => midroll.offsetMs < contentMs,
+      );
+      const broadcastMs =
+        contentMs +
+        inside.reduce((total, midroll) => total + midroll.durationMs, 0);
+      if (broadcastMs <= availableMs) break;
+      contentMs -= broadcastMs - availableMs;
+      if (contentMs <= 0) return undefined;
+    }
+
+    const inside = options.midrolls.filter(
+      (midroll) => midroll.offsetMs < contentMs,
+    );
+    const broadcastMs =
+      contentMs +
+      inside.reduce((total, midroll) => total + midroll.durationMs, 0);
+    const end = options.start.plus({ milliseconds: broadcastMs });
+    const entry: ScheduleEntry = {
+      id: `movie-${options.item.id}-${options.start.toMillis()}`,
+      start: options.start.toUTC().toISO()!,
+      end: end.toUTC().toISO()!,
+      localStart: localTime(options.start),
+      localEnd: localTime(end),
+      durationMs: broadcastMs,
+      contentDurationMs: contentMs,
+      ...(options.sourceOffsetMs > 0
+        ? { sourceOffsetMs: options.sourceOffsetMs }
+        : {}),
+      kind: "movie",
+      title: options.item.title,
+      mediaId: options.item.id,
+      path: options.item.path,
+      source: options.sourceSlotId,
+      sourceDaypartId: options.sourceDaypartId,
+      sourceSlotId: options.sourceSlotId,
+      selectionExplanation: options.selectionExplanation,
+      ...(inside.length ? { midrolls: inside } : {}),
+    };
+    return {
+      entry,
+      end,
+      continues: remainingContentMs > contentMs,
+      nextSourceOffsetMs: options.sourceOffsetMs + contentMs,
+      remainingMidrolls: options.midrolls
+        .filter((midroll) => midroll.offsetMs >= contentMs)
+        .map((midroll) => ({
+          ...midroll,
+          offsetMs: midroll.offsetMs - contentMs,
+        })),
+    };
+  };
+
   /**
    * The 60-120 second whole-spot bridge between the two halves of a pair.
    *
@@ -695,6 +773,52 @@ export function generateSchedule(
     if (emitted.continues) {
       recordCarry({ continuation: continuationTail(emitted.entry) });
       break;
+    }
+  }
+
+  if (input.slotMovieContinuation) {
+    const continuation = input.slotMovieContinuation;
+    const item = itemsById.get(continuation.mediaId);
+    if (!item?.durationMs || item.kind !== "movie" || !item.available) {
+      diagnostics.push({
+        code: "MOVIE_CONTINUATION_UNAVAILABLE",
+        message: `The movie continuing from slot ${continuation.slotId} is no longer available`,
+        mediaId: continuation.mediaId,
+      });
+    } else {
+      const emitted = emitSlotMovie({
+        item,
+        start: at,
+        sourceOffsetMs: continuation.sourceOffsetMs,
+        sourceSlotId: continuation.slotId,
+        sourceDaypartId: activeDaypart(input.channel, at)?.id,
+        selectionExplanation: "Continued movie from the previous broadcast day",
+        midrolls: continuation.midrolls ?? [],
+      });
+      if (emitted) {
+        entries.push(emitted.entry);
+        history.push({ mediaId: item.id, at: emitted.entry.start });
+        at = emitted.end;
+        if (emitted.continues) {
+          recordCarry({
+            continuation: {
+              mediaId: item.id,
+              sourceOffsetMs: emitted.nextSourceOffsetMs,
+              slotId: continuation.slotId,
+              midrolls: emitted.remainingMidrolls,
+            },
+          });
+          diagnostics.push({
+            code: "MOVIE_CONTINUES_NEXT_DAY",
+            message: `${item.title} continues past ${input.date} with ${Math.round((item.durationMs - emitted.nextSourceOffsetMs) / 1000)}s left at source offset ${emitted.nextSourceOffsetMs}ms`,
+            mediaId: item.id,
+          });
+        }
+        at = fillBoundary(at, {
+          daypartId: activeDaypart(input.channel, at)?.id,
+          slotId: continuation.slotId,
+        });
+      }
     }
   }
 
@@ -1024,6 +1148,43 @@ export function generateSchedule(
       });
     }
     const finish = at.plus({ milliseconds: broadcastDurationMs });
+    if (finish > dayEnd && slot.kind === "movie") {
+      const emitted = emitSlotMovie({
+        item: chosen,
+        start: at,
+        sourceOffsetMs: 0,
+        sourceSlotId: slot.id,
+        sourceDaypartId: daypart?.id,
+        selectionExplanation: selectionExplanation(
+          slot,
+          selectedPool.pool,
+          primaryCandidates.length > 1,
+        ),
+        midrolls,
+      });
+      if (emitted) {
+        entries.push(emitted.entry);
+        history.push({ mediaId: chosen.id, at: emitted.entry.start });
+        at = emitted.end;
+        if (emitted.continues) {
+          recordCarry({
+            continuation: {
+              mediaId: chosen.id,
+              sourceOffsetMs: emitted.nextSourceOffsetMs,
+              slotId: slot.id,
+              midrolls: emitted.remainingMidrolls,
+            },
+          });
+          diagnostics.push({
+            code: "MOVIE_CONTINUES_NEXT_DAY",
+            message: `${chosen.title} continues past ${input.date} with ${Math.round((chosen.durationMs - emitted.nextSourceOffsetMs) / 1000)}s left at source offset ${emitted.nextSourceOffsetMs}ms`,
+            mediaId: chosen.id,
+          });
+        }
+        at = fillBoundary(at, { daypartId: daypart?.id, slotId: slot.id });
+        continue;
+      }
+    }
     if (finish > dayEnd) {
       entries.push(
         flexEntry(at, dayEnd, "Selected program exceeds broadcast day", {

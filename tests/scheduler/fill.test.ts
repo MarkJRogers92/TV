@@ -187,6 +187,23 @@ test('bounds sparse best-fit state for 600 GCD-1 millisecond durations',()=>{
   expect(result.stats?.exploredStates).toBeLessThanOrEqual(50_000);
 });
 
+test('finds an exact commercial subset when sparse-state search reaches its cap', () => {
+  const result = fillToBoundary({
+    start: new Date('2026-09-18T12:00:00.000Z'),
+    boundary: new Date('2026-09-18T12:01:30.150Z'),
+    items: Array.from({ length: 600 }, (_, index) =>
+      item(`bounded-search-${index}`, 'commercial', index + 1),
+    ),
+    cooldownMinutes: 0,
+    seed: 'exact-after-cap',
+  });
+
+  expect(result.entries.some((entry) => entry.kind === 'flex')).toBe(false);
+  expect(result.entries.reduce((total, entry) => total + entry.durationMs, 0)).toBe(
+    90_150,
+  );
+});
+
 test('selects an exact 60-minute item before capped sparse search',()=>{
   const exact=item('exact-hour','commercial',3_600_000);
   const result=fillToBoundary({start:new Date('2026-09-18T12:00:00.000Z'),boundary:new Date('2026-09-18T13:00:00.000Z'),items:[...Array.from({length:599},(_,index)=>item(`near-${index}`,'commercial',index+1)),exact],cooldownMinutes:120,seed:'reviewer-exact'});

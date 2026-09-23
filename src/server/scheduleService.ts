@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { Repositories } from "../db/repositories.js";
-import type { Channel, Schedule } from "../domain/models.js";
+import type { Channel, MovieCarry, Schedule } from "../domain/models.js";
 import type { EpisodeMidrollPolicy, MediaItem } from "../domain/models.js";
 import { writeScheduleExport } from "../export/marktvJson.js";
 import {
@@ -213,6 +213,7 @@ export class ScheduleService {
       const ordinary = {
         ...input,
         movieProgramming: movieProgramming?.runtime,
+        slotMovieContinuation: this.slotMovieContinuation(channel, date),
       };
       // The fallback layout has the same duration as a detected layout, so it is
       // a cheap, deterministic way to find the day's actual episode selections
@@ -496,6 +497,7 @@ export class ScheduleService {
       previousDate,
     );
     if (!previous) return [];
+    if (previous.movieCarry?.continuation?.slotId) return [];
     if (previous.movieCarry)
       return [
         {
@@ -520,6 +522,23 @@ export class ScheduleService {
         },
       },
     ];
+  }
+
+  /** Carry an unfinished ordinary movie-slot airing into the next date. */
+  private slotMovieContinuation(
+    channel: Channel,
+    date: string,
+  ): (NonNullable<MovieCarry["continuation"]> & { slotId: string }) | undefined {
+    const previousDate = DateTime.fromISO(date, { zone: channel.timezone })
+      .minus({ days: 1 })
+      .toISODate();
+    if (!previousDate) return undefined;
+    const continuation = this.repositories.schedules.latestForDate(
+      channel.id,
+      previousDate,
+    )?.movieCarry?.continuation;
+    if (!continuation?.slotId) return undefined;
+    return { ...continuation, slotId: continuation.slotId };
   }
 
   /**

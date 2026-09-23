@@ -89,6 +89,94 @@ async function fixture() {
   return { dataDir, repositories, seeded };
 }
 
+test("persists and resumes an ordinary movie-slot continuation on the next date", async () => {
+  const { dataDir, repositories, seeded } = await fixture();
+  const movie = seeded.media.find((item) => item.kind === "movie")!;
+  const episode = seeded.media.find((item) => item.kind === "episode")!;
+  repositories.media.put({ ...movie, durationMs: 100 * 60_000 });
+  repositories.media.put({ ...episode, durationMs: 60 * 60_000 });
+
+  const channel = {
+    ...seeded.channel,
+    dayparts: [
+      {
+        id: "all-day",
+        name: "All day",
+        days: [0, 1, 2, 3, 4, 5, 6],
+        start: "00:00",
+        end: "00:00",
+        priority: 1,
+      },
+    ],
+    slots: [
+      {
+        id: "all-day-episodes",
+        daypartId: "all-day",
+        days: [],
+        poolIds: ["apartment-4b"],
+        fallbackPoolIds: [],
+        kind: "episode" as const,
+      },
+      {
+        id: "late-movie",
+        days: [0, 1, 2, 3, 4, 5, 6],
+        time: "23:00",
+        poolIds: ["movies"],
+        fallbackPoolIds: [],
+        kind: "movie" as const,
+      },
+    ],
+  };
+  repositories.channels.put(channel);
+  for (const pool of repositories.pools.list()) {
+    if (pool.id === "movies")
+      repositories.pools.put({
+        ...pool,
+        mediaIds: [movie.id],
+        noRepeatMinutes: 0,
+      });
+    if (pool.id === "apartment-4b")
+      repositories.pools.put({
+        ...pool,
+        mediaIds: [episode.id],
+        noRepeatMinutes: 0,
+      });
+  }
+
+  const service = new ScheduleService(
+    repositories,
+    dataDir,
+    () => new Date("2026-09-14T12:00:00.000Z"),
+    async () => "/tmp/schedule.json",
+  );
+  const firstDay = await service.generate(channel, "2026-09-14");
+  expect(firstDay.ok).toBe(true);
+  if (!firstDay.ok) return;
+  expect(firstDay.schedule.entries.at(-1)).toMatchObject({
+    kind: "movie",
+    mediaId: movie.id,
+    sourceSlotId: "late-movie",
+    localEnd: "00:00",
+  });
+  const continuation = firstDay.schedule.movieCarry?.continuation;
+  expect(continuation).toMatchObject({
+    mediaId: movie.id,
+    slotId: "late-movie",
+  });
+
+  const nextDay = await service.generate(channel, "2026-09-15");
+  expect(nextDay.ok).toBe(true);
+  if (!nextDay.ok || !continuation) return;
+  expect(nextDay.schedule.entries[0]).toMatchObject({
+    kind: "movie",
+    mediaId: movie.id,
+    localStart: "00:00",
+    sourceOffsetMs: continuation.sourceOffsetMs,
+    sourceSlotId: "late-movie",
+  });
+  repositories.close();
+});
+
 test("analyzes selected local episodes but skips eligible episodes from inactive slots", async () => {
   const { dataDir, repositories, seeded } = await fixture();
   const analyzer = {

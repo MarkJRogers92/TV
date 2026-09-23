@@ -38,6 +38,8 @@ export type FillInput = {
   exclude?: ReadonlySet<string>;
 };
 export const FILL_STATE_CAP = 50_000;
+const FILL_BITSET_CAP = 2_000_000;
+const FILL_BITSET_CHECKPOINT = 64;
 export type FillResult = {
   entries: ScheduleEntry[];
   stats: { exploredStates: number };
@@ -128,9 +130,72 @@ function recentIds(input: FillInput): ReadonlySet<string> {
 const totalDurationMs = (items: MediaItem[]) =>
   items.reduce((total, item) => total + (item.durationMs ?? 0), 0);
 const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
+function exactBoundedFit(items: MediaItem[], gapUnits: number, unitMs: number) {
+  if (
+    gapUnits > FILL_BITSET_CAP ||
+    totalDurationMs(items) < gapUnits * unitMs
+  )
+    return undefined;
+
+  const durations = items.map((item) => item.durationMs! / unitMs);
+  const limit = (1n << BigInt(gapUnits + 1)) - 1n;
+  const targetBit = 1n << BigInt(gapUnits);
+  const checkpoints = new Map<number, bigint>([[0, 1n]]);
+  let reachable = 1n;
+  let processed = 0;
+
+  for (let index = 0; index < items.length; index++) {
+    const duration = durations[index];
+    if (duration <= gapUnits)
+      reachable |= (reachable << BigInt(duration)) & limit;
+    processed = index + 1;
+    if (processed % FILL_BITSET_CHECKPOINT === 0)
+      checkpoints.set(processed, reachable);
+    if ((reachable & targetBit) !== 0n) break;
+  }
+  if ((reachable & targetBit) === 0n) return undefined;
+
+  const selected = new Set<string>();
+  let remaining = gapUnits;
+  let end = processed;
+  while (end > 0 && remaining > 0) {
+    const start =
+      Math.floor((end - 1) / FILL_BITSET_CHECKPOINT) *
+      FILL_BITSET_CHECKPOINT;
+    let state = checkpoints.get(start);
+    if (state === undefined) return undefined;
+    const states = [state];
+    for (let index = start; index < end; index++) {
+      const duration = durations[index];
+      if (duration <= gapUnits)
+        state = (state | (state << BigInt(duration))) & limit;
+      states.push(state);
+    }
+    for (let index = end - 1; index >= start; index--) {
+      const before = states[index - start];
+      const remainingBit = 1n << BigInt(remaining);
+      if ((before & remainingBit) !== 0n) continue;
+      const duration = durations[index];
+      if (
+        duration > remaining ||
+        (before & (1n << BigInt(remaining - duration))) === 0n
+      )
+        return undefined;
+      selected.add(items[index].id);
+      remaining -= duration;
+    }
+    end = start;
+  }
+  if (remaining !== 0) return undefined;
+  return {
+    items: items.filter((item) => selected.has(item.id)),
+    exploredStates: processed,
+  };
+}
 function bestFit(
   items: MediaItem[],
   gapMs: number,
+  useBoundedExactFallback = false,
 ): { items: MediaItem[]; exploredStates: number } {
   for (let first = 0; first < items.length; first++) {
     if (items[first].durationMs === gapMs)
@@ -150,7 +215,7 @@ function bestFit(
     const selected = new Int32Array(gapUnits + 1).fill(-1);
     let exploredStates = 1;
     previous[0] = -1;
-    for (let index = 0; index < items.length; index++)
+    for (let index = 0; index < items.length; index++) {
       for (let total = gapUnits; total >= durations[index]; total--)
         if (
           previous[total] === -2 &&
@@ -160,6 +225,8 @@ function bestFit(
           selected[total] = index;
           exploredStates++;
         }
+      if (previous[gapUnits] !== -2) break;
+    }
     for (let total = gapUnits; total >= 0; total--)
       if (previous[total] !== -2) {
         const result: MediaItem[] = [];
@@ -175,12 +242,18 @@ function bestFit(
     let index = 0;
     index < items.length && states.size < FILL_STATE_CAP;
     index++
-  )
+  ) {
     for (const total of [...states.keys()]) {
       const next = total + items[index].durationMs!;
       if (next <= gapMs && !states.has(next) && states.size < FILL_STATE_CAP)
         states.set(next, { previous: total, itemIndex: index });
     }
+    if (states.has(gapUnits)) break;
+  }
+  if (!states.has(gapUnits) && useBoundedExactFallback) {
+    const exact = exactBoundedFit(items, gapUnits, unit);
+    if (exact) return exact;
+  }
   let best = 0;
   for (const total of states.keys()) if (total > best) best = total;
   const result: MediaItem[] = [];
@@ -206,14 +279,18 @@ export function fillToBoundary(input: FillInput): FillResult {
   const unexcluded = ranked.filter((item) => !exclude?.has(item.id));
   if (unexcluded.length > pools[0].length) pools.push(unexcluded);
   if (ranked.length > unexcluded.length) pools.push(ranked);
-  let selected = bestFit(pools[0], gapMs);
+  let selected = bestFit(pools[0], gapMs, pools.length === 1);
   // A repeat is only worth its lost variety when it fills the break strictly
   // better - a residual becomes a flex entry, dead air. Ties keep the earlier,
   // more varied pool, so relaxing can never leave a break emptier than the
   // preference would have.
-  for (const pool of pools.slice(1)) {
+  for (const [index, pool] of pools.slice(1).entries()) {
     if (totalDurationMs(selected.items) >= gapMs) break;
-    const relaxed = bestFit(pool, gapMs);
+    const relaxed = bestFit(
+      pool,
+      gapMs,
+      index === pools.length - 2,
+    );
     if (totalDurationMs(relaxed.items) > totalDurationMs(selected.items))
       selected = relaxed;
   }
