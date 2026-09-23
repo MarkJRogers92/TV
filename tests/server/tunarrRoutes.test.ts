@@ -416,6 +416,14 @@ test("sync applies the schedule captured by the stored dry-run plan", async () =
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ partialFailure: false });
     expect(posted?.lineup?.[0]).toMatchObject({ type: "content", id: "a1" });
+    expect((await readStoredMapping(dir))?.lastSync).toMatchObject({
+      at: "2026-09-16T18:00:00.000Z",
+      marktvChannelId: "marktv-laughs",
+      status: "synced",
+      scheduleId: today.id,
+      completed: ["channel-update", "filler-create", "programming"],
+      programCount: 1,
+    });
   } finally {
     await app.close();
   }

@@ -242,6 +242,21 @@ export async function registerTunarrRoutes(
       const next: StoredMapping = {
         ...(current ?? stored),
         ...result.state,
+        lastSync: {
+          at: context.now().toISOString(),
+          marktvChannelId: stored.marktvChannelId,
+          status: result.partialFailure ? "failed" : "synced",
+          scheduleId: schedule.id,
+          completed: result.completed,
+          ...(result.partialFailure
+            ? { message: result.error }
+            : {
+                programCount:
+                  stored.plan.operations.find(
+                    (operation) => operation.type === "programming",
+                  )?.payload.length,
+              }),
+        },
       };
       if (result.state.channelId) next.createChannel = false;
       if (current?.plan?.fingerprint === stored.plan.fingerprint)
