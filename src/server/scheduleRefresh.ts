@@ -160,6 +160,38 @@ export function scheduleHasStaleMedia(
   });
 }
 
+/**
+ * Whether a stored schedule for the NEXT date was built before the carry the
+ * PREVIOUS date now records.
+ *
+ * A feature that runs past midnight is written down on the schedule that owned
+ * the airing and resumed by the next day, but only the next day can start with
+ * it. The quiet-hours pass builds tomorrow BEFORE today's own replacement runs,
+ * so a today that was rebuilt afterwards - because its media changed, or because
+ * it only just crossed midnight - leaves tomorrow opening on the wrong film and
+ * the tail of today's last feature is never aired at all.
+ *
+ * The `generatedAt` comparison is what stops this rebuilding tomorrow forever:
+ * once tomorrow has been generated against today's carry, tomorrow is the newer
+ * of the two and this is false again, whatever the generation happened to
+ * decide. A carry with no `slotId` belongs to the movie-programming path, which
+ * resumes its own features through `movieContinuations` instead.
+ */
+export function scheduleMissesPreviousCarry(
+  previous: Schedule,
+  next: Schedule,
+): boolean {
+  const continuation = previous.movieCarry?.continuation;
+  if (!continuation?.slotId) return false;
+  if (Date.parse(previous.generatedAt) <= Date.parse(next.generatedAt))
+    return false;
+  return !next.entries.some(
+    (entry) =>
+      entry.mediaId === continuation.mediaId &&
+      (entry.sourceOffsetMs ?? 0) > 0,
+  );
+}
+
 export function startScheduleRefresh(
   context: ScheduleRefreshContext,
   dependencies: ScheduleRefreshDependencies,
@@ -259,16 +291,32 @@ export function startScheduleRefresh(
         // A pre-generated tomorrow that no longer matches the catalog is rebuilt
         // for the same reason today's is: it is cheaper now than at midnight,
         // and it is still not broadcast.
+        //
+        // A tomorrow that predates today's movie carry is the same kind of wrong,
+        // and is rebuilt even outside the quiet hours. Unlike staleness it cannot
+        // wait for the next quiet window: the carry is a film that airs across
+        // midnight TONIGHT, so by then tomorrow is already on air. One generation
+        // is the cost, and the alternative is that the rest of today's last
+        // feature is never aired.
+        const carryGap =
+          tomorrow && storedTomorrow
+            ? scheduleMissesPreviousCarry(schedule, storedTomorrow)
+            : false;
         if (
           tomorrow &&
-          (!storedTomorrow || scheduleHasStaleMedia(storedTomorrow, media)) &&
-          local.hour >= scheduleRefreshLimits.quietStartHour &&
-          local.hour < scheduleRefreshLimits.quietEndHour
+          (!storedTomorrow ||
+            scheduleHasStaleMedia(storedTomorrow, media) ||
+            carryGap) &&
+          (carryGap ||
+            (local.hour >= scheduleRefreshLimits.quietStartHour &&
+              local.hour < scheduleRefreshLimits.quietEndHour))
         ) {
           if (storedTomorrow)
             logWarn(
               "schedule.refresh",
-              "Replacing a stale pre-generated schedule",
+              carryGap
+                ? "Rebuilding a schedule that predates today's movie carry"
+                : "Replacing a stale pre-generated schedule",
               {
                 channelId: channel.id,
                 date: tomorrow,

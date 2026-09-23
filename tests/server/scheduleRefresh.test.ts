@@ -6,6 +6,7 @@ import type { PersistedGeneration } from "../../src/server/scheduleService.js";
 import {
   scheduleRefreshLimits,
   scheduleHasStaleMedia,
+  scheduleMissesPreviousCarry,
   startScheduleRefresh,
   type ScheduleRefreshContext,
 } from "../../src/server/scheduleRefresh.js";
@@ -513,6 +514,112 @@ test("pre-generates a replacement for a stale tomorrow in the quiet hours", asyn
 
   // Tomorrow is rebuilt because its media moved, and still not broadcast.
   expect(generate.mock.calls[0]?.[1]).toBe("2026-09-18");
+  expect(syncToTunarr).not.toHaveBeenCalled();
+  refresh.stop();
+});
+
+/** Today, having just recorded that a feature runs past the day boundary. */
+function carryingSchedule(
+  generatedAt = "2026-09-17T09:00:00.000Z",
+): Schedule {
+  return {
+    ...scheduleStub(TODAY),
+    generatedAt,
+    movieCarry: {
+      continuation: {
+        mediaId: "cult-movie-1",
+        sourceOffsetMs: 2_400_000,
+        slotId: "cult-movies",
+      },
+    },
+  };
+}
+
+/** Tomorrow, opening on the carried film from the offset today recorded. */
+function continuingSchedule(generatedAt = "2026-09-17T09:30:00.000Z"): Schedule {
+  return {
+    ...scheduleStub("2026-09-18", [
+      {
+        id: "continuation-entry",
+        start: "2026-09-18T05:00:00.000Z",
+        end: "2026-09-18T05:40:00.000Z",
+        localStart: "00:00",
+        localEnd: "00:40",
+        durationMs: 2_400_000,
+        kind: "movie" as const,
+        title: "cult-movie-1",
+        mediaId: "cult-movie-1",
+        path: "/media/movies/Cult/cult-movie-1.mp4",
+        sourceOffsetMs: 2_400_000,
+      },
+    ]),
+    generatedAt,
+  };
+}
+
+test("recognises a next day built before the carry that today now records", () => {
+  // Yesterday's carry belongs to the movie-programming path and is resumed by
+  // movieContinuations, so the slot path must not claim it.
+  expect(
+    scheduleMissesPreviousCarry(
+      {
+        ...carryingSchedule(),
+        movieCarry: {
+          continuation: { mediaId: "cult-movie-1", sourceOffsetMs: 2_400_000 },
+        },
+      },
+      scheduleStub("2026-09-18"),
+    ),
+  ).toBe(false);
+  // Built before today was replaced, and still opening on the wrong film.
+  expect(
+    scheduleMissesPreviousCarry(carryingSchedule(), scheduleStub("2026-09-18")),
+  ).toBe(true);
+  // Already continuing the film: nothing left to rebuild.
+  expect(
+    scheduleMissesPreviousCarry(carryingSchedule(), continuingSchedule()),
+  ).toBe(false);
+  // Built AFTER today's carry and still not opening on the film. Tomorrow is the
+  // newer of the two, so there is nothing left to add - this is what stops
+  // tomorrow being rebuilt every ten minutes even if a generation decides not to
+  // carry the film after all.
+  expect(
+    scheduleMissesPreviousCarry(carryingSchedule("2026-09-17T09:00:00.000Z"), {
+      ...scheduleStub("2026-09-18"),
+      generatedAt: "2026-09-17T09:30:00.000Z",
+    }),
+  ).toBe(false);
+});
+
+test("a film that crosses midnight: tomorrow is rebuilt at midday, not left on the wrong film", async () => {
+  // Midday is well outside the quiet hours. The carry airs across midnight
+  // TONIGHT, so waiting for the next quiet window would be a day too late - the
+  // rest of today's last feature would simply never air.
+  const today = carryingSchedule();
+  const { refresh, generate, syncToTunarr } = setup({
+    stored: [today, scheduleStub("2026-09-18")],
+    lastSync: () => ({ scheduleId: today.id, status: "synced" }),
+  });
+
+  await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1));
+
+  expect(generate.mock.calls[0]?.[1]).toBe("2026-09-18");
+  // Rebuilt, and still not broadcast: tomorrow is not pushed early.
+  expect(syncToTunarr).not.toHaveBeenCalled();
+  refresh.stop();
+});
+
+test("leaves a tomorrow that already carries the film alone", async () => {
+  const today = carryingSchedule();
+  const tomorrow = continuingSchedule();
+  const { refresh, generate, syncToTunarr } = setup({
+    stored: [today, tomorrow],
+    lastSync: () => ({ scheduleId: today.id, status: "synced" }),
+  });
+
+  await settle();
+
+  expect(generate).not.toHaveBeenCalled();
   expect(syncToTunarr).not.toHaveBeenCalled();
   refresh.stop();
 });
