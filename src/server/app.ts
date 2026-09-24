@@ -27,6 +27,10 @@ import {
   createPreparationIntakeRunner,
   type PreparationIntakeRunner,
 } from "../preparation/intakeRunner.js";
+import {
+  createPreparationExecutor,
+  type PreparationExecutor,
+} from "../preparation/executor.js";
 import { KeychainCredentialStore } from "../security/keychain.js";
 import type { CredentialStore } from "../security/credentialStore.js";
 import type { ServerContext } from "./context.js";
@@ -78,6 +82,16 @@ export type BuildAppOptions = {
   preparationIntake?: boolean;
   /** Test seam for the intake runner; defaults to the real implementation. */
   createIntakeRunner?: typeof createPreparationIntakeRunner;
+  /**
+   * Whether to run the background preparation executor.
+   *
+   * Off by default, for the same reason as the other background loops: it runs
+   * bounded ffprobe/ffmpeg probes and writes preparation jobs. It records graded
+   * evidence only — it does not convert or move originals.
+   */
+  preparationExecutor?: boolean;
+  /** Test seam for the preparation executor; defaults to the real implementation. */
+  createExecutor?: typeof createPreparationExecutor;
 };
 
 const IPV4_LOOPBACK = /^127(?:\.\d{1,3}){3}$/;
@@ -277,11 +291,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
   // needs something to stop by the time it fires.
   let scheduleRefresh: ScheduleRefresh | null = null;
   let preparationIntake: PreparationIntakeRunner | null = null;
+  let preparationExecutor: PreparationExecutor | null = null;
   app.addHook("onClose", async () => {
     scheduleRefresh?.stop();
     // Stop the intake scanner before the database handle closes: its poll timer
     // and file watchers must not outlive the repositories they write through.
     await preparationIntake?.stop();
+    // Stop the preparation executor after the scanner, before the DB closes, so
+    // a probe in flight cannot write a job record into a closed handle.
+    await preparationExecutor?.stop();
     // The coordinator owns every durable acquisition write, so stop it
     // (clearing its timer, aborting local transfers, and persisting resumable
     // state) before the database handle is closed.
@@ -315,6 +333,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
       });
       void preparationIntake.start().catch((error) => logError("preparation-intake", error));
     }
+    if (options.preparationExecutor) {
+      // One background executor for the process; it claims at most one job per
+      // pass and never blocks serving. Started but not awaited.
+      const makeExecutor = options.createExecutor ?? createPreparationExecutor;
+      preparationExecutor = makeExecutor(repositories, {
+        onError: (error) => logError("preparation-executor", error),
+      });
+      void preparationExecutor.start().catch((error) => logError("preparation-executor", error));
+    }
     if (options.scheduleRefresh) {
       // Not awaited: a refresh that has to generate takes minutes, and serving must
       // not wait on it.
@@ -331,8 +358,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
     }
   } catch (error) {
     // A failed start leaves no app handle to close, so release the intake
-    // scanner, the coordinator, and the database here instead of leaking them.
+    // scanner, the executor, the coordinator, and the database here instead of
+    // leaking them.
     await preparationIntake?.stop().catch(() => undefined);
+    await preparationExecutor?.stop().catch(() => undefined);
     await coordinator.stop().catch(() => undefined);
     repositories.close();
     throw error;

@@ -1,3 +1,4 @@
+import { lstatSync } from "node:fs";
 import { lstat } from "node:fs/promises";
 import type { PreparationSourceVersion } from "./models.js";
 
@@ -34,6 +35,17 @@ export function sourceVersionFromStats(
 /** Stats one path with `lstat` and returns the canonical version. */
 export async function readSourceVersion(path: string): Promise<PreparationSourceVersion> {
   return sourceVersionFromStats(path, await lstat(path));
+}
+
+/**
+ * Synchronous sibling of `readSourceVersion`, for callers that cannot await.
+ *
+ * `PreparationRepository.claimNext` takes a synchronous `readCurrentSource`
+ * because it must invoke that stat *between* its own transactions, never inside
+ * one. Both readers produce the identical canonical representation.
+ */
+export function readSourceVersionSync(path: string): PreparationSourceVersion {
+  return sourceVersionFromStats(path, lstatSync(path));
 }
 
 /** Exact-equality comparison over the canonical string fields. */
