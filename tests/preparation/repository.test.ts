@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { afterEach, expect, test } from "vitest";
 import { openDatabase } from "../../src/db/database.js";
 import { createRepositories } from "../../src/db/repositories.js";
@@ -58,6 +59,53 @@ test("allows only one durable running preparation claim at a time", async () => 
 
   expect(prep.claimNext((path) => source({ path }))).toBeDefined();
   expect(prep.claimNext((path) => source({ path }))).toBeUndefined();
+  expect(prep.jobs.list().filter((job) => job.state === "running")).toHaveLength(1);
+});
+
+test("checks the claimed source outside the SQLite transaction", async () => {
+  const { dataDir, repositories } = await fixture();
+  const second = createRepositories(openDatabase(dataDir));
+  opened.push(second);
+  const prep = repositories.preparation;
+  prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(0) });
+  prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(60) });
+
+  const claimed = prep.claimNext((path) => {
+    second.preparation.observe({
+      sourceMediaId: "other-movie",
+      source: source({ path: "/media/movies/Other.mkv" }),
+      observedAt: time(0),
+    });
+    return source({ path });
+  });
+
+  expect(claimed).toMatchObject({ state: "running", sourceMediaId: "movie-1" });
+  expect(second.preparation.claimNext((path) => source({ path }))).toBeUndefined();
+  expect(prep.jobs.list().filter((job) => job.state === "running")).toHaveLength(1);
+});
+
+test("concurrent claims from two SQLite connections reserve at most one job without lock errors", async () => {
+  const { dataDir, repositories } = await fixture();
+  const prep = repositories.preparation;
+  prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(0) });
+  prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(60) });
+  const barrier = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const workers = Array.from({ length: 2 }, () => new Worker(join(process.cwd(), "tests/preparation/claimWorker.ts"), {
+    workerData: { dataDir, barrier, source: source() },
+    execArgv: ["--import", "tsx"],
+  }));
+  const results = workers.map((worker) => new Promise<{ kind: string; jobId: string | null }>((resolve, reject) => {
+    worker.once("message", resolve);
+    worker.once("error", reject);
+    worker.once("exit", (code) => { if (code !== 0) reject(new Error(`claim worker exited ${code}`)); });
+  }));
+
+  Atomics.store(new Int32Array(barrier), 0, 1);
+  Atomics.notify(new Int32Array(barrier), 0, 2);
+  const outcomes = await Promise.all(results);
+
+  expect(outcomes.filter((outcome) => outcome.kind === "error")).toEqual([]);
+  expect(outcomes.filter((outcome) => outcome.jobId !== null)).toHaveLength(1);
   expect(prep.jobs.list().filter((job) => job.state === "running")).toHaveLength(1);
 });
 
@@ -138,6 +186,26 @@ test("new source version invalidates older queued work without changing logical 
 
   prep.observe({ sourceMediaId: "movie-1", source: source({ sizeBytes: "2000" }), observedAt: time(120) });
   expect(prep.jobs.list()).toMatchObject([{ sourceMediaId: "movie-1", state: "stale" }]);
+});
+
+test("preserves completed evidence when a later source version is observed", async () => {
+  const { repositories } = await fixture();
+  const prep = repositories.preparation;
+  prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(0) });
+  prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(60) });
+  const job = prep.claimNext(() => source())!;
+  prep.complete(job.id, {
+    classification: "ready_original",
+    fullDecodeEvidence: { decoded: true, fingerprint: job.sourceVersionKey },
+  }, source());
+
+  prep.observe({ sourceMediaId: "movie-1", source: source({ sizeBytes: "2000" }), observedAt: time(120) });
+
+  expect(prep.jobs.get(job.id)).toMatchObject({
+    state: "completed",
+    classification: "ready_original",
+    fullDecodeEvidence: { decoded: true, fingerprint: job.sourceVersionKey },
+  });
 });
 
 test("retries one failed source version without creating a duplicate job", async () => {

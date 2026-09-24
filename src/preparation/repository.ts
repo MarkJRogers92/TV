@@ -140,7 +140,8 @@ export function createPreparationRepository(database: MarkTvDatabase): Preparati
       .all(input.sourceMediaId, key) as Array<{ json: string }>;
     for (const row of oldJobs) {
       const old = preparationJobSchema.parse(JSON.parse(row.json));
-      if (old.state !== "stale") invalidate(old, false, input.observedAt);
+      if (old.state === "queued" || old.state === "running" || old.state === "failed")
+        invalidate(old, false, input.observedAt);
     }
 
     if (!intake.settledAt) return { kind: "observed" as const, intake };
@@ -165,22 +166,37 @@ export function createPreparationRepository(database: MarkTvDatabase): Preparati
       list: () => (database.prepare("SELECT json FROM preparation_jobs ORDER BY created_at, id").all() as Array<{ json: string }>).map((row) => preparationJobSchema.parse(JSON.parse(row.json))),
       get: (id: string) => jobFrom(jobGet.get(id) as { json: string } | undefined),
     },
-    claimNext: (readCurrentSource, now = new Date().toISOString()) => database.transaction(() => {
-      // One durable running claim is the serialization seam, even if two future
-      // callers race to drive the queue from separate loops or processes.
-      if (database.prepare("SELECT 1 FROM preparation_jobs WHERE state = 'running' LIMIT 1").get()) return undefined;
-      const rows = database.prepare("SELECT json FROM preparation_jobs WHERE state = 'queued' ORDER BY created_at, id").all() as Array<{ json: string }>;
-      for (const row of rows) {
+    claimNext: (readCurrentSource, now = new Date().toISOString()) => {
+      // Reserve atomically before touching the filesystem. IMMEDIATE serializes
+      // claimers across SQLite connections; the one-running check makes this a
+      // single-worker queue even when multiple drivers ask at once.
+      const reserved = database.transaction(() => {
+        if (database.prepare("SELECT 1 FROM preparation_jobs WHERE state = 'running' LIMIT 1").get()) return undefined;
+        const row = database.prepare("SELECT json FROM preparation_jobs WHERE state = 'queued' ORDER BY created_at, id LIMIT 1").get() as { json: string } | undefined;
+        if (!row) return undefined;
         const job = preparationJobSchema.parse(JSON.parse(row.json));
-        const current = readCurrentSource(job.source.path);
-        if (!sameVersion(job.source, current)) {
-          invalidate(job, current === null, now);
-          continue;
-        }
         return saveJob({ ...job, state: "running", attempt: job.attempt + 1, updatedAt: now });
-      }
-      return undefined;
-    })(),
+      }).immediate();
+      if (!reserved) return undefined;
+
+      // A stat may block on an unavailable volume. Never hold a SQLite write
+      // transaction while making that call. Errors mean source unavailable, not
+      // evidence of corrupt media.
+      let current: PreparationSourceVersion | null;
+      try { current = readCurrentSource(reserved.source.path); }
+      catch { current = null; }
+
+      return database.transaction(() => {
+        const latest = jobFrom(jobGet.get(reserved.id) as { json: string } | undefined);
+        // A newer observation may have invalidated this reservation while stat ran.
+        if (!latest || latest.state !== "running") return undefined;
+        if (!sameVersion(latest.source, current)) {
+          invalidate(latest, current === null, now);
+          return undefined;
+        }
+        return latest;
+      }).immediate();
+    },
     recordEvidence: (id, evidence, currentSource, now = new Date().toISOString()) => database.transaction(() => {
       const job = jobFrom(jobGet.get(id) as { json: string } | undefined);
       if (!job || job.state !== "running") return { kind: "not-running" as const };

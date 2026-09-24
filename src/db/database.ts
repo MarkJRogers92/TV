@@ -387,6 +387,7 @@ function migrate(database: MarkTvDatabase) {
 export function openDatabase(dataDir: string): MarkTvDatabase {
   mkdirSync(dataDir, { recursive: true });
   const database = new Database(join(dataDir, 'marktv.sqlite'));
+  database.pragma('busy_timeout = 5000');
   migrate(database);
   return database;
 }
