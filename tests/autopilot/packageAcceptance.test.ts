@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -14,8 +14,12 @@ import { DateTime } from "luxon";
 import {
   assignMovieOccurrences,
   buildMovieRotation,
+  movieExposureIndex,
+  movieNightlyMinSpacingDays,
+  spacedNightlyMovie,
 } from "../../src/scheduler/movieProgramming.js";
 import { movieFixture } from "../support/movieFixture.js";
+import { LocalFolderAdapter } from "../../src/media/localFolder.js";
 import {
   movieOccurrenceKey,
   rotationMediaId,
@@ -492,4 +496,273 @@ test("package F05: a failed opener cannot become an encore instead of the ordina
   expect(mondayReplacement?.mediaId).toBe(given.ordinary_alternative);
   expect(rotationMediaId(threeFilmRotation, "2026-09-29", "nightly"))
     .toBe("movie_c");
+});
+
+test("package F06: renamed normalized movie identity keeps its repeat history", async () => {
+  const fixture = scenario("F06");
+  const given = fixture.given as {
+    content_id: string;
+    last_nightly_air: string;
+    now: string;
+    ordinary_alternative: string;
+  };
+  const expected = fixture.expected as {
+    logical_movie_count_for_a: number;
+    next_ordinary_nightly_pick: string;
+    movie_a_still_recent: boolean;
+  };
+  const { database, ledger } = await newLedger();
+
+  // The movie's stable content ID is its ledger identity. Catalog refreshes may
+  // change the display title, while title normalization keeps the logical track
+  // key stable across the original and normalized rendition.
+  const originalTrack = accepted(
+    ledger.ensureSeriesTrack({
+      channelId: "package-f06-channel",
+      seriesTitle: "Movie A (2026)",
+      at: given.last_nightly_air,
+    }),
+  );
+  const refreshedTrack = accepted(
+    ledger.ensureSeriesTrack({
+      channelId: "package-f06-channel",
+      seriesTitle: "movie-a",
+      at: given.now,
+    }),
+  );
+  expect(refreshedTrack.trackKey).toBe(originalTrack.trackKey);
+  accepted(
+    ledger.ensureEpisodeIdentity({
+      episodeKey: given.content_id,
+      trackKey: originalTrack.trackKey,
+      title: "Movie A Original",
+      ordinal: 1,
+      at: given.last_nightly_air,
+    }),
+  );
+  accepted(
+    ledger.ensureEpisodeIdentity({
+      episodeKey: given.content_id,
+      trackKey: refreshedTrack.trackKey,
+      title: "Movie A Normalized",
+      ordinal: 1,
+      at: given.now,
+    }),
+  );
+  expect(ledger.episodeIdentities(refreshedTrack.trackKey)).toHaveLength(
+    expected.logical_movie_count_for_a,
+  );
+
+  // The production catalog adapter assigns IDs from real paths. Renaming the
+  // source and creating a normalized rendition therefore creates a new ID for
+  // the same logical movie unless a stable identity joins the two records.
+  const library = await mkdtemp(join(tmpdir(), "marktv-package-f06-media-"));
+  temporaryDirectories.push(library);
+  const moviesDirectory = join(library, "Movies");
+  await mkdir(moviesDirectory);
+  const originalPath = join(moviesDirectory, "Movie A Original.mkv");
+  const normalizedPath = join(moviesDirectory, "Movie A Normalized.mkv");
+  await Promise.all([writeFile(originalPath, "fixture"), writeFile(normalizedPath, "fixture")]);
+  const catalog = await new LocalFolderAdapter(async () => 120_000).scan(library);
+  const originalMedia = catalog.items.find(({ title }) => title === "Movie A Original")!;
+  const normalizedMedia = catalog.items.find(({ title }) => title === "Movie A Normalized")!;
+  expect(originalMedia.kind).toBe("movie");
+  expect(normalizedMedia.kind).toBe("movie");
+  expect(normalizedMedia.id).not.toBe(originalMedia.id);
+
+  const timezone = "America/Chicago";
+  const airDate = DateTime.fromISO(given.last_nightly_air, { setZone: true })
+    .setZone(timezone)
+    .toISODate()!;
+  const pickDate = DateTime.fromISO(given.now, { setZone: true })
+    .setZone(timezone)
+    .toISODate()!;
+  const exposure = movieExposureIndex([
+    { mediaId: originalMedia.id, date: airDate },
+  ]);
+  const pick = spacedNightlyMovie({
+    order: [normalizedMedia.id, given.ordinary_alternative],
+    ordinal: 0,
+    date: pickDate,
+    lastExposedOn: exposure.lastExposedOn,
+  });
+  const lastMovieADate = exposure.lastExposedOn.get(originalMedia.id)!;
+  const movieAGapDays = DateTime.fromISO(pickDate, { zone: timezone })
+    .startOf("day")
+    .diff(DateTime.fromISO(lastMovieADate, { zone: timezone }).startOf("day"), "days")
+    .days;
+
+  expect(pick?.mediaId).toBe(expected.next_ordinary_nightly_pick);
+  expect(movieAGapDays < movieNightlyMinSpacingDays).toBe(expected.movie_a_still_recent);
+  database.close();
+});
+
+test("package F17: a finished series does not wrap to episode one", () => {
+  const fixture = scenario("F17");
+  const given = fixture.given as {
+    series_a_final_episode: number;
+    series_a_completed_through: number;
+    series_b_next: number;
+    series_b_ready: boolean;
+  };
+  const expected = fixture.expected as {
+    select: string;
+    series_a_episode_one_replay: boolean;
+  };
+  const episode = (series: "a" | "b", number: number): MediaItem => ({
+    id: `series_${series}_episode_${number}`,
+    source: "placeholder",
+    kind: "episode",
+    title: `Episode ${number}`,
+    showTitle: `Series ${series.toUpperCase()}`,
+    season: 1,
+    episode: number,
+    durationMs: 30 * 60_000,
+    durationStatus: "ok",
+    available:
+      series !== "b" || number !== given.series_b_next || given.series_b_ready,
+    tags: [],
+  });
+  const items = [
+    ...Array.from({ length: given.series_a_final_episode }, (_, index) =>
+      episode("a", index + 1),
+    ),
+    ...Array.from({ length: given.series_b_next }, (_, index) =>
+      episode("b", index + 1),
+    ),
+  ];
+  const pool: Pool = {
+    id: "package-f17",
+    name: "Package F17",
+    kinds: ["episode"],
+    mediaIds: items.map(({ id }) => id),
+    mode: "chronological",
+    noRepeatMinutes: 0,
+    weight: 1,
+  };
+  const selected = selectCandidate({
+    pool,
+    items,
+    kind: "episode",
+    history: [
+      {
+        mediaId: `series_b_episode_${given.series_b_next - 1}`,
+        at: "2026-09-23T01:00:00.000Z",
+      },
+      {
+        mediaId: `series_a_episode_${given.series_a_completed_through}`,
+        at: "2026-09-23T02:00:00.000Z",
+      },
+    ],
+    at: "2026-09-23T03:00:00.000Z",
+    seed: "package-f17",
+  });
+
+  expect(selected.item?.id).toBe(expected.select);
+  expect(selected.item?.id === "series_a_episode_1").toBe(
+    expected.series_a_episode_one_replay,
+  );
+});
+
+test("package F18: committed future runway does not credit either episode as aired", async () => {
+  const fixture = scenario("F18");
+  const given = fixture.given as {
+    episode_10_source_fully_produced_and_contiguously_committed: boolean;
+    episode_10_wall_clock_air_end_in_seconds: number;
+    episode_11_reserved_successor: boolean;
+  };
+  const expected = fixture.expected as {
+    may_produce_episode_11_after_committed_episode_10: boolean;
+    episode_10_actual_completed_before_due: boolean;
+    episode_11_actual_completed: boolean;
+  };
+  const { database, ledger } = await newLedger();
+  const now = "2026-09-24T00:00:00.000Z";
+  const sourceEndMs = 24 * 60_000;
+  const plannedEnd = new Date(
+    Date.parse(now) + given.episode_10_wall_clock_air_end_in_seconds * 1_000,
+  ).toISOString();
+  const track = accepted(
+    ledger.ensureSeriesTrack({
+      channelId: "package-f18-channel",
+      seriesTitle: "Package F18 Series",
+      at: now,
+    }),
+  );
+  for (const episode of [10, 11]) {
+    accepted(
+      ledger.ensureEpisodeIdentity({
+        episodeKey: `package-f18-episode-${episode}`,
+        trackKey: track.trackKey,
+        title: `Episode ${episode}`,
+        season: 1,
+        episode,
+        at: now,
+      }),
+    );
+  }
+  const reserve = (
+    episode: number,
+    occurrenceKey: string,
+    plannedStart: string,
+    plannedEnd: string,
+  ) =>
+    accepted(
+      ledger.reserveOccurrence({
+        occurrenceKey,
+        trackKey: track.trackKey,
+        episodeKey: `package-f18-episode-${episode}`,
+        channelId: "package-f18-channel",
+        plannedStart,
+        plannedEnd,
+        sourceMediaId: `package-f18-source-${episode}`,
+        sourceStartMs: 0,
+        sourceEndMs,
+        at: now,
+      }),
+    );
+  const episode10 = reserve(
+    10,
+    "package-f18-occurrence-10",
+    now,
+    plannedEnd,
+  );
+  if (given.episode_10_source_fully_produced_and_contiguously_committed) {
+    accepted(
+      ledger.recordPublishedInterval({
+        intervalId: "package-f18-episode-10-committed",
+        occurrenceKey: episode10.occurrenceKey,
+        sourceStartMs: 0,
+        sourceEndMs,
+        publishedAt: now,
+        evidence: "fixture-contiguous-publication-commit",
+        at: now,
+      }),
+    );
+  }
+  const successorEnd = new Date(Date.parse(plannedEnd) + sourceEndMs).toISOString();
+  const episode11 = given.episode_11_reserved_successor
+    ? reserve(
+        11,
+        "package-f18-occurrence-11",
+        plannedEnd,
+        successorEnd,
+      )
+    : undefined;
+
+  expect(ledger.occurrence("package-f18-occurrence-11")?.state).toBe(
+    expected.may_produce_episode_11_after_committed_episode_10 ? "reserved" : undefined,
+  );
+  expect(ledger.evaluateOccurrence(episode10.occurrenceKey)?.contiguousPublished)
+    .toBe(given.episode_10_source_fully_produced_and_contiguously_committed);
+  expect(ledger.evaluateOccurrence(episode10.occurrenceKey)?.complete)
+    .toBe(expected.episode_10_actual_completed_before_due);
+  expect(ledger.evaluateOccurrence(episode11?.occurrenceKey ?? "missing")?.complete ?? false)
+    .toBe(expected.episode_11_actual_completed);
+  expect(ledger.airedIntervals(episode10.occurrenceKey)).toHaveLength(0);
+  expect(ledger.airedIntervals(episode11?.occurrenceKey ?? "missing")).toHaveLength(0);
+  expect(ledger.completionFloor(track.trackKey)).toBeUndefined();
+  expect(refused(ledger.completeOccurrence({ occurrenceKey: episode10.occurrenceKey, at: now })).reason)
+    .toBe("insufficient-evidence");
+  database.close();
 });
