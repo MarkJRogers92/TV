@@ -36,7 +36,7 @@ test("preparationStatus counts intakes and jobs by state", async () => {
   expect(status.recent[0]).toMatchObject({ path: source.path, state: "queued" });
 });
 
-test("mediaRootStatus reports a missing root as absent, not empty", async () => {
+test("[OP12] mediaRootStatus reports a missing root as absent, not empty", async () => {
   const repos = await repositories();
   const rootPath = await mkdtemp(join(tmpdir(), "marktv-status-root-"));
   temporary.push(rootPath);

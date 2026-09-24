@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { redactSensitive } from "../../src/security/redaction.js";
 
 describe("redactSensitive", () => {
-  it("redacts bearer credentials and credential-bearing URLs without changing safe text", () => {
+  it("[OP06] redacts bearer credentials and credential-bearing URLs without changing safe text", () => {
     const safe = "Provider temporarily unavailable";
     expect(redactSensitive(safe)).toBe(safe);
     expect(redactSensitive("Authorization: Bearer very-secret-token")).not.toContain("very-secret-token");
