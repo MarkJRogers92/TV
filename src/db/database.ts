@@ -90,6 +90,36 @@ function migrate(database: MarkTvDatabase) {
     );
     CREATE INDEX IF NOT EXISTS acquisition_reviews_wanted
       ON acquisition_reviews(wanted_id);
+    CREATE TABLE IF NOT EXISTS preparation_intakes (
+      id TEXT PRIMARY KEY,
+      source_media_id TEXT NOT NULL,
+      source_path TEXT NOT NULL,
+      source_version_key TEXT NOT NULL,
+      first_observed_at TEXT NOT NULL,
+      last_observed_at TEXT NOT NULL,
+      observation_count INTEGER NOT NULL,
+      settled_at TEXT,
+      json TEXT NOT NULL,
+      UNIQUE(source_media_id, source_version_key)
+    );
+    CREATE INDEX IF NOT EXISTS preparation_intakes_source
+      ON preparation_intakes(source_media_id, first_observed_at);
+    CREATE TABLE IF NOT EXISTS preparation_jobs (
+      id TEXT PRIMARY KEY,
+      intake_id TEXT NOT NULL,
+      source_media_id TEXT NOT NULL,
+      source_path TEXT NOT NULL,
+      source_version_key TEXT NOT NULL,
+      state TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      json TEXT NOT NULL,
+      UNIQUE(intake_id)
+    );
+    CREATE INDEX IF NOT EXISTS preparation_jobs_queue
+      ON preparation_jobs(state, created_at, id);
+    CREATE INDEX IF NOT EXISTS preparation_jobs_source
+      ON preparation_jobs(source_media_id, source_version_key);
     CREATE TABLE IF NOT EXISTS completed_imports (
       id TEXT PRIMARY KEY,
       wanted_id TEXT NOT NULL,

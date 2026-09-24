@@ -16,6 +16,7 @@ import {
   type MoviePosition,
   type MovieRotationRecord,
 } from "../domain/movieProgramming.js";
+import { createPreparationRepository } from "../preparation/repository.js";
 
 export type AcquisitionImportCompletion = {
   media: MediaItem;
@@ -94,6 +95,7 @@ export function createRepositories(database: MarkTvDatabase) {
   const parseSchedule = (row: { json: string } | undefined) =>
     row ? scheduleSchema.parse(JSON.parse(row.json)) : undefined;
   const acquisitions = createAcquisitionRepository(database);
+  const preparation = createPreparationRepository(database);
 
   const completeAcquisitionImport = (input: AcquisitionImportCompletion): CompletedImport =>
     database.transaction(() => {
@@ -476,6 +478,7 @@ export function createRepositories(database: MarkTvDatabase) {
     transaction: <T>(operation: () => T): T =>
       database.transaction(operation)(),
     acquisitions,
+    preparation,
     completeAcquisitionImport,
     close: () => database.close(),
   };
