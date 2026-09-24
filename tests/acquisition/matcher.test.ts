@@ -609,7 +609,7 @@ describe("matchCompletedFiles quality and ambiguity", () => {
     });
   });
 
-  test("routes every episode inside a multi-episode range to review", () => {
+  test("[EP13] routes every episode inside a multi-episode range to review", () => {
     const plan = matchCompletedFiles(
       [wanted({ episode: 3 })],
       [item([file({ originalFilename: "Severance.S01E02-E04.1080p.mkv" })])],

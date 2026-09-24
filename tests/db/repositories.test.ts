@@ -187,7 +187,7 @@ test("keeps only the newest generation of a prior date as air history", async ()
   repositories.close();
 });
 
-test("does not rewind the chronological cursor when a prior date was regenerated", async () => {
+test("[EP12] does not rewind the chronological cursor when a prior date was regenerated", async () => {
   const repositories = createRepositories(
     openDatabase(await temporaryDirectory()),
   );
