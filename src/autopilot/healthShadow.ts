@@ -88,6 +88,12 @@ export type HealthShadowOptions = {
   stalledAfterSeconds?: number;
   now?: () => Date;
   onResult?: (result: ContinuityHealthResult) => void;
+  /**
+   * Optional consumer that may ACT on a result and return the state to persist
+   * for the next classifier call (e.g. an acknowledged recovery). Absent, the
+   * classifier's own state is persisted and nothing is acted on.
+   */
+  consume?: (result: ContinuityHealthResult) => Promise<ContinuityHealthState>;
   onError?: (error: unknown, channelId?: string) => void;
 };
 
@@ -156,7 +162,10 @@ export function createHealthShadow(
           observation,
           states.get(channel.id),
         );
-        states.set(channel.id, result.state);
+        const nextState = options.consume
+          ? await options.consume(result)
+          : result.state;
+        states.set(channel.id, nextState);
         onResult(result);
       } catch (error) {
         onError(error, channel.id);

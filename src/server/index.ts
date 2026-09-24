@@ -47,6 +47,10 @@ const app = await buildApp({
   // is a deliberate opt-in rather than a default background load.
   healthShadow: Boolean(process.env.MARKTV_HEALTH_SHADOW_ROOT),
   healthShadowRoot: process.env.MARKTV_HEALTH_SHADOW_ROOT,
+  // Acting is a separate, deliberate opt-in from observing.
+  healthRecovery:
+    Boolean(process.env.MARKTV_HEALTH_SHADOW_ROOT) &&
+    process.env.MARKTV_HEALTH_RECOVERY === "1",
 });
 if (process.env.MARKTV_DEV !== "1") {
   await registerStaticUi(app, join(process.cwd(), "dist"));

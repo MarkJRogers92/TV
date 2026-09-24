@@ -33,6 +33,8 @@ import {
 } from "../preparation/executor.js";
 import { describePreparationEvent } from "../preparation/events.js";
 import { createHealthShadow, type HealthShadow } from "../autopilot/healthShadow.js";
+import { createChannelRecovery } from "../autopilot/recovery.js";
+import { DateTime } from "luxon";
 import { KeychainCredentialStore } from "../security/keychain.js";
 import type { CredentialStore } from "../security/credentialStore.js";
 import type { ServerContext } from "./context.js";
@@ -103,6 +105,13 @@ export type BuildAppOptions = {
   healthShadow?: boolean;
   /** Root of the per-channel HLS stream directories for the shadow watchdog. */
   healthShadowRoot?: string;
+  /**
+   * Whether the watchdog may ACT (bounded, channel-scoped) as well as observe.
+   * Off by default: the transport repair is a deliberate opt-in once the shadow
+   * verdicts are trusted. The circuit breaker and single-owner acknowledgment
+   * apply regardless.
+   */
+  healthRecovery?: boolean;
 };
 
 const IPV4_LOOPBACK = /^127(?:\.\d{1,3}){3}$/;
@@ -367,7 +376,39 @@ export async function buildApp(options: BuildAppOptions = {}) {
       void preparationExecutor.start().catch((error) => logError("preparation-executor", error));
     }
     if (options.healthShadow && options.healthShadowRoot) {
-      // Observe-only: the classifier's verdict is logged, never acted on.
+      // Bounded, channel-scoped recovery. Present only when acting is opted in;
+      // otherwise the watchdog observes and logs only.
+      const recovery = options.healthRecovery
+        ? createChannelRecovery({
+            recover: async (channelId) => {
+              // Repair THAT channel only: re-push its current line-up to Tunarr.
+              // Never touches another channel and never restarts the service.
+              const channel = repositories.channels.get(channelId);
+              if (!channel) return false;
+              const today = DateTime.fromJSDate(context.now(), {
+                zone: channel.timezone,
+              }).toISODate();
+              if (!today) return false;
+              const schedule = repositories.schedules.latestForDate(
+                channelId,
+                today,
+              );
+              if (!schedule) return false;
+              const outcome = await autoSyncTunarr(repositories, {
+                channelId,
+                scheduleId: schedule.id,
+                now: context.now,
+              });
+              return outcome.status === "synced";
+            },
+            onDecision: (channelId, outcome, reason) =>
+              logInfo("recovery", "Channel recovery decision", {
+                channelId,
+                outcome,
+                reason,
+              }),
+          })
+        : null;
       healthShadow = createHealthShadow(repositories, {
         streamsRoot: options.healthShadowRoot,
         // A MarkTV channel id is not its Tunarr UUID; resolve the real one.
@@ -377,13 +418,22 @@ export async function buildApp(options: BuildAppOptions = {}) {
             ? join(options.healthShadowRoot!, `stream_${tunarrChannelId}`)
             : null;
         },
+        ...(recovery
+          ? {
+              consume: async (result) => (await recovery.handle(result)).state,
+            }
+          : {}),
         onResult: (result) =>
-          logInfo("health-shadow", "Continuity health (observe-only)", {
-            channelId: result.channelId,
-            health: result.health,
-            incident: result.incident,
-            recommendation: result.recommendation,
-          }),
+          logInfo(
+            "health-shadow",
+            recovery ? "Continuity health (recovery armed)" : "Continuity health (observe-only)",
+            {
+              channelId: result.channelId,
+              health: result.health,
+              incident: result.incident,
+              recommendation: result.recommendation,
+            },
+          ),
         onError: (error, channelId) =>
           logError("health-shadow", error, channelId ? { channelId } : {}),
       });
