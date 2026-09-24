@@ -105,3 +105,20 @@ test("the status route returns a read-only snapshot", async () => {
   });
   await app.close();
 });
+
+test("[OP06] the diagnostic bundle is local, redacted and carries the status", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "marktv-diag-"));
+  temporary.push(dataDir);
+  const app = await buildApp({ dataDir });
+  const response = await app.inject({ method: "GET", url: "/api/v1/diagnostics" });
+  expect(response.statusCode).toBe(200);
+  const bundle = response.json();
+  expect(bundle).toMatchObject({
+    generatedAt: expect.any(String),
+    runtime: expect.objectContaining({ platform: expect.any(String), node: expect.any(String) }),
+    status: expect.objectContaining({ mediaRoots: expect.any(Array), channels: expect.any(Array) }),
+  });
+  // Redacted: no bearer/token-shaped value survives.
+  expect(response.body).not.toMatch(/Bearer\s+[A-Za-z0-9._-]{8,}/);
+  await app.close();
+});
