@@ -44,6 +44,7 @@ import { registerScheduleRoutes } from "./routes/schedules.js";
 import { registerTunarrRoutes } from "./routes/tunarr.js";
 import { registerWatchRoutes } from "./routes/watch.js";
 import { registerContinuityRoutes } from "./routes/continuity.js";
+import { registerStatusRoutes } from "./routes/status.js";
 import { ScheduleService, type ExportSchedule } from "./scheduleService.js";
 
 /**
@@ -314,6 +315,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await registerAcquisitionRoutes(app, context);
   await registerChannelRoutes(app, context);
   await registerContinuityRoutes(app, context);
+  await registerStatusRoutes(app, context);
   await registerIntegrationRoutes(app, context);
   await registerMediaRoutes(app, context);
   await registerPoolRoutes(app, context);
