@@ -15,7 +15,12 @@ const DERIVED_DIRECTORY_SET = new Set<string>(DERIVED_DIRECTORY_NAMES);
 
 export type PreparationIntakeRunnerOptions = {
   intervalMs?: number;
-  /** Bounds how many preparation candidates are examined per pass. A probe ends that pass immediately. */
+  /**
+   * Bounds how many NEW candidates are observed per pass. Already-settled and
+   * already-tracked files do not consume it, and the walk still visits every
+   * directory, so the runner covers the whole tree across passes. A probe ends
+   * the pass immediately.
+   */
   entryBudget?: number;
   now?: () => Date;
   adapter?: LocalFolderAdapter;
@@ -116,17 +121,22 @@ export function createPreparationIntakeRunner(
       }
     }
 
-    let remaining = entryBudget;
+    // Bounds how many NEW candidates are observed per pass. The walk itself is
+    // not capped: every directory is still visited so a file that is ready to
+    // probe is never starved behind a long prefix of already-seen files, and so
+    // successive passes reach the whole tree instead of re-reading its head.
+    let observationsThisPass = 0;
     let probedOne = false;
+    const intakes = repositories.preparation.intakes.list();
 
     for (const identity of reachable) {
-      if (remaining <= 0 || probedOne) break;
+      if (probedOne) break;
       // One directory watcher per root. Deep-tree changes are caught by the poll;
       // a watcher per subdirectory would grow without bound on a large library.
       ensureWatch(identity.path);
       const outputDirectories = DERIVED_DIRECTORY_NAMES.map((name) => join(identity.path, name));
       const directories = [identity.path];
-      while (directories.length && remaining > 0 && !probedOne) {
+      while (directories.length && !probedOne) {
         const directory = directories.shift()!;
         let entries;
         try {
@@ -136,7 +146,7 @@ export function createPreparationIntakeRunner(
           continue;
         }
         for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-          if (remaining <= 0 || probedOne) break;
+          if (probedOne) break;
           if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
           if (entry.isDirectory()) {
             if (!isDerivedDirectory(entry.name)) directories.push(join(directory, entry.name));
@@ -147,10 +157,6 @@ export function createPreparationIntakeRunner(
           const rel = relative(identity.path, path);
           if (!rel || rel === ".." || rel.startsWith(`..${sep}`)) continue;
           if (!isPreparationCandidate(path, outputDirectories)) continue;
-
-          // A directory of sidecars must not starve the video files behind them:
-          // only a real candidate consumes the per-pass budget.
-          remaining--;
 
           try {
             await assertManagedDirectory(identity);
@@ -164,35 +170,40 @@ export function createPreparationIntakeRunner(
             // resolving the id from `existing` each pass would then orphan the
             // pending intake, start a duplicate one for the same bytes, or (with
             // a plain catalog check first) never settle at all.
-            const prior = repositories.preparation.intakes.list()
-              .find((item) => sourceVersionsEqual(item.source, source));
-            if (!prior) {
-              // Already catalogued at this exact version and never witnessed by
-              // us: out of this runner's remit. Preparing every existing catalog
-              // entry would be a whole-library scan, so only files we observe as
-              // new are enqueued.
-              if (existing && mediaVersionMatches(existing, source)) continue;
-              const sourceMediaId = existing?.id ?? idempotencyKey(path);
-              repositories.preparation.observe({ sourceMediaId, source, observedAt: now().toISOString() }, { outputDirectories });
-              continue;
-            }
-            if (Date.parse(now().toISOString()) - Date.parse(prior.firstObservedAt) < 60_000) continue;
+            const prior = intakes.find((item) => sourceVersionsEqual(item.source, source));
+            if (prior) {
+              // Already tracked: not yet due, or ready to probe. Either way this
+              // costs no NEW-observation budget, so the walk advances past it.
+              if (Date.parse(now().toISOString()) - Date.parse(prior.firstObservedAt) < 60_000) continue;
 
-            // At most one ffprobe operation per pass and one across this driver.
-            // Hashing around the probe plus a fresh stat catches same-path edits
-            // that happened while ffprobe was reading the source.
-            const item = await adapter.scanFile(identity.path, path);
-            await assertManagedDirectory(identity);
-            const after = await lstat(path);
-            const current = after.isFile() && !after.isSymbolicLink() ? sourceVersionFromStats(path, after) : null;
-            if (!current || !sourceVersionsEqual(source, current)) continue;
-            const observedAt = now().toISOString();
-            const settled = repositories.preparation.observe({ sourceMediaId: prior.sourceMediaId, source: current, observedAt }, { outputDirectories });
-            if (settled.kind !== "settled") continue;
-            persistScannedMedia(repositories, [item]);
-            existingByPath.set(path, item);
-            probedOne = true;
-            break;
+              // At most one ffprobe operation per pass and one across this driver.
+              // Hashing around the probe plus a fresh stat catches same-path edits
+              // that happened while ffprobe was reading the source.
+              const item = await adapter.scanFile(identity.path, path);
+              await assertManagedDirectory(identity);
+              const after = await lstat(path);
+              const current = after.isFile() && !after.isSymbolicLink() ? sourceVersionFromStats(path, after) : null;
+              if (!current || !sourceVersionsEqual(source, current)) continue;
+              const observedAt = now().toISOString();
+              const settled = repositories.preparation.observe({ sourceMediaId: prior.sourceMediaId, source: current, observedAt }, { outputDirectories });
+              if (settled.kind !== "settled") continue;
+              persistScannedMedia(repositories, [item]);
+              existingByPath.set(path, item);
+              probedOne = true;
+              break;
+            }
+
+            // Already catalogued at this exact version and never witnessed by us:
+            // out of this runner's remit. Preparing every existing catalog entry
+            // would be a whole-library scan, so only files we observe as new are
+            // enqueued. This also costs no budget, so the walk keeps advancing.
+            if (existing && mediaVersionMatches(existing, source)) continue;
+
+            // A genuinely new candidate: the only thing the per-pass budget caps.
+            if (observationsThisPass >= entryBudget) continue;
+            observationsThisPass += 1;
+            const sourceMediaId = existing?.id ?? idempotencyKey(path);
+            repositories.preparation.observe({ sourceMediaId, source, observedAt: now().toISOString() }, { outputDirectories });
           } catch (error) {
             onError(error, path);
           }

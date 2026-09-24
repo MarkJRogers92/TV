@@ -163,3 +163,28 @@ test("non-video sidecars do not consume the per-pass candidate budget", async ()
   expect(probe).toHaveBeenCalledTimes(1);
   expect(repositories.media.list()).toHaveLength(1);
 });
+
+test("the walk advances past already-settled files to reach a new candidate beyond the budget", async () => {
+  const { rootPath, repositories, runner } = await fixture({ entryBudget: 1 });
+  for (const name of ["A01.mkv", "A02.mkv", "A03.mkv", "A04.mkv", "A05.mkv"]) {
+    const path = join(rootPath, name);
+    await writeFile(path, "already catalogued bytes");
+    const stats = await lstat(path);
+    repositories.media.put({
+      id: `media-${name}`, source: "local-folder", path, kind: "episode", title: name,
+      durationMs: 60_000, durationStatus: "ok", available: true, tags: [],
+      deviceId: String(stats.dev), inode: String(stats.ino),
+      fileSizeBytes: String(stats.size), fileModifiedMs: String(stats.mtimeMs),
+    });
+  }
+  const fresh = join(rootPath, "Z-fresh.mkv");
+  await writeFile(fresh, "genuinely new bytes");
+
+  // Budget is 1 and the settled files sort first; a walk that stalls on them
+  // would never observe Z-fresh.
+  await runner.runOnce();
+
+  const intakes = repositories.preparation.intakes.list();
+  expect(intakes).toHaveLength(1);
+  expect(intakes[0].source.path).toBe(fresh);
+});
