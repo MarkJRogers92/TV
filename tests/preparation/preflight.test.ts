@@ -219,4 +219,26 @@ describe("preparation preflight evidence", () => {
     expect(evidence.result).toBe("metadata_only");
     expect(evidence.metadata).toMatchObject({ status: "passed", durationSeconds: 90 });
   });
+
+  test("PR05 metadata-only validation is never reported as full health", async () => {
+    const shallow = await collectPreflightEvidence("/approved/media/episode.mp4", {
+      runner: fixtureRunner(),
+      statFile: async () => versions(),
+    });
+    expect(shallow.result).toBe("metadata_only");
+    expect(shallow.result).not.toBe("fully_decoded");
+
+    // A deeper test that hits a real decode error is reported as corruption,
+    // not folded into a metadata pass.
+    const deep = await collectPreflightEvidence("/approved/media/episode.mp4", {
+      level: "full",
+      runner: fixtureRunner({
+        ffmpeg: async () => {
+          throw Object.assign(new Error("bad frame"), { code: 1 });
+        },
+      }),
+      statFile: async () => versions(),
+    });
+    expect(deep.result).toBe("decode_error");
+  });
 });

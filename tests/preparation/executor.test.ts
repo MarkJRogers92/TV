@@ -139,3 +139,13 @@ test("emits a failed event when the collector throws", async () => {
   await runner.runOnce();
   expect(events).toContainEqual(expect.objectContaining({ event: "job.failed", path: SOURCE.path }));
 });
+
+test("PR02 a playable source is marked ready_original with no conversion", async () => {
+  const { repositories, executor } = await fixture();
+  await executor(async () => evidence("sampled")).runOnce();
+
+  const job = repositories.preparation.jobs.list()[0]!;
+  expect(job.classification).toBe("ready_original");
+  // No derived rendition and no full-decode claim: the original is used as-is.
+  expect(job.fullDecodeEvidence).toBeNull();
+});

@@ -66,7 +66,7 @@ test("PR01 is probed and cataloged only after two matching observations at least
   expect(repositories.preparation.jobs.list()[0]).toMatchObject({ state: "queued", source: { path } });
 });
 
-test("an absent registered root is skipped and the runner remains usable", async () => {
+test("[PR13] an absent registered root is skipped and the runner remains usable", async () => {
   const { rootPath, repositories, runner, probe } = await fixture();
   await rm(rootPath, { recursive: true, force: true });
   await expect(runner.runOnce()).resolves.toBeUndefined();

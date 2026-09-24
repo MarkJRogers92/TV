@@ -215,7 +215,7 @@ test("keeps unavailable media distinct from quarantined corruption and retains s
   expect(prep.jobs.get(corrupt.id)).toMatchObject({ sourceMediaId: "movie-2", classification: "quarantined", failureKind: "decode_corruption" });
 });
 
-test("new source version invalidates older queued work without changing logical source identity", async () => {
+test("[PR10] new source version invalidates older queued work without changing logical source identity", async () => {
   const { repositories } = await fixture();
   const prep = repositories.preparation;
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(0) });
