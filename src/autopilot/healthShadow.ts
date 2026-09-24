@@ -79,6 +79,11 @@ export function buildObservation(input: {
 export type HealthShadowOptions = {
   /** Root of the per-channel HLS stream directories. */
   streamsRoot: string;
+  /**
+   * The stream directory for a channel. Defaults to `stream_<channel.id>`, but a
+   * MarkTV channel id is NOT its Tunarr channel UUID, so production must map it.
+   */
+  streamsDirectoryFor?: (channel: { id: string }) => string | null;
   intervalMs?: number;
   stalledAfterSeconds?: number;
   now?: () => Date;
@@ -131,9 +136,11 @@ export function createHealthShadow(
     for (const channel of repositories.channels.list()) {
       if (!channel.enabled) continue;
       try {
-        const sample = await sampleStreams(
-          join(options.streamsRoot, `stream_${channel.id}`),
-        );
+        const directory = options.streamsDirectoryFor
+          ? options.streamsDirectoryFor(channel)
+          : join(options.streamsRoot, `stream_${channel.id}`);
+        if (!directory) continue;
+        const sample = await sampleStreams(directory);
         if (!sample) continue; // no published playlist: nothing to judge yet
         sequence += 1;
         const observation = buildObservation({

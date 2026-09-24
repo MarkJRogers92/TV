@@ -370,6 +370,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
       // Observe-only: the classifier's verdict is logged, never acted on.
       healthShadow = createHealthShadow(repositories, {
         streamsRoot: options.healthShadowRoot,
+        // A MarkTV channel id is not its Tunarr UUID; resolve the real one.
+        streamsDirectoryFor: (channel) => {
+          const tunarrChannelId = readTunarrMappingForChannel(repositories, channel.id)?.channelId;
+          return tunarrChannelId
+            ? join(options.healthShadowRoot!, `stream_${tunarrChannelId}`)
+            : null;
+        },
         onResult: (result) =>
           logInfo("health-shadow", "Continuity health (observe-only)", {
             channelId: result.channelId,
