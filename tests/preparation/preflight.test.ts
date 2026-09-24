@@ -76,7 +76,7 @@ describe("preparation preflight evidence", () => {
     expect(evidence.fullDecode.status).toBe("deferred");
   });
 
-  test("full decode is the only fully-decoded result and tolerates informational reorder diagnostics", async () => {
+  test("[PR07] full decode is the only fully-decoded result and tolerates informational reorder diagnostics", async () => {
     const calls: string[][] = [];
     const evidence = await collectPreflightEvidence("/approved/media/episode.mp4", {
       level: "full",
@@ -131,7 +131,7 @@ describe("preparation preflight evidence", () => {
     expect(evidence.metadata).toMatchObject({ status: "unavailable", durationSeconds: 0, reason: "no_readable_video_track" });
   });
 
-  test("marks evidence stale when source version changes during the probe", async () => {
+  test("[PR15] marks evidence stale when source version changes during the probe", async () => {
     let call = 0;
     const evidence = await collectPreflightEvidence("/approved/media/episode.mp4", {
       runner: fixtureRunner(), statFile: async () => versions(++call === 1 ? "500" : "501"),

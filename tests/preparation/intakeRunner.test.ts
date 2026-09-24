@@ -96,7 +96,7 @@ test("source mutation during probe discards the result and does not queue work",
   expect(repositories.preparation.jobs.list()).toEqual([]);
 });
 
-test("a second runner resumes the durable settle window and repeated passes stay idempotent", async () => {
+test("[PR14] a second runner resumes the durable settle window and repeated passes stay idempotent", async () => {
   const { rootPath, repositories, runner, probe, advance } = await fixture();
   const path = join(rootPath, "Restart.mkv");
   await writeFile(path, "stable video bytes");

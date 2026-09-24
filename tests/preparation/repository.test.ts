@@ -34,7 +34,7 @@ const source = (overrides: Partial<PreparationSourceVersion> = {}): PreparationS
 
 const time = (seconds: number) => new Date(Date.UTC(2026, 8, 24, 12, 0, seconds)).toISOString();
 
-test("requires two matching observations at least 60 seconds apart before enqueueing", async () => {
+test("[PR04] requires two matching observations at least 60 seconds apart before enqueueing", async () => {
   const { repositories } = await fixture();
   const prep = repositories.preparation;
 
@@ -84,7 +84,7 @@ test("checks the claimed source outside the SQLite transaction", async () => {
   expect(prep.jobs.list().filter((job) => job.state === "running")).toHaveLength(1);
 });
 
-test("does not return another worker's recovered and reclaimed reservation", async () => {
+test("[PR09] does not return another worker's recovered and reclaimed reservation", async () => {
   const { dataDir, repositories } = await fixture();
   const second = createRepositories(openDatabase(dataDir));
   opened.push(second);
@@ -157,7 +157,7 @@ test("ignores partial files and paths inside preparation output directories", as
   expect(prep.jobs.list()).toEqual([]);
 });
 
-test("persists evidence and the source version across restart, and treats repeat observation idempotently", async () => {
+test("[PR12] persists evidence and the source version across restart, and treats repeat observation idempotently", async () => {
   const { dataDir, repositories } = await fixture();
   const prep = repositories.preparation;
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(0) });

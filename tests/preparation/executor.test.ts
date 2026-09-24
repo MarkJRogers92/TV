@@ -54,7 +54,7 @@ function evidence(result: PreflightEvidence["result"], overrides: Partial<Prefli
   } as PreflightEvidence;
 }
 
-test("records graded evidence and marks a playable source ready_original", async () => {
+test("[PR03] records graded evidence and marks a playable source ready_original", async () => {
   const { repositories, executor } = await fixture();
   await executor(async () => evidence("sampled")).runOnce();
 
@@ -74,7 +74,7 @@ test("quarantines a source that fails the requested decode", async () => {
   });
 });
 
-test("records an unreadable source as unavailable, never as corruption", async () => {
+test("[PR08] records an unreadable source as unavailable, never as corruption", async () => {
   const { repositories, executor } = await fixture();
   await executor(async () => evidence("unavailable")).runOnce();
 
@@ -140,7 +140,7 @@ test("emits a failed event when the collector throws", async () => {
   expect(events).toContainEqual(expect.objectContaining({ event: "job.failed", path: SOURCE.path }));
 });
 
-test("PR02 a playable source is marked ready_original with no conversion", async () => {
+test("[PR02][PR11] a playable source is marked ready_original with no conversion", async () => {
   const { repositories, executor } = await fixture();
   await executor(async () => evidence("sampled")).runOnce();
 
