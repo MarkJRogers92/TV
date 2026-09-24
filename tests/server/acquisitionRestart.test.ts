@@ -174,7 +174,7 @@ function completedImportRecorder(): {
   return { importEpisode, imported };
 }
 
-test("arms exactly one unreferenced sixty-second poll timer per app", async () => {
+test("[OP05] arms exactly one unreferenced sixty-second poll timer per app", async () => {
   const timer = { unref: vi.fn() };
   const setInterval = vi.fn<CoordinatorTimers["setInterval"]>(() => timer);
   const clearInterval = vi.fn();
@@ -232,7 +232,7 @@ test("fails closed instead of returning a half-started app", async () => {
   }
 });
 
-test("recovers a downloaded partial after restart and imports exactly once", async () => {
+test("[OP03] recovers a downloaded partial after restart and imports exactly once", async () => {
   let downloadStarted!: () => void;
   const began = new Promise<void>((resolve) => {
     downloadStarted = resolve;
@@ -309,7 +309,7 @@ test("recovers a downloaded partial after restart and imports exactly once", asy
   }
 });
 
-test("awaits coordinator.stop before closing the repositories on shutdown", async () => {
+test("[OP01] awaits coordinator.stop before closing the repositories on shutdown", async () => {
   const timer = { unref: vi.fn() };
   const setInterval = vi.fn(() => timer);
   const clearInterval = vi.fn();

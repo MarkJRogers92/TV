@@ -9,7 +9,7 @@ afterEach(async () => {
   directory = undefined;
 });
 
-test("reopens the same data directory with the generated schedule intact", async () => {
+test("[OP02] reopens the same data directory with the generated schedule intact", async () => {
   directory = await mkdtemp(`${tmpdir()}/marktv-restart-`);
   let app = await buildApp({
     dataDir: directory,

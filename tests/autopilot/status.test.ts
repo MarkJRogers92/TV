@@ -3,8 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { captureManagedDirectory } from "../../src/acquisition/paths.js";
-import { channelAirState, mediaRootStatus, preparationStatus } from "../../src/autopilot/status.js";
-import type { Channel } from "../../src/domain/models.js";
+import { channelAirState, channelHorizonStatus, mediaRootStatus, preparationStatus } from "../../src/autopilot/status.js";
+import { recordIncident } from "../../src/autopilot/incidents.js";
+import type { Channel, Schedule } from "../../src/domain/models.js";
 import type { Repositories } from "../../src/db/repositories.js";
 import { openDatabase } from "../../src/db/database.js";
 import { createRepositories } from "../../src/db/repositories.js";
@@ -121,4 +122,124 @@ test("[OP06] the diagnostic bundle is local, redacted and carries the status", a
   // Redacted: no bearer/token-shaped value survives.
   expect(response.body).not.toMatch(/Bearer\s+[A-Za-z0-9._-]{8,}/);
   await app.close();
+});
+
+/** Every key name in a JSON value, at any depth. */
+function allKeys(value: unknown, found: string[] = []): string[] {
+  if (Array.isArray(value)) {
+    for (const item of value) allKeys(item, found);
+  } else if (value !== null && typeof value === "object") {
+    for (const [key, nested] of Object.entries(value)) {
+      found.push(key);
+      allKeys(nested, found);
+    }
+  }
+  return found;
+}
+
+test("[OP08] the snapshot claims no client buffer or device observation", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "marktv-diag-op08-"));
+  temporary.push(dataDir);
+  const app = await buildApp({ dataDir });
+  const response = await app.inject({ method: "GET", url: "/api/v1/diagnostics" });
+  expect(response.statusCode).toBe(200);
+
+  // The bundle reports only what the host can observe about ITSELF: runtime
+  // facts, media roots it can stat, and channels whose own playlists it reads.
+  // A viewer's buffer state and a device's rendering are not observable from
+  // here, so the requirement is that no such claim is made at all - a buffer
+  // that is unknown is labelled by absence, never by an invented value.
+  const named = allKeys(response.json());
+  expect(named.filter((key) => /buffer|client|device|render/i.test(key))).toEqual([]);
+  await app.close();
+});
+
+test("[OP11] the snapshot reports the recorded coverage duration and its real gaps", () => {
+  const now = new Date("2026-09-24T12:00:00.000Z");
+  const hourMs = 3_600_000;
+  // A stored schedule that covers 12 hours and then stops. The reported figures
+  // must come from that coverage: a fixed "healthy" horizon would be a lie.
+  const partial = {
+    date: "2026-09-24",
+    generatedAt: "2026-09-24T12:00:00.000Z",
+    entries: [
+      {
+        start: "2026-09-24T12:00:00.000Z",
+        end: "2026-09-25T00:00:00.000Z",
+        durationMs: 12 * hourMs,
+      },
+    ],
+  } as unknown as Schedule;
+  const whole = {
+    date: "2026-09-24",
+    generatedAt: "2026-09-24T12:00:00.000Z",
+    entries: [
+      {
+        start: "2026-09-24T12:00:00.000Z",
+        end: "2026-09-27T12:00:00.000Z",
+        durationMs: 72 * hourMs,
+      },
+    ],
+  } as unknown as Schedule;
+
+  const statusFor = (schedule: Schedule) =>
+    channelHorizonStatus(
+      {
+        channels: { list: () => [{ id: "c1", name: "One" }] },
+        schedules: { list: () => [schedule], latestForDate: () => undefined },
+        settings: { get: () => undefined },
+      } as unknown as Repositories,
+      now,
+      72,
+    )[0];
+
+  const gapped = statusFor(partial);
+  expect(gapped?.hoursCovered).toBe(12);
+  expect(gapped?.gaps).toBe(1);
+  expect(gapped?.contiguous).toBe(false);
+
+  // And it is not simply pessimistic: real full coverage reports no gaps.
+  const complete = statusFor(whole);
+  expect(complete?.hoursCovered).toBe(72);
+  expect(complete?.gaps).toBe(0);
+  expect(complete?.contiguous).toBe(true);
+});
+
+test("[OP09] a real channel failure is recorded and isolated, not reported as blanket success", () => {
+  const settings = new Map<string, { value: unknown }>();
+  const repositories = {
+    channels: {
+      list: () => [
+        { id: "c1", name: "One" },
+        { id: "c2", name: "Two" },
+      ],
+    },
+    schedules: { list: () => [], latestForDate: () => undefined },
+    settings: {
+      get: (key: string) => settings.get(key),
+      put: (key: string, value: unknown) => {
+        settings.set(key, { value });
+      },
+    },
+  } as unknown as Repositories;
+
+  // One channel really failed; the other did not.
+  recordIncident(repositories, {
+    at: "2026-09-24T11:59:00.000Z",
+    channelId: "c1",
+    kind: "incident",
+    reason: "stalled",
+  });
+
+  const reported = new Map(
+    channelHorizonStatus(repositories, new Date("2026-09-24T12:00:00.000Z"), 72).map(
+      (channel) => [channel.id, channel.incidents],
+    ),
+  );
+
+  // The failure is recorded against the channel it happened to...
+  expect(reported.get("c1")?.incidents).toBe(1);
+  // ...and the snapshot has per-channel counts rather than one global verdict,
+  // so a healthy channel cannot be used to report universal success.
+  expect(reported.get("c2")?.incidents).toBe(0);
 });

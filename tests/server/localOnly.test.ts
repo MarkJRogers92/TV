@@ -50,7 +50,7 @@ test.each(["https://marktv.example.test", "http://localhost.evil.test", "null", 
   (value) => expect(isLoopbackBrowserUrl(value)).toBe(false),
 );
 
-test("guards the only shipped listen call in the server entrypoint", async () => {
+test("[OP13] guards the only shipped listen call in the server entrypoint", async () => {
   const source = await readFile(
     new URL("../../src/server/index.ts", import.meta.url),
     "utf8",

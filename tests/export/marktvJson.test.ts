@@ -118,7 +118,7 @@ test("atomically reuses the same generation export and preserves its original ar
   );
 });
 
-test("does not overwrite a distinct generation for the same channel and date", async () => {
+test("[OP04] does not overwrite a distinct generation for the same channel and date", async () => {
   const directory = await outputDirectory();
   const [first, second] = await Promise.all([
     writeScheduleExport(schedule("generation-one"), directory),
