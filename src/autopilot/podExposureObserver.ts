@@ -136,8 +136,10 @@ export type PodExposureObserverOptions = {
   /** Root of the per-channel HLS stream directories. */
   streamsRoot: string;
   /**
-   * The stream directory for a channel. Defaults to `stream_<channel.id>`, but a
-   * MarkTV channel id is NOT its Tunarr channel UUID, so production must map it.
+   * The FULL path to a channel's stream directory, matching the continuity
+   * watchdog's option of the same name. Defaults to `join(streamsRoot,
+   * \`stream_<channel.id>\`)`, but a MarkTV channel id is NOT its Tunarr channel
+   * UUID, so production must map it.
    */
   streamsDirectoryFor?: (channel: { id: string }) => string | null;
   /** Name of the media playlist inside the stream directory. */
@@ -214,9 +216,15 @@ export function createPodExposureObserver(
           .filter((pod) => pod.endMs >= at.getTime() - lookbackMs);
         if (pods.length === 0) continue;
 
+        // Same contract as the continuity watchdog's equivalent option: the FULL
+        // path to the channel's stream directory. (It previously returned a bare
+        // directory NAME here, and the root was then joined on a second time,
+        // which read nothing at all on the live install while every unit test
+        // passed - the tests and the production wiring disagreed about the
+        // contract and only the live wiring could reveal it.)
         const directory = options.streamsDirectoryFor
           ? options.streamsDirectoryFor(channel)
-          : `stream_${channel.id}`;
+          : join(options.streamsRoot, `stream_${channel.id}`);
         if (directory === null) continue;
 
         const counts: PodExposurePassSummary = {
@@ -243,7 +251,7 @@ export function createPodExposureObserver(
           if (advertised === undefined) {
             try {
               const text = await readFile(
-                join(options.streamsRoot, directory, playlistName),
+                join(directory, playlistName),
                 "utf-8",
               );
               advertised = parseAdvertisedSegments(text);

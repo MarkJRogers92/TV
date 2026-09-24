@@ -320,7 +320,7 @@ test("[SC06] the observer records a finished pod from the channel's own playlist
   const decisions: PodExposureDecision[] = [];
   const observer = createPodExposureObserver(repositories, ledger, {
     streamsRoot,
-    streamsDirectoryFor: () => streamDir,
+    streamsDirectoryFor: () => join(streamsRoot, streamDir),
     // The pod's window has passed, so it is eligible.
     now: () => new Date(POD_END + 60_000),
     onDecision: (decision) => decisions.push(decision),
@@ -379,7 +379,7 @@ test("[SC06] a pod still in progress is not recorded by the observer", async () 
   const decisions: PodExposureDecision[] = [];
   const observer = createPodExposureObserver(repositories, ledger, {
     streamsRoot,
-    streamsDirectoryFor: () => streamDir,
+    streamsDirectoryFor: () => join(streamsRoot, streamDir),
     // Mid-pod: recording now would freeze a partial figure the ledger would then
     // refuse to correct, so the observer must wait for the window to pass.
     now: () => new Date(POD_START + 45_000),
@@ -428,7 +428,7 @@ test("[SC06] a pass with nothing observable SAYS so, rather than staying silent"
   const summaries: PodExposurePassSummary[] = [];
   const observer = createPodExposureObserver(repositories, ledger, {
     streamsRoot,
-    streamsDirectoryFor: () => streamDir,
+    streamsDirectoryFor: () => join(streamsRoot, streamDir),
     now: () => new Date(POD_END + 60_000),
     onPass: (summary) => summaries.push(summary),
   });
