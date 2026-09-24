@@ -873,3 +873,70 @@ test("a late-registered episode cannot open a track without an explicit initial 
   expect(credited.floor.completedEpisodeKey).toBe("S01E12");
   expect(ledger.completionFloor(track.trackKey)?.episode).toBe(12);
 });
+
+test("[EP02] re-registering an episode after rename/remux keeps identity and completion", async () => {
+  const ledger = createAiringLedger(openDatabase(await dataDir()));
+  const track = trackWithEpisodes(ledger, [["S01E01", 1]]);
+  creditEpisode(ledger, track.trackKey, "occ-1", "S01E01");
+  const before = ledger.completionFloor(track.trackKey);
+
+  // A rename, remux and normalize all re-register the SAME logical episode.
+  ok(ledger.ensureEpisodeIdentity({
+    episodeKey: "S01E01",
+    trackKey: track.trackKey,
+    title: `${SERIES} 1`,
+    season: 1,
+    episode: 1,
+    at: "2026-09-24T05:00:00.000Z",
+  }));
+
+  // No new unseen episode was minted and the floor did not move backward.
+  expect(ledger.episodeIdentities(track.trackKey)).toHaveLength(1);
+  expect(ledger.completionFloor(track.trackKey)).toEqual(before);
+});
+
+test("[EP08] a permanently interrupted episode marks the track and blocks its successor", async () => {
+  const ledger = createAiringLedger(openDatabase(await dataDir()));
+  const track = trackWithEpisodes(ledger, [
+    ["S01E01", 1],
+    ["S01E02", 2],
+  ]);
+  ok(reserve(ledger, track.trackKey, "occ-1", "S01E01"));
+  ok(reserve(ledger, track.trackKey, "occ-2", "S01E02"));
+  ok(ledger.beginOccurrence({ trackKey: track.trackKey, occurrenceKey: "occ-1", at: AT }));
+  ok(ledger.interruptOccurrence({ trackKey: track.trackKey, at: AT }));
+  expect(ledger.activeOccurrence(track.trackKey)?.state).toBe("interrupted");
+
+  // The interrupted predecessor is not complete, so its successor cannot be
+  // credited and the floor does not advance.
+  recordFullEvidence(ledger, "occ-2");
+  expect(
+    refused(ledger.completeOccurrence({ occurrenceKey: "occ-2", at: AT })).reason,
+  ).toBe("predecessor-incomplete");
+  expect(ledger.completionFloor(track.trackKey)).toBeUndefined();
+});
+
+test("[EP11] a reservation alone is never counted as viewed or complete", async () => {
+  const ledger = createAiringLedger(openDatabase(await dataDir()));
+  const track = trackWithEpisodes(ledger, [["S01E01", 1]]);
+  ok(reserve(ledger, track.trackKey, "occ-1", "S01E01"));
+
+  // Planned only: no published or aired evidence, so nothing is credited.
+  expect(ledger.occurrence("occ-1")?.state).toBe("reserved");
+  expect(ledger.completionFloor(track.trackKey)).toBeUndefined();
+});
+
+test("[EP15] a track with no credible position is held rather than reset to episode one", async () => {
+  const ledger = createAiringLedger(openDatabase(await dataDir()));
+  const track = ok(
+    ledger.ensureSeriesTrack({ channelId: CHANNEL, seriesTitle: SERIES, at: AT }),
+  );
+  ok(ledger.holdTrack({
+    trackKey: track.trackKey,
+    reason: "ambiguous-position",
+    detail: "legacy history with no trustworthy cursor",
+    at: AT,
+  }));
+  expect(ledger.trackHold(track.trackKey)?.reason).toBe("ambiguous-position");
+  expect(ledger.completionFloor(track.trackKey)).toBeUndefined();
+});
