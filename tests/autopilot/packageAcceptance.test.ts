@@ -29,6 +29,7 @@ import {
   rotationOrdinal,
 } from "../../src/domain/movieProgramming.js";
 import type { MovieOccurrence } from "../../src/domain/movieProgramming.js";
+import { evaluateContinuityHealth } from "../../src/autopilot/continuityHealth.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -841,4 +842,98 @@ test("package F18: committed future runway does not credit either episode as air
   expect(refused(ledger.completeOccurrence({ occurrenceKey: episode10.occurrenceKey, at: now })).reason)
     .toBe("insufficient-evidence");
   database.close();
+});
+
+test("package F07: two watchdog ticks preserve healthy buffered idle", () => {
+  const fixture = scenario("F07");
+  const given = fixture.given as {
+    ffmpeg_process_count: number;
+    contiguous_published_runway_seconds: number;
+    scheduled_wake_before_depletion: boolean;
+  };
+  const observation = {
+    channelId: "package-f07-channel",
+    watchdogSessionId: "package-f07-session",
+    sampleId: "package-f07-tick-1",
+    observedAtMs: 1_000,
+    workerProcessCount: given.ffmpeg_process_count,
+    contiguousPublishedRunwaySeconds: given.contiguous_published_runway_seconds,
+    scheduledWakeBeforeDepletion: given.scheduled_wake_before_depletion,
+    nextRequiredIntervalAvailable: null,
+    progressDeadlineExceeded: false,
+  };
+  const firstTick = evaluateContinuityHealth(observation);
+  const secondTick = evaluateContinuityHealth({
+    ...observation,
+    sampleId: "package-f07-tick-2",
+    observedAtMs: 2_000,
+  }, firstTick.state);
+  const expected = fixture.expected as { channel_state: string; incident: boolean; restart_count: number };
+
+  expect(secondTick.health).toBe(expected.channel_state);
+  expect(secondTick.incident).toBe(expected.incident);
+  expect(secondTick.recommendation).toBe("none");
+  expect([firstTick, secondTick].filter(({ sharedServiceRestart }) => sharedServiceRestart)).toHaveLength(
+    expected.restart_count,
+  );
+});
+
+test("package F08: confirmed stuck continuation recommends recovery for the affected channel", () => {
+  const fixture = scenario("F08");
+  const given = fixture.given as {
+    ffmpeg_process_count: number;
+    contiguous_published_runway_seconds: number;
+    next_required_interval_unavailable: boolean;
+    progress_deadline_exceeded: boolean;
+    healthy_other_channel: boolean;
+  };
+  const observation = {
+    channelId: "package-f08-channel",
+    watchdogSessionId: "package-f08-session",
+    sampleId: "package-f08-confirmation-1",
+    observedAtMs: 1_000,
+    workerProcessCount: given.ffmpeg_process_count,
+    contiguousPublishedRunwaySeconds: given.contiguous_published_runway_seconds,
+    scheduledWakeBeforeDepletion: null,
+    nextRequiredIntervalAvailable: !given.next_required_interval_unavailable,
+    progressDeadlineExceeded: given.progress_deadline_exceeded,
+  };
+  // The fixture event is a confirmed-failure tick; the first sample is its
+  // preceding watchdog observation, required by the hysteresis contract.
+  const priorTick = evaluateContinuityHealth(observation);
+  const confirmed = evaluateContinuityHealth({
+    ...observation,
+    sampleId: "package-f08-confirmation-2",
+    observedAtMs: 2_000,
+  }, priorTick.state);
+  const expected = fixture.expected as {
+    action: string;
+    other_channel_restart: boolean;
+    wait_until_next_program_slot: boolean;
+  };
+  const actualAction = confirmed.recommendation ===
+    "wake_or_repair_continuation_then_fallback_or_channel_recovery"
+    ? "affected_channel_recovery_or_ready_fallback"
+    : "wait_until_next_program_slot";
+  const otherChannel = evaluateContinuityHealth({
+    ...observation,
+    channelId: "package-f08-healthy-other-channel",
+    sampleId: "package-f08-other-channel",
+    observedAtMs: 1_000,
+    contiguousPublishedRunwaySeconds: given.healthy_other_channel ? 120 : 2,
+    nextRequiredIntervalAvailable: given.healthy_other_channel,
+    progressDeadlineExceeded: false,
+  });
+
+  expect(confirmed.health).toBe("stalled");
+  expect(confirmed.recommendation).not.toBe("none");
+  expect(confirmed.channelId).toBe("package-f08-channel");
+  expect(confirmed.sharedServiceRestart).toBe(expected.other_channel_restart);
+  expect(otherChannel.recommendation).toBe("none");
+  expect(otherChannel.sharedServiceRestart).toBe(expected.other_channel_restart);
+  expect(otherChannel.health === "healthy").toBe(given.healthy_other_channel);
+  expect(actualAction).toBe(expected.action);
+  expect(actualAction === "wait_until_next_program_slot").toBe(
+    expected.wait_until_next_program_slot,
+  );
 });
