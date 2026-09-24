@@ -10,6 +10,18 @@ import {
 } from "../../src/autopilot/airingLedger.js";
 import type { MediaItem, Pool } from "../../src/domain/models.js";
 import { selectCandidate } from "../../src/scheduler/select.js";
+import { DateTime } from "luxon";
+import {
+  assignMovieOccurrences,
+  buildMovieRotation,
+} from "../../src/scheduler/movieProgramming.js";
+import { movieFixture } from "../support/movieFixture.js";
+import {
+  movieOccurrenceKey,
+  rotationMediaId,
+  rotationOrdinal,
+} from "../../src/domain/movieProgramming.js";
+import type { MovieOccurrence } from "../../src/domain/movieProgramming.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -287,4 +299,197 @@ test("package F02: an absent successor holds only its series", () => {
     expect(selected.item?.id).not.toBe(excluded);
   }
   expect(given.series_a_available_episodes).not.toContain(given.series_a_next);
+});
+
+test("package F04: a scheduled Saturday opener links one stable overnight encore", () => {
+  const fixture = scenario("F04");
+  const given = fixture.given as {
+    evening_opener_occurrence: string;
+    content_id: string;
+    evening_start: string;
+    evening_completed_successfully: boolean;
+  };
+  const expected = fixture.expected as {
+    encore_start_target: string;
+    encore_parent: string;
+    encore_occurrence_count: number;
+  };
+  const { channel, movies } = movieFixture();
+  const date = DateTime.fromISO(given.evening_start, { setZone: true })
+    .setZone(channel.timezone)
+    .toISODate()!;
+  const baseRotation = buildMovieRotation({
+    channelId: channel.id,
+    eligibleIds: [given.content_id, ...movies.slice(1).map(({ id }) => id)],
+    epochDate: date,
+    now: new Date(given.evening_start),
+  });
+  const openerOrdinal = rotationOrdinal(
+    date,
+    date,
+    "double-feature-1",
+  );
+  const rotation = {
+    ...baseRotation,
+    order: baseRotation.order.map((id, index) =>
+      index === openerOrdinal ? given.content_id : id,
+    ),
+  };
+  const ledger = new Map<string, MovieOccurrence>();
+  const resolve = (targetDate: string) => {
+    const result = assignMovieOccurrences({
+      channelId: channel.id,
+      date: targetDate,
+      programming: channel.movieProgramming!,
+      rotation,
+      existing: (sourceDate, position) =>
+        ledger.get(movieOccurrenceKey(sourceDate, position)),
+      resolvedAt: new Date(given.evening_start).toISOString(),
+      actualExposure:
+        targetDate > date && given.evening_completed_successfully
+          ? [{ mediaId: given.content_id, date }]
+          : [],
+      verifiedCompletedOccurrences:
+        targetDate > date && given.evening_completed_successfully
+          ? new Set([movieOccurrenceKey(date, "double-feature-1")])
+          : new Set(),
+    });
+    for (const occurrence of result.occurrences)
+      ledger.set(movieOccurrenceKey(occurrence.date, occurrence.position), occurrence);
+    return result;
+  };
+
+  const opener = resolve(date).forDate.find(
+    ({ position }) => position === "double-feature-1",
+  );
+  expect(given.evening_completed_successfully).toBe(true);
+  expect(opener?.mediaId).toBe(given.content_id);
+  const encoreDate = DateTime.fromISO(date, { zone: channel.timezone })
+    .plus({ days: 1 })
+    .toISODate()!;
+  const encore = resolve(encoreDate).forDate.find(
+    ({ position }) => position === "nightly",
+  );
+  const encoreInstant = DateTime.fromISO(
+    `${encore?.date}T${encore?.anchor}`,
+    { zone: channel.timezone },
+  );
+  expect(encoreInstant.toISO()).toBe(
+    DateTime.fromISO(expected.encore_start_target, { setZone: true })
+      .setZone(channel.timezone)
+      .toISO(),
+  );
+  expect(encore).toMatchObject({
+    role: "encore",
+    mediaId: given.content_id,
+    consumes: false,
+  });
+  const fixtureOccurrenceId = new Map([
+    [movieOccurrenceKey(date, "double-feature-1"), given.evening_opener_occurrence],
+  ]);
+  expect(fixtureOccurrenceId.get(encore?.encoreOf ?? "")).toBe(expected.encore_parent);
+
+  // A repeated refresh/restart resolves the persisted key without adding another
+  // occurrence. The API models the link and draw semantics; it has no separate
+  // exception-reason or completion-proof fields to assert here.
+  resolve(encoreDate);
+  const matchingEncores = [...ledger.values()].filter(
+    ({ encoreOf }) =>
+      fixtureOccurrenceId.get(encoreOf ?? "") === expected.encore_parent,
+  );
+  expect(matchingEncores).toHaveLength(expected.encore_occurrence_count);
+  expect(encore?.consumes).toBe(false);
+});
+
+test("package F05: a failed opener cannot become an encore instead of the ordinary alternative", () => {
+  const fixture = scenario("F05");
+  const given = fixture.given as {
+    opener: string;
+    opener_state: string;
+    ordinary_alternative: string;
+    alternative_ready: boolean;
+  };
+  const expected = fixture.expected as {
+    select: string;
+    must_not_select: string;
+    ordinary_spacing_checks_required: boolean;
+  };
+  const { channel } = movieFixture();
+  const saturday = "2026-09-26";
+  const sunday = "2026-09-27";
+  const rotation = buildMovieRotation({
+    channelId: channel.id,
+    eligibleIds: [given.opener, given.ordinary_alternative],
+    epochDate: saturday,
+    now: new Date("2026-09-26T12:00:00.000Z"),
+  });
+  const opener: MovieOccurrence = {
+    channelId: channel.id,
+    date: saturday,
+    position: "double-feature-1",
+    role: "weekend-opener",
+    anchor: channel.movieProgramming!.weekendAnchor,
+    mediaId: given.opener,
+    consumes: true,
+    resolvedAt: "2026-09-26T12:00:00.000Z",
+  };
+  const result = assignMovieOccurrences({
+    channelId: channel.id,
+    date: sunday,
+    programming: channel.movieProgramming!,
+    rotation,
+    existing: (date, position) =>
+      date === saturday && position === "double-feature-1" ? opener : undefined,
+    resolvedAt: "2026-09-27T07:00:00.000Z",
+    actualExposure: [],
+    verifiedCompletedOccurrences: new Set(),
+  });
+  const selected = result.forDate.find(({ position }) => position === "nightly");
+
+  expect(given.opener_state).toBe("failed_before_air");
+  expect(given.alternative_ready).toBe(true);
+  expect(selected?.mediaId).toBe(expected.select);
+  expect(selected?.mediaId).not.toBe(expected.must_not_select);
+  expect(selected?.encoreOf).toBeUndefined();
+  expect(selected?.consumes).toBe(true);
+  expect(expected.ordinary_spacing_checks_required).toBe(true);
+  const scarce = assignMovieOccurrences({
+    channelId: channel.id,
+    date: sunday,
+    programming: channel.movieProgramming!,
+    rotation,
+    existing: (date, position) =>
+      date === saturday && position === "double-feature-1" ? opener : undefined,
+    resolvedAt: "2026-09-27T07:00:00.000Z",
+    actualExposure: [{ mediaId: given.ordinary_alternative, date: saturday }],
+    verifiedCompletedOccurrences: new Set(),
+  });
+  expect(scarce.forDate.find(({ position }) => position === "nightly")?.mediaId)
+    .toBe(expected.select);
+  expect(scarce.diagnostics.map(({ code }) => code))
+    .toContain("MOVIE_NIGHTLY_SPACING_SHORTAGE");
+
+  // With a three-film bag, the Sunday opener's failed Monday encore takes the
+  // reserved closer's film. Filtering the bad opener must not shift that draw
+  // onto Tuesday's normal film.
+  const threeFilmRotation = {
+    ...rotation,
+    epochDate: "2026-09-21",
+    order: [given.opener, given.ordinary_alternative, "movie_c"],
+  };
+  const sundayOpener = { ...opener, date: sunday };
+  const mondayReplacement = assignMovieOccurrences({
+    channelId: channel.id,
+    date: "2026-09-28",
+    programming: channel.movieProgramming!,
+    rotation: threeFilmRotation,
+    existing: (date, position) =>
+      date === sunday && position === "double-feature-1" ? sundayOpener : undefined,
+    resolvedAt: "2026-09-28T07:00:00.000Z",
+    actualExposure: [],
+    verifiedCompletedOccurrences: new Set(),
+  }).forDate.find(({ position }) => position === "nightly");
+  expect(mondayReplacement?.mediaId).toBe(given.ordinary_alternative);
+  expect(rotationMediaId(threeFilmRotation, "2026-09-29", "nightly"))
+    .toBe("movie_c");
 });

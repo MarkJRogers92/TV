@@ -627,6 +627,12 @@ export function assignMovieOccurrences(input: {
    */
   actualExposure?: readonly MovieExposureEvent[];
   /**
+   * Verified fully aired opener occurrence keys. When supplied, an encore is
+   * permitted only for a completed opener; partial exposure is insufficient.
+   * Existing callers omit this while the airing ledger is shadow-only.
+   */
+  verifiedCompletedOccurrences?: ReadonlySet<string>;
+  /**
    * Prospective reservation conflicts, kept separate from exposure.
    *
    * A movie already reserved shortly after a candidate night cannot also take
@@ -720,8 +726,14 @@ export function assignMovieOccurrences(input: {
     // A stored assignment whose film has left the eligible set can never air as
     // written. Future, unpublished dates are re-derived from the rotation (or
     // from a repaired opener); anything already broadcast is left alone.
-    const staleStored =
-      stored !== undefined && isStale(stored);
+    const staleStoredMedia = stored !== undefined && isStale(stored);
+    const staleStoredEncore =
+      stored?.role === "encore" &&
+      stored.encoreOf !== undefined &&
+      input.verifiedCompletedOccurrences !== undefined &&
+      !input.verifiedCompletedOccurrences.has(stored.encoreOf) &&
+      (input.repairable?.(stored.date) ?? false);
+    const staleStored = staleStoredMedia || staleStoredEncore;
     if (stored && !staleStored) {
       resolved.set(key, stored);
       return stored;
@@ -729,7 +741,9 @@ export function assignMovieOccurrences(input: {
     if (stored && staleStored)
       diagnostics.push({
         code: "MOVIE_ASSIGNMENT_REPAIRED",
-        message: `${stored.mediaId} is no longer an eligible movie; ${key} was re-derived from the current rotation`,
+        message: staleStoredEncore
+          ? `${key} has no verified completed opener and was re-derived as an ordinary movie`
+          : `${stored.mediaId} is no longer an eligible movie; ${key} was re-derived from the current rotation`,
         mediaId: stored.mediaId,
         date: spec.date,
         position: spec.position,
@@ -787,22 +801,62 @@ export function assignMovieOccurrences(input: {
       ];
       const sourceSpec = specFor(sourceDate, sourcePosition);
       const sourceCovered = openerCovered(sourceSpec, sourceDate);
+      const sourceVerified =
+        input.verifiedCompletedOccurrences === undefined ||
+        input.verifiedCompletedOccurrences.has(spec.encoreOf);
+      let sourceMediaId: string | undefined;
       if (sourceCovered) {
         const source = sourceSpec ? resolveSpec(sourceSpec) : undefined;
-        if (source) mediaId = source.mediaId;
+        sourceMediaId = source?.mediaId;
+        if (sourceVerified) mediaId = sourceMediaId;
       }
-      if (!mediaId && sourceCovered)
-        mediaId = input.existing(sourceDate, sourcePosition)?.mediaId;
+      if (!sourceMediaId && sourceCovered)
+        sourceMediaId = input.existing(sourceDate, sourcePosition)?.mediaId;
+      if (!mediaId && sourceCovered && sourceVerified) mediaId = sourceMediaId;
       if (!mediaId) {
-        mediaId = fallbackRotationMediaId(
-          input.rotation,
-          spec.date,
-        );
+        if (input.verifiedCompletedOccurrences !== undefined && !sourceVerified) {
+          const alternatives = input.rotation.order.filter(
+            (id) =>
+              id !== sourceMediaId &&
+              (!input.eligibleMediaIds?.size || input.eligibleMediaIds.has(id)),
+          );
+          const reservedFallback = fallbackRotationMediaId(input.rotation, spec.date);
+          const preferredIndex = alternatives.indexOf(reservedFallback ?? "");
+          const alternative = spacedNightlyMovie({
+            order: alternatives,
+            // Keep the existing fallback's reservation when it clears spacing.
+            // The filtered bag is shorter, so reusing the original ordinal
+            // would shift the draw and can collide with the next normal slot.
+            ordinal: Math.max(0, preferredIndex),
+            date: spec.date,
+            lastExposedOn: exposureBefore?.(spec.date).lastExposedOn ?? new Map(),
+            reservedOn: input.prospectiveReservations,
+          });
+          mediaId = alternative?.mediaId;
+          if (alternative && !alternative.legal)
+            diagnostics.push({
+              code: "MOVIE_NIGHTLY_SPACING_SHORTAGE",
+              message: `No eligible ordinary replacement had been off this slot for ${movieNightlyMinSpacingDays} days on ${spec.date}; ${alternative.mediaId} was the most rested at ${alternative.gapDays} days`,
+              mediaId: alternative.mediaId,
+              date: spec.date,
+              position: spec.position,
+            });
+          else if (alternative && !alternative.target)
+            diagnostics.push({
+              code: "MOVIE_NIGHTLY_SPACING_BELOW_TARGET",
+              message: `${alternative.mediaId} was the most rested ordinary replacement at ${alternative.gapDays} days, short of the ${movieNightlyTargetSpacingDays}-day goal`,
+              mediaId: alternative.mediaId,
+              date: spec.date,
+              position: spec.position,
+            });
+        } else {
+          mediaId = fallbackRotationMediaId(input.rotation, spec.date);
+        }
         encoreFallback = Boolean(mediaId);
         if (encoreFallback)
           diagnostics.push({
             code: "MOVIE_ENCORE_FALLBACK",
-            message: `No weekend opener was scheduled for ${key}, so a normal movie was drawn from the rotation instead of replaying one that never aired`,
+            message: `No verified completed weekend opener is available for ${key}, so a normal movie was drawn instead of replaying the opener`,
             date: spec.date,
             position: spec.position,
           });
