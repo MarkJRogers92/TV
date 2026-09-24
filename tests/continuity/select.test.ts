@@ -87,6 +87,41 @@ test("rejects stale and unavailable scoped assets, and keeps staged effects off"
   );
 });
 
+test("[SC09] a stale scoped card is rejected and a ready equal-duration generic card is used", () => {
+  const result = selectContinuity(
+    context,
+    [
+      // A schedule-scoped card minted against an earlier revision: stale.
+      asset({
+        id: "tonight-stale",
+        role: "tonight",
+        scope: "schedule",
+        targetSlug: undefined,
+        scheduleRevision: "revision-old",
+        durationMs: 6_000,
+      }),
+      // A generic, non-scoped card of the SAME duration is the replacement.
+      asset({
+        id: "generic-equal-duration",
+        role: "next",
+        scope: "evergreen",
+        targetSlug: undefined,
+        durationMs: 6_000,
+      }),
+    ],
+    [],
+    { now: "2026-09-20T23:00:00.000Z" },
+  );
+
+  expect(
+    result.rejections.some(
+      (item) => item.assetId === "tonight-stale" && item.reason === "STALE_SCHEDULE",
+    ),
+  ).toBe(true);
+  expect(result.selected?.id).toBe("generic-equal-duration");
+  expect(result.selected?.durationMs).toBe(6_000);
+});
+
 test("matches NEXT against the editorial next airing during a mid-roll", () => {
   const midrollContext: ContinuityContext = {
     ...context,
