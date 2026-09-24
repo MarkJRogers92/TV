@@ -11,6 +11,7 @@ import {
   selectMovieBridge,
   wholeSpotCombination,
 } from "../../src/scheduler/movieProgramming.js";
+import type { MovieAssignmentDiagnostic } from "../../src/scheduler/movieProgramming.js";
 import {
   movieOccurrenceKey,
   rotationMediaId,
@@ -31,6 +32,87 @@ function rotationFor(count = 30) {
     now: NOW,
   });
 }
+
+const dateRange = (from: string, days: number) =>
+  Array.from({ length: days }, (_, offset) =>
+    DateTime.fromISO(from, { zone: "UTC" }).plus({ days: offset }).toISODate()!,
+  );
+
+/** Local calendar days between two broadcast dates. */
+const calendarDaysBetween = (from: string, to: string) =>
+  Math.round(
+    (Date.parse(`${to}T00:00:00.000Z`) - Date.parse(`${from}T00:00:00.000Z`)) /
+      86_400_000,
+  );
+
+/**
+ * Resolve a run of broadcast dates into one ledger, in the order given.
+ *
+ * The spacing rule reads planned reservations, so a test has to keep them: what
+ * a night sees is whatever the ledger already held for the nights before it,
+ * whether that arrived through generation, a preview, or a repair.
+ */
+function resolveSpacedRun(options: {
+  movieCount: number;
+  dates: string[];
+  settled?: Map<string, MovieOccurrence>;
+  resolvedAt?: string;
+}) {
+  const { channel, movies } = movieFixture({ movieCount: options.movieCount });
+  const rotation = buildMovieRotation({
+    channelId: channel.id,
+    eligibleIds: movies.map((movie) => movie.id),
+    epochDate: "2026-09-06",
+    now: NOW,
+  });
+  const ledger = new Map(options.settled ?? []);
+  const forDate = new Map<string, MovieOccurrence[]>();
+  const diagnostics: MovieAssignmentDiagnostic[] = [];
+  for (const date of options.dates) {
+    const result = assignMovieOccurrences({
+      channelId: channel.id,
+      date,
+      programming: channel.movieProgramming!,
+      rotation,
+      existing: (sourceDate, position) =>
+        ledger.get(movieOccurrenceKey(sourceDate, position)),
+      resolvedAt: options.resolvedAt ?? NOW.toISOString(),
+    });
+    // Dependencies count too: resolving a Sunday encore also writes the opener
+    // it replays, exactly as the persisting path does.
+    for (const occurrence of result.occurrences)
+      ledger.set(
+        movieOccurrenceKey(occurrence.date, occurrence.position),
+        occurrence,
+      );
+    forDate.set(date, result.forDate);
+    diagnostics.push(...result.diagnostics);
+  }
+  const occurrences = options.dates.flatMap((date) => forDate.get(date) ?? []);
+  return {
+    channel,
+    rotation,
+    ledger,
+    forDate,
+    diagnostics,
+    occurrences,
+    /** Ordinary nightly features in broadcast order: the nights the rule owns. */
+    nights: occurrences.filter(
+      (occurrence) => occurrence.position === "nightly" && occurrence.consumes,
+    ),
+  };
+}
+
+/** The ordinary nights keyed by date, for comparing two runs. */
+const nightsByDate = (run: ReturnType<typeof resolveSpacedRun>) =>
+  [...run.nights]
+    .sort((left, right) => left.date.localeCompare(right.date))
+    .map(({ date, mediaId, role, consumes }) => ({
+      date,
+      mediaId,
+      role,
+      consumes,
+    }));
 
 test("a cycle plays every movie once before any repeats", () => {
   const { channel } = movieFixture({ movieCount: 30 });
@@ -148,6 +230,151 @@ test("an empty rotation yields no occurrences and a diagnostic", () => {
   });
   expect(result.forDate).toEqual([]);
   expect(result.diagnostics[0].code).toBe("MOVIE_ROTATION_EMPTY");
+});
+
+/**
+ * The failing case this stage exists to fix.
+ *
+ * Twenty eligible films and nine consuming slots a week made the plain rotation
+ * come back to an ordinary night after about sixteen days: five nights a week
+ * cannot cover twenty films without a second pass, so the modulo draw repeated
+ * inside three weeks. Four weeks of ordinary nights must not.
+ */
+test("twenty films keep every ordinary nightly feature at least 21 days apart", () => {
+  const dates = dateRange("2026-09-06", 28);
+  const run = resolveSpacedRun({ movieCount: 20, dates });
+
+  // Tuesday through Saturday, four weeks running.
+  expect(run.nights).toHaveLength(20);
+
+  const lastSeen = new Map<string, string>();
+  const repeats: Array<{ date: string; mediaId: string; gap: number }> = [];
+  for (const night of run.nights) {
+    const previous = lastSeen.get(night.mediaId);
+    if (previous)
+      repeats.push({
+        date: night.date,
+        mediaId: night.mediaId,
+        gap: calendarDaysBetween(previous, night.date),
+      });
+    lastSeen.set(night.mediaId, night.date);
+  }
+  expect(repeats.filter((repeat) => repeat.gap < 21)).toEqual([]);
+
+  // What the plain rotation would have drawn over the same nights, so the test
+  // proves the window really contains the fault instead of merely being lucky.
+  const plainLastSeen = new Map<string, string>();
+  let plainTooSoon = 0;
+  for (const night of run.nights) {
+    const mediaId = rotationMediaId(run.rotation, night.date, "nightly")!;
+    const previous = plainLastSeen.get(mediaId);
+    if (previous && calendarDaysBetween(previous, night.date) < 21)
+      plainTooSoon += 1;
+    plainLastSeen.set(mediaId, night.date);
+  }
+  expect(plainTooSoon).toBeGreaterThan(0);
+
+  // The overnight airings stay linked encores of the evening opener, and the
+  // approved weekend double features still come straight off the rotation: the
+  // correction is scoped to the ordinary nights.
+  const encores = run.occurrences.filter(
+    (occurrence) => occurrence.position === "nightly" && !occurrence.consumes,
+  );
+  expect(encores).toHaveLength(8);
+  expect(encores.every((occurrence) => occurrence.role === "encore")).toBe(true);
+  for (const date of dates)
+    for (const occurrence of run.forDate.get(date) ?? [])
+      if (occurrence.position !== "nightly")
+        expect(occurrence.mediaId).toBe(
+          rotationMediaId(run.rotation, date, occurrence.position),
+        );
+});
+
+test("a bag large enough spaces ordinary nights a month apart on its own", () => {
+  const run = resolveSpacedRun({
+    movieCount: 38,
+    dates: dateRange("2026-09-06", 84),
+  });
+  const lastSeen = new Map<string, string>();
+  const repeats: number[] = [];
+  for (const night of run.nights) {
+    const previous = lastSeen.get(night.mediaId);
+    if (previous) repeats.push(calendarDaysBetween(previous, night.date));
+    lastSeen.set(night.mediaId, night.date);
+  }
+  // Thirty-eight films cover the nine weekly consuming slots often enough that
+  // the rotation's own cadence clears the thirty-day goal, so nothing has to be
+  // corrected and nothing is reported.
+  expect(repeats.length).toBeGreaterThan(0);
+  expect(Math.min(...repeats)).toBeGreaterThanOrEqual(30);
+  expect(run.diagnostics).toEqual([]);
+});
+
+test("a bag too small for the floor still never replays last night's movie", () => {
+  const run = resolveSpacedRun({
+    movieCount: 3,
+    dates: dateRange("2026-09-06", 21),
+  });
+  // Every night takes the least recently planned movie, so a title only returns
+  // after every other title has had the night - never yesterday's while an older
+  // candidate is waiting.
+  const lastSeen = new Map<string, string>();
+  for (const night of run.nights) {
+    const gaps: Array<{ mediaId: string; gap: number }> = run.rotation.order.map(
+      (mediaId: string) => {
+        const previous = lastSeen.get(mediaId);
+        return {
+          mediaId,
+          gap: previous
+            ? calendarDaysBetween(previous, night.date)
+            : Number.POSITIVE_INFINITY,
+        };
+      },
+    );
+    const chosen = gaps.find((candidate) => candidate.mediaId === night.mediaId)!;
+    expect(chosen.gap).toBe(Math.max(...gaps.map((candidate) => candidate.gap)));
+    lastSeen.set(night.mediaId, night.date);
+  }
+  for (let index = 1; index < run.nights.length; index += 1)
+    expect(run.nights[index].mediaId).not.toBe(run.nights[index - 1].mediaId);
+
+  // The scarcity is named rather than hidden: the diagnostic carries the night,
+  // the movie that took it, and how long that movie had actually been off.
+  const shortages = run.diagnostics.filter(
+    (diagnostic) => diagnostic.code === "MOVIE_NIGHTLY_SPACING_SHORTAGE",
+  );
+  expect(shortages.length).toBeGreaterThan(0);
+  expect(shortages[0]).toMatchObject({
+    position: "nightly",
+    date: shortages[0].date,
+  });
+  expect(typeof shortages[0].mediaId).toBe("string");
+  expect(shortages[0].message).toContain("21");
+});
+
+test("the spaced night is a pure function of the calendar and the ledger", () => {
+  const dates = dateRange("2026-09-06", 21);
+  const inOrder = resolveSpacedRun({ movieCount: 20, dates });
+  // The same window generated out of order lands on the same ordinary nights:
+  // the history a night reads is derived from the calendar and the ledger, not
+  // remembered from whichever day happened to be generated first.
+  const outOfOrder = resolveSpacedRun({
+    movieCount: 20,
+    dates: [...dates].reverse(),
+  });
+  expect(outOfOrder.rotation.order).toEqual(inOrder.rotation.order);
+  expect(nightsByDate(outOfOrder)).toEqual(nightsByDate(inOrder));
+
+  // Re-running a window the ledger already holds keeps every stored reservation
+  // verbatim, timestamp included: nothing already planned is reshuffled.
+  const again = resolveSpacedRun({
+    movieCount: 20,
+    dates,
+    settled: inOrder.ledger,
+    resolvedAt: "2027-01-01T00:00:00.000Z",
+  });
+  expect(nightsByDate(again)).toEqual(nightsByDate(inOrder));
+  expect(again.diagnostics).toEqual([]);
 });
 
 test("weekend encores replay the adjacent opener and consume nothing new", () => {
