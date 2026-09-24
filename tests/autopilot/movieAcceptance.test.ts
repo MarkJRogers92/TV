@@ -14,6 +14,7 @@ import {
   buildMovieRotation,
   movieExposureIndex,
   movieNightlyMinSpacingDays,
+  selectMovieBreak,
   spacedNightlyMovie,
 } from "../../src/scheduler/movieProgramming.js";
 import { eligibleMovieMediaIds } from "../../src/media/movieEnrollment.js";
@@ -228,6 +229,24 @@ describe("movie acceptance (MV)", () => {
       reservedOn: new Map([["a", "2026-09-26"]]),
     });
     expect(choice?.mediaId).toBe("b");
+  });
+
+  test("SC05 a break is built from unique whole spots with an exact duration", () => {
+    const { channel, media } = movieFixture();
+    const selection = selectMovieBreak(
+      media,
+      channel.movieProgramming!.breakPolicy,
+      { seed: "sc05" },
+    );
+    const ids = selection.items.map((item) => item.id);
+    // Hard intra-pod uniqueness: no creative appears twice in one break.
+    expect(new Set(ids).size).toBe(ids.length);
+    // A break is never empty; there is always some approved spot to air.
+    expect(selection.items.length).toBeGreaterThan(0);
+    // The advertised duration is exactly the sum of the chosen spots.
+    expect(selection.durationMs).toBe(
+      selection.items.reduce((total, item) => total + (item.durationMs ?? 0), 0),
+    );
   });
 
   test("MV08 a committed date is not rewritten by a later pass", () => {

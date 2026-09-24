@@ -107,4 +107,26 @@ describe("schedule coverage", () => {
       { fromMs: Date.parse("2026-09-24T00:00:00.000Z"), toMs: Date.parse("2026-09-24T06:00:00.000Z") },
     ]);
   });
+
+  test("[SC01] a 72-hour horizon covers with no gaps, overlaps or zero-length entries", () => {
+    const schedules = [
+      schedule("2026-09-24", "2026-09-24T00:00:00.000Z", [
+        ["2026-09-24T00:00:00.000Z", "2026-09-25T00:00:00.000Z"],
+      ]),
+      schedule("2026-09-25", "2026-09-25T00:00:00.000Z", [
+        ["2026-09-25T00:00:00.000Z", "2026-09-26T00:00:00.000Z"],
+      ]),
+      schedule("2026-09-26", "2026-09-26T00:00:00.000Z", [
+        ["2026-09-26T00:00:00.000Z", "2026-09-27T00:00:00.000Z"],
+      ]),
+    ];
+    const coverage = assessCoverage(schedules, {
+      startMs: Date.parse("2026-09-24T00:00:00.000Z"),
+      endMs: Date.parse("2026-09-27T00:00:00.000Z"),
+    });
+    expect(coverage.contiguous).toBe(true);
+    expect(coverage.gaps).toEqual([]);
+    expect(coverage.overlaps).toBe(0);
+    expect(coverage.coveredMs).toBe(3 * DAY);
+  });
 });
