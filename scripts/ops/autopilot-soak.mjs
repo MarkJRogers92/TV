@@ -34,9 +34,13 @@ export function summarizePlaylist(parsed, nowMs) {
   const segments = parsed.segments;
   const recent = segments.slice(-30);
   const gaps = [];
+  const discontinuities = [];
   for (let i = 1; i < recent.length; i++) {
-    if (recent[i].discontinuity) continue;
     const delta = recent[i].startMs - (recent[i - 1].startMs + recent[i - 1].duration * 1000);
+    if (recent[i].discontinuity) {
+      discontinuities.push({ after: recent[i - 1].uri, deltaMs: Math.round(delta) });
+      continue;
+    }
     if (Math.abs(delta) > 600) gaps.push({ after: recent[i - 1].uri, deltaMs: Math.round(delta) });
   }
   const last = segments.at(-1);
@@ -46,6 +50,8 @@ export function summarizePlaylist(parsed, nowMs) {
     lastProgramDateTime: last ? new Date(last.startMs).toISOString() : null,
     producerRunwaySeconds: last ? Math.round((last.startMs + last.duration * 1000 - nowMs) / 1000) : null,
     recentTimelineGaps: gaps,
+    recentDiscontinuities: discontinuities,
+    totalDiscontinuities: segments.filter((segment) => segment.discontinuity).length,
     endlist: parsed.endlist,
   };
 }
