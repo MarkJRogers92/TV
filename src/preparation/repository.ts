@@ -17,6 +17,8 @@ export const PREPARATION_SETTLE_MS = 60_000;
 export type PreparationEvidence = Partial<Pick<PreparationJob,
   "metadataEvidence" | "sampleEvidence" | "fullDecodeEvidence" | "airingEvidence"
 >>;
+/** The attempt number fences writes from a worker after recovery or retry. */
+export type PreparationJobLease = Pick<PreparationJob, "id" | "attempt">;
 
 export type PreparationRepository = {
   observe(
@@ -27,15 +29,15 @@ export type PreparationRepository = {
   jobs: { list(): PreparationJob[]; get(id: string): PreparationJob | undefined };
   /** Caller owns serial execution and supplies a fresh stat for each candidate. */
   claimNext(readCurrentSource: (path: string) => PreparationSourceVersion | null, now?: string): PreparationJob | undefined;
-  recordEvidence(id: string, evidence: PreparationEvidence, currentSource: PreparationSourceVersion | null, now?: string): { kind: "recorded" | "stale" | "not-running" };
+  recordEvidence(lease: PreparationJobLease, evidence: PreparationEvidence, currentSource: PreparationSourceVersion | null, now?: string): { kind: "recorded" | "stale" | "not-running" | "lease-lost" };
   complete(
-    id: string,
+    lease: PreparationJobLease,
     result: PreparationEvidence & { classification: PreparationClassification; failureKind?: PreparationFailureKind; failureDetail?: string | null },
     currentSource: PreparationSourceVersion | null,
     now?: string,
-  ): { kind: "completed" | "stale" | "not-running" };
-  fail(id: string, detail: string, now?: string): boolean;
-  retry(id: string, currentSource: PreparationSourceVersion | null, now?: string): { kind: "queued" | "stale" | "not-retryable" | "not-found" };
+  ): { kind: "completed" | "stale" | "not-running" | "lease-lost" };
+  fail(lease: PreparationJobLease, detail: string, now?: string): { kind: "failed" | "not-running" | "lease-lost" };
+  retry(lease: PreparationJobLease, currentSource: PreparationSourceVersion | null, now?: string): { kind: "queued" | "stale" | "not-retryable" | "not-found" | "lease-lost" };
   /** Call once on process startup; preserves attempt count and result provenance. */
   recoverInterrupted(now?: string): number;
 };
@@ -117,7 +119,7 @@ export function createPreparationRepository(database: MarkTvDatabase): Preparati
     updatedAt: now,
   });
 
-  const observe = database.transaction((input: { sourceMediaId: string; source: PreparationSourceVersion; observedAt: string }, options?: { outputDirectories?: readonly string[] }) => {
+  const observe = (input: { sourceMediaId: string; source: PreparationSourceVersion; observedAt: string }, options?: { outputDirectories?: readonly string[] }) => database.transaction(() => {
     if (!input.sourceMediaId.trim()) throw new TypeError("sourceMediaId is required");
     const source = normalizeSource(input.source);
     if (!isPreparationCandidate(source.path, options?.outputDirectories)) return { kind: "ignored" as const };
@@ -154,7 +156,7 @@ export function createPreparationRepository(database: MarkTvDatabase): Preparati
       createdAt: input.observedAt, updatedAt: input.observedAt,
     });
     return { kind: "settled" as const, intake, job };
-  });
+  }).immediate();
 
   return {
     observe,
@@ -198,16 +200,18 @@ export function createPreparationRepository(database: MarkTvDatabase): Preparati
         return latest;
       }).immediate();
     },
-    recordEvidence: (id, evidence, currentSource, now = new Date().toISOString()) => database.transaction(() => {
-      const job = jobFrom(jobGet.get(id) as { json: string } | undefined);
+    recordEvidence: (lease, evidence, currentSource, now = new Date().toISOString()) => database.transaction(() => {
+      const job = jobFrom(jobGet.get(lease.id) as { json: string } | undefined);
       if (!job || job.state !== "running") return { kind: "not-running" as const };
+      if (job.attempt !== lease.attempt) return { kind: "lease-lost" as const };
       if (!sameVersion(job.source, currentSource)) { invalidate(job, currentSource === null, now); return { kind: "stale" as const }; }
       saveJob({ ...job, ...evidence, updatedAt: now });
       return { kind: "recorded" as const };
-    })(),
-    complete: (id, result, currentSource, now = new Date().toISOString()) => database.transaction(() => {
-      const job = jobFrom(jobGet.get(id) as { json: string } | undefined);
+    }).immediate(),
+    complete: (lease, result, currentSource, now = new Date().toISOString()) => database.transaction(() => {
+      const job = jobFrom(jobGet.get(lease.id) as { json: string } | undefined);
       if (!job || job.state !== "running") return { kind: "not-running" as const };
+      if (job.attempt !== lease.attempt) return { kind: "lease-lost" as const };
       if (!sameVersion(job.source, currentSource)) { invalidate(job, currentSource === null, now); return { kind: "stale" as const }; }
       if (result.classification === "unavailable" && result.failureKind !== "source_unavailable") throw new TypeError("Unavailable results require source_unavailable failure kind");
       if (result.classification === "quarantined" && result.failureKind !== "decode_corruption") throw new TypeError("Quarantined results require decode_corruption failure kind");
@@ -215,29 +219,35 @@ export function createPreparationRepository(database: MarkTvDatabase): Preparati
       saveJob({ ...job, ...result, state: "completed", failureKind: result.failureKind ?? null,
         failureDetail: result.failureDetail ?? null, updatedAt: now });
       return { kind: "completed" as const };
-    })(),
-    fail: (id, detail, now = new Date().toISOString()) => database.transaction(() => {
-      const job = jobFrom(jobGet.get(id) as { json: string } | undefined);
-      if (!job || job.state !== "running") return false;
+    }).immediate(),
+    fail: (lease, detail, now = new Date().toISOString()) => database.transaction(() => {
+      const job = jobFrom(jobGet.get(lease.id) as { json: string } | undefined);
+      if (!job || job.state !== "running") return { kind: "not-running" as const };
+      if (job.attempt !== lease.attempt) return { kind: "lease-lost" as const };
       saveJob({ ...job, state: "failed", classification: null, failureKind: "processing_error", failureDetail: detail,
         metadataEvidence: null, sampleEvidence: null, fullDecodeEvidence: null, airingEvidence: null, updatedAt: now });
-      return true;
-    })(),
-    retry: (id, currentSource, now = new Date().toISOString()) => database.transaction(() => {
-      const job = jobFrom(jobGet.get(id) as { json: string } | undefined);
+      return { kind: "failed" as const };
+    }).immediate(),
+    retry: (lease, currentSource, now = new Date().toISOString()) => database.transaction(() => {
+      const job = jobFrom(jobGet.get(lease.id) as { json: string } | undefined);
       if (!job) return { kind: "not-found" as const };
+      if (job.attempt !== lease.attempt) return { kind: "lease-lost" as const };
       if (job.state !== "failed" && job.state !== "stale") return { kind: "not-retryable" as const };
       if (!sameVersion(job.source, currentSource)) { invalidate(job, currentSource === null, now); return { kind: "stale" as const }; }
       saveJob({ ...job, state: "queued", classification: null, failureKind: null, failureDetail: null,
         metadataEvidence: null, sampleEvidence: null, fullDecodeEvidence: null, airingEvidence: null, updatedAt: now });
       return { kind: "queued" as const };
-    })(),
-    recoverInterrupted: (now = new Date().toISOString()) => database.prepare("SELECT json FROM preparation_jobs WHERE state = 'running'").all()
-      .map((row: unknown) => {
+    }).immediate(),
+    recoverInterrupted: (now = new Date().toISOString()) => database.transaction(() => {
+      const rows = database.prepare("SELECT json FROM preparation_jobs WHERE state = 'running'").all() as Array<{ json: string }>;
+      return rows.map((row) => {
         const job = preparationJobSchema.parse(JSON.parse((row as { json: string }).json));
-        saveJob({ ...job, state: "queued", classification: null, failureKind: null, failureDetail: null,
+        const latest = jobFrom(jobGet.get(job.id) as { json: string } | undefined);
+        if (!latest || latest.state !== "running") return undefined;
+        saveJob({ ...latest, state: "queued", classification: null, failureKind: null, failureDetail: null,
           metadataEvidence: null, sampleEvidence: null, fullDecodeEvidence: null, airingEvidence: null, updatedAt: now });
-        return job.id;
-      }).length,
+        return latest.id;
+      }).filter((id) => id !== undefined).length;
+    }).immediate(),
   };
 }

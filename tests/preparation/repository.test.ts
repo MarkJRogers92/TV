@@ -92,8 +92,10 @@ test("does not return another worker's recovered and reclaimed reservation", asy
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(0) });
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(60) });
   let recoveredClaim: ReturnType<typeof second.preparation.claimNext>;
+  let oldLease: ReturnType<typeof second.preparation.jobs.get>;
 
   const firstClaim = prep.claimNext((path) => {
+    oldLease = second.preparation.jobs.list()[0]!;
     second.preparation.recoverInterrupted(time(120));
     recoveredClaim = second.preparation.claimNext(() => source({ path }), time(121));
     return source({ path });
@@ -101,6 +103,17 @@ test("does not return another worker's recovered and reclaimed reservation", asy
 
   expect(firstClaim).toBeUndefined();
   expect(recoveredClaim).toMatchObject({ state: "running", attempt: 2, sourceMediaId: "movie-1" });
+  expect(oldLease!.attempt).toBe(1);
+  expect(prep.recordEvidence(oldLease!, { sampleEvidence: { decoded: true } }, source())).toEqual({ kind: "lease-lost" });
+  expect(prep.complete(oldLease!, { classification: "ready_original" }, source())).toEqual({ kind: "lease-lost" });
+  expect(prep.fail(oldLease!, "old worker error")).toEqual({ kind: "lease-lost" });
+  expect(prep.jobs.get(recoveredClaim!.id)).toMatchObject({
+    state: "running",
+    attempt: 2,
+    classification: null,
+    sampleEvidence: null,
+    failureKind: null,
+  });
   expect(prep.jobs.list().filter((job) => job.state === "running")).toHaveLength(1);
 });
 
@@ -150,7 +163,7 @@ test("persists evidence and the source version across restart, and treats repeat
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(0) });
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(60) });
   const job = prep.claimNext(() => source())!;
-  prep.recordEvidence(job.id, { metadataEvidence: { container: "matroska" } }, source());
+  prep.recordEvidence(job, { metadataEvidence: { container: "matroska" } }, source());
   repositories.close();
   opened.pop();
 
@@ -174,7 +187,7 @@ test("stales a running result when source identity changes during processing", a
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(60) });
   const job = prep.claimNext(() => source())!;
 
-  const result = prep.complete(job.id, {
+  const result = prep.complete(job, {
     classification: "ready_original",
     sampleEvidence: { decodedSeconds: 30 },
     fullDecodeEvidence: { succeeded: true },
@@ -192,13 +205,13 @@ test("keeps unavailable media distinct from quarantined corruption and retains s
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(0) });
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(60) });
   const unavailable = prep.claimNext(() => source())!;
-  expect(prep.complete(unavailable.id, { classification: "unavailable", failureKind: "source_unavailable" }, source()).kind).toBe("completed");
+  expect(prep.complete(unavailable, { classification: "unavailable", failureKind: "source_unavailable" }, source()).kind).toBe("completed");
   expect(prep.jobs.get(unavailable.id)).toMatchObject({ sourceMediaId: "movie-1", classification: "unavailable", failureKind: "source_unavailable" });
 
   prep.observe({ sourceMediaId: "movie-2", source: source({ path: "/media/movies/Broken.mkv" }), observedAt: time(0) });
   prep.observe({ sourceMediaId: "movie-2", source: source({ path: "/media/movies/Broken.mkv" }), observedAt: time(60) });
   const corrupt = prep.claimNext(() => source({ path: "/media/movies/Broken.mkv" }))!;
-  expect(prep.complete(corrupt.id, { classification: "quarantined", failureKind: "decode_corruption" }, source({ path: "/media/movies/Broken.mkv" })).kind).toBe("completed");
+  expect(prep.complete(corrupt, { classification: "quarantined", failureKind: "decode_corruption" }, source({ path: "/media/movies/Broken.mkv" })).kind).toBe("completed");
   expect(prep.jobs.get(corrupt.id)).toMatchObject({ sourceMediaId: "movie-2", classification: "quarantined", failureKind: "decode_corruption" });
 });
 
@@ -219,7 +232,7 @@ test("preserves completed evidence when a later source version is observed", asy
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(0) });
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(60) });
   const job = prep.claimNext(() => source())!;
-  prep.complete(job.id, {
+  prep.complete(job, {
     classification: "ready_original",
     fullDecodeEvidence: { decoded: true, fingerprint: job.sourceVersionKey },
   }, source());
@@ -239,8 +252,8 @@ test("retries one failed source version without creating a duplicate job", async
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(0) });
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(60) });
   const job = prep.claimNext(() => source())!;
-  expect(prep.fail(job.id, "temporary worker error")).toBe(true);
-  expect(prep.retry(job.id, source(), time(120))).toEqual({ kind: "queued" });
+  expect(prep.fail(job, "temporary worker error")).toEqual({ kind: "failed" });
+  expect(prep.retry(job, source(), time(120))).toEqual({ kind: "queued" });
   expect(prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(180) }).job?.id).toBe(job.id);
   expect(prep.jobs.list()).toHaveLength(1);
   expect(prep.jobs.get(job.id)).toMatchObject({ state: "queued", attempt: 1, failureKind: null });
@@ -259,6 +272,6 @@ test("an absent source invalidates the claim as unavailable, never as corruption
     failureKind: "source_unavailable",
   });
   expect(prep.jobs.list()[0]?.classification).not.toBe("quarantined");
-  expect(prep.retry(prep.jobs.list()[0]!.id, source(), time(120))).toEqual({ kind: "queued" });
+  expect(prep.retry(prep.jobs.list()[0]!, source(), time(120))).toEqual({ kind: "queued" });
   expect(prep.jobs.list()[0]).toMatchObject({ state: "queued", classification: null, failureKind: null });
 });
