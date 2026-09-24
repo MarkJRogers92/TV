@@ -23,7 +23,7 @@
  * recovery is worse than no alerting path, so every operation is best-effort
  * and reports failure through the return value instead.
  */
-import { spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
   existsSync,
@@ -50,7 +50,11 @@ export type Alert = {
 
 export type AlertRecord = Alert & {
   at: string;
-  /** Whether a desktop notification was actually delivered. */
+  /**
+   * Whether the notification command SUCCEEDED, not merely that it was launched.
+   * False when notifications are disabled, when the command fails, or when it
+   * times out - so this field can be trusted as "you were told".
+   */
   notified: boolean;
 };
 
@@ -88,7 +92,15 @@ export function alertFilePath(env: NodeJS.ProcessEnv = process.env): string {
   return join(dataDir, "alerts.log");
 }
 
-/** The default notifier: a macOS notification, best-effort. */
+/**
+ * The default notifier: a macOS notification, best-effort.
+ *
+ * Run to completion rather than fire-and-forget, so the result recorded on the
+ * alert means something. An unattached `spawn` returns success for merely
+ * having LAUNCHED the command, which would let the file say `notified: true`
+ * while no banner ever appeared - the one thing a "did you tell me?" field must
+ * not do. A short timeout keeps a wedged osascript from delaying the caller.
+ */
 function osascriptNotifier(record: AlertRecord): boolean {
   const title = record.kind === "startup" ? "MarkTV" : `MarkTV ${record.kind}`;
   const body = [record.channelId, record.reason, record.action]
@@ -97,12 +109,10 @@ function osascriptNotifier(record: AlertRecord): boolean {
     .slice(0, 300);
   const script = `display notification ${JSON.stringify(body)} with title ${JSON.stringify(title)}`;
   try {
-    // Detached and ignored: a notification must never delay or fail a recovery.
-    const child = spawn("/usr/bin/osascript", ["-e", script], {
+    execFileSync("/usr/bin/osascript", ["-e", script], {
       stdio: "ignore",
-      detached: true,
+      timeout: 2_000,
     });
-    child.unref();
     return true;
   } catch {
     return false;
