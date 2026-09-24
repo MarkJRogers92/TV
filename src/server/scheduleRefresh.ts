@@ -1,7 +1,11 @@
 import { DateTime } from "luxon";
 import type { Channel, MediaItem, Schedule } from "../domain/models.js";
 import { logError, logInfo, logWarn } from "./logging.js";
+import { assessCoverage } from "../scheduler/coverage.js";
 import type { PersistedGeneration } from "./scheduleService.js";
+
+/** R09's rolling metadata horizon: how far ahead schedules should reach. */
+const HORIZON_HOURS = 72;
 
 /**
  * Keeps today's schedule existent and current, without anyone asking.
@@ -82,6 +86,12 @@ export interface ScheduleRefreshContext {
         channelId: string,
         date: string,
       ) => Schedule | undefined;
+      /**
+       * Every stored generation for a channel, so the horizon coverage report can
+       * measure the union of what exists. Read-only; the refresh plans nothing
+       * from it.
+       */
+      list: (channelId: string) => Schedule[];
     };
   };
   readonly schedules: {
@@ -369,6 +379,28 @@ export function startScheduleRefresh(
                 channelId: channel.id,
               });
             }
+          }
+          // R09 visibility: report how far the stored metadata actually reaches,
+          // so a horizon shortfall surfaces instead of staying silent. Read-only
+          // - it plans nothing, writes nothing, and consumes no history.
+          try {
+            const horizon = assessCoverage(
+              context.repositories.schedules.list(channel.id),
+              {
+                startMs: now().getTime(),
+                endMs: now().getTime() + HORIZON_HOURS * 3_600_000,
+              },
+            );
+            logInfo("schedule.refresh", "Horizon coverage", {
+              channelId: channel.id,
+              dates: horizon.dates.length,
+              hoursCovered: Math.round(horizon.coveredMs / 3_600_000),
+              gaps: horizon.gaps.length,
+              overlaps: horizon.overlaps,
+              contiguous: horizon.contiguous,
+            });
+          } catch (error) {
+            logError("schedule.refresh.coverage", error, { channelId: channel.id });
           }
         } catch (error) {
           // A bad catalog entry, failed generation, or Tunarr error on one

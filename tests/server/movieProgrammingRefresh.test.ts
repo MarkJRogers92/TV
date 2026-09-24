@@ -91,6 +91,7 @@ function setup(options: {
       },
       schedules: {
         latestForDate: (_channelId: string, date: string) => stored.get(date),
+        list: () => [...stored.values()],
       },
     },
     schedules: { generate },

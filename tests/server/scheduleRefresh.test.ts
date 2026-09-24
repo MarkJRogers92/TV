@@ -133,6 +133,7 @@ function setup(
         // Asked by date: the pass needs "is TODAY scheduled?", and the newest row
         // is not always today's.
         latestForDate: (_channelId: string, date: string) => stored.get(date),
+        list: () => [...stored.values()],
       },
     },
     schedules: { generate },
@@ -400,6 +401,7 @@ test("checks and syncs each channel using its own last-sync state", async () => 
         schedules: {
           latestForDate: (channelId, date) =>
             schedules.get(`${channelId}:${date}`),
+          list: () => [...schedules.values()],
         },
       },
       schedules: {
