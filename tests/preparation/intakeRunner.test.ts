@@ -8,6 +8,7 @@ import { LocalFolderAdapter } from "../../src/media/localFolder.js";
 import { captureManagedDirectory } from "../../src/acquisition/paths.js";
 import { mediaRootId, putMediaRoot } from "../../src/media/roots.js";
 import { createPreparationIntakeRunner } from "../../src/preparation/intakeRunner.js";
+import type { PreparationEvent } from "../../src/preparation/events.js";
 
 const temporary: string[] = [];
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -16,7 +17,7 @@ afterEach(async () => {
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-async function fixture(options: { probe?: (path: string) => Promise<{ durationMs: number | null }>; entryBudget?: number } = {}) {
+async function fixture(options: { probe?: (path: string) => Promise<{ durationMs: number | null }>; entryBudget?: number; onEvent?: (event: PreparationEvent) => void } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), "marktv-intake-data-"));
   // Registered roots are stored canonically (realpath), so a temp dir under
   // macOS /var (a symlink to /private/var) must be resolved to match.
@@ -35,6 +36,7 @@ async function fixture(options: { probe?: (path: string) => Promise<{ durationMs
     entryBudget: options.entryBudget,
     adapter: new LocalFolderAdapter(probe),
     watch: false,
+    onEvent: options.onEvent,
   });
   return {
     dataDir, rootPath, repositories, runner, probe,
@@ -162,6 +164,21 @@ test("non-video sidecars do not consume the per-pass candidate budget", async ()
 
   expect(probe).toHaveBeenCalledTimes(1);
   expect(repositories.media.list()).toHaveLength(1);
+});
+
+test("emits observed then settled events for a new candidate", async () => {
+  const events: PreparationEvent[] = [];
+  const { rootPath, runner, advance } = await fixture({ onEvent: (event) => events.push(event) });
+  const path = join(rootPath, "Ev.mkv");
+  await writeFile(path, "stable bytes");
+
+  await runner.runOnce();
+  advance(60_000);
+  await runner.runOnce();
+
+  expect(events.map((event) => event.event)).toEqual(["intake.observed", "intake.settled"]);
+  expect(events[0]).toMatchObject({ path });
+  expect(events[1]).toMatchObject({ path });
 });
 
 test("the walk advances past already-settled files to reach a new candidate beyond the budget", async () => {

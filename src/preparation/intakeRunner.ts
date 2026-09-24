@@ -8,6 +8,7 @@ import { LocalFolderAdapter } from "../media/localFolder.js";
 import { persistScannedMedia } from "../media/catalogReconcile.js";
 import { listMediaRoots } from "../media/roots.js";
 import { isPreparationCandidate } from "./repository.js";
+import type { PreparationObserver } from "./events.js";
 import { sourceVersionFromStats, sourceVersionsEqual } from "./sourceVersion.js";
 
 const DERIVED_DIRECTORY_NAMES = ["generated", "derived", "prepared", "transcoded", "transcodes", "renditions"] as const;
@@ -26,6 +27,7 @@ export type PreparationIntakeRunnerOptions = {
   adapter?: LocalFolderAdapter;
   watch?: boolean;
   onError?: (error: unknown, path?: string) => void;
+  onEvent?: PreparationObserver;
 };
 
 export type PreparationIntakeRunner = {
@@ -58,6 +60,7 @@ export function createPreparationIntakeRunner(
   const adapter = options.adapter ?? new LocalFolderAdapter();
   const shouldWatch = options.watch ?? true;
   const onError = options.onError ?? (() => undefined);
+  const onEvent = options.onEvent ?? (() => undefined);
   const watchers = new Map<string, FSWatcher>();
   let timer: NodeJS.Timeout | undefined;
   let inFlight: Promise<void> | undefined;
@@ -200,6 +203,7 @@ export function createPreparationIntakeRunner(
               if (settled.kind !== "settled") continue;
               persistScannedMedia(repositories, [item]);
               existingByPath.set(path, item);
+              onEvent({ event: "intake.settled", path, sourceMediaId: prior.sourceMediaId });
               probedOne = true;
               break;
             }
@@ -208,7 +212,8 @@ export function createPreparationIntakeRunner(
             if (observationsThisPass >= entryBudget) continue;
             observationsThisPass += 1;
             const sourceMediaId = existing?.id ?? idempotencyKey(path);
-            repositories.preparation.observe({ sourceMediaId, source, observedAt: now().toISOString() }, { outputDirectories });
+            const observed = repositories.preparation.observe({ sourceMediaId, source, observedAt: now().toISOString() }, { outputDirectories });
+            if (observed.kind === "observed") onEvent({ event: "intake.observed", path, sourceMediaId });
           } catch (error) {
             onError(error, path);
           }

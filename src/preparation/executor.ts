@@ -1,6 +1,8 @@
 import type { Repositories } from "../db/repositories.js";
 import type { PreparationSourceVersion } from "./models.js";
 import { collectPreflightEvidence, type PreflightEvidence, type PreflightLevel } from "./preflight.js";
+import type { PreparationObserver } from "./events.js";
+import type { PreparationClassification } from "./models.js";
 import { readSourceVersionSync } from "./sourceVersion.js";
 
 /** A finalising preflight depth. `metadata` alone is not enough to classify a source. */
@@ -14,6 +16,7 @@ export type PreparationExecutorOptions = {
   collect?: typeof collectPreflightEvidence;
   readSource?: (path: string) => PreparationSourceVersion | null;
   onError?: (error: unknown) => void;
+  onEvent?: PreparationObserver;
 };
 
 export type PreparationExecutor = {
@@ -50,6 +53,7 @@ export function createPreparationExecutor(
   const collect = options.collect ?? collectPreflightEvidence;
   const readSource = options.readSource ?? readSourceVersionSync;
   const onError = options.onError ?? (() => undefined);
+  const onEvent = options.onEvent ?? (() => undefined);
   let timer: NodeJS.Timeout | undefined;
   let inFlight: Promise<void> | undefined;
   let stopping = false;
@@ -97,6 +101,18 @@ export function createPreparationExecutor(
     }, current, at);
   };
 
+  /** The classification a completed job carries, plus a short reason, for the event. */
+  const outcomeOf = (evidence: PreflightEvidence): { classification: PreparationClassification; reason?: string } => {
+    if (evidence.result === "sampled" || evidence.result === "fully_decoded") return { classification: "ready_original" };
+    if (evidence.result === "decode_error") {
+      return {
+        classification: "quarantined",
+        reason: evidence.metadata.reason ?? evidence.sampledDecode.reason ?? evidence.fullDecode.reason,
+      };
+    }
+    return { classification: "unavailable", reason: evidence.metadata.reason ?? "source unavailable" };
+  };
+
   const runPass = async () => {
     const at = now().toISOString();
     const claimed = repositories.preparation.claimNext((path) => safeRead(readSource, path), at);
@@ -107,11 +123,17 @@ export function createPreparationExecutor(
       evidence = await collect(claimed.source.path, { level });
     } catch (error) {
       // An unexpected executor fault is a processing error, not a media verdict.
-      repositories.preparation.fail(lease, error instanceof Error ? error.message : "preflight failed", now().toISOString());
+      const reason = error instanceof Error ? error.message : "preflight failed";
+      repositories.preparation.fail(lease, reason, now().toISOString());
+      onEvent({ event: "job.failed", path: claimed.source.path, reason });
       onError(error);
       return;
     }
-    finalize(lease, evidence, now().toISOString());
+    const completed = finalize(lease, evidence, now().toISOString());
+    // A stale result is a fenced attempt, not a classification; skip the event.
+    if (completed.kind === "completed") {
+      onEvent({ event: "job.classified", path: claimed.source.path, ...outcomeOf(evidence) });
+    }
   };
 
   const runOnce = async () => {

@@ -5,6 +5,7 @@ import { openDatabase } from "../../src/db/database.js";
 import { createRepositories } from "../../src/db/repositories.js";
 import { createPreparationExecutor } from "../../src/preparation/executor.js";
 import type { PreflightEvidence } from "../../src/preparation/preflight.js";
+import type { PreparationEvent } from "../../src/preparation/events.js";
 
 const SOURCE = { path: "/approved/media/episode.mp4", sizeBytes: "10", modifiedMs: "1720000000000", deviceId: "1", inode: "1" };
 
@@ -111,4 +112,30 @@ test("reports a collector fault as a processing failure without a media verdict"
     state: "failed", classification: null, failureKind: "processing_error",
   });
   expect(onError).toHaveBeenCalledTimes(1);
+});
+
+test("emits a classified event for a completed job", async () => {
+  const { repositories } = await fixture();
+  const events: PreparationEvent[] = [];
+  const runner = createPreparationExecutor(repositories, {
+    collect: (async () => evidence("decode_error")) as never,
+    readSource: () => SOURCE,
+    onEvent: (event) => events.push(event),
+  });
+  await runner.runOnce();
+  expect(events).toContainEqual(
+    expect.objectContaining({ event: "job.classified", path: SOURCE.path, classification: "quarantined" }),
+  );
+});
+
+test("emits a failed event when the collector throws", async () => {
+  const { repositories } = await fixture();
+  const events: PreparationEvent[] = [];
+  const runner = createPreparationExecutor(repositories, {
+    collect: (async () => { throw new Error("boom"); }) as never,
+    readSource: () => SOURCE,
+    onEvent: (event) => events.push(event),
+  });
+  await runner.runOnce();
+  expect(events).toContainEqual(expect.objectContaining({ event: "job.failed", path: SOURCE.path }));
 });

@@ -7,7 +7,7 @@ import {
 import type { ProviderName } from "../acquisition/providerTypes.js";
 import { openDatabase } from "../db/database.js";
 import { createRepositories, type Repositories } from "../db/repositories.js";
-import { logError } from "./logging.js";
+import { logError, logInfo } from "./logging.js";
 import {
   startScheduleRefresh,
   type ScheduleRefresh,
@@ -31,6 +31,7 @@ import {
   createPreparationExecutor,
   type PreparationExecutor,
 } from "../preparation/executor.js";
+import { describePreparationEvent } from "../preparation/events.js";
 import { KeychainCredentialStore } from "../security/keychain.js";
 import type { CredentialStore } from "../security/credentialStore.js";
 import type { ServerContext } from "./context.js";
@@ -330,6 +331,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const makeRunner = options.createIntakeRunner ?? createPreparationIntakeRunner;
       preparationIntake = makeRunner(repositories, {
         onError: (error, path) => logError("preparation-intake", error, path ? { path } : {}),
+        onEvent: (event) => {
+          const { message, context } = describePreparationEvent(event);
+          logInfo("preparation-intake", message, context);
+        },
       });
       void preparationIntake.start().catch((error) => logError("preparation-intake", error));
     }
@@ -339,6 +344,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
       const makeExecutor = options.createExecutor ?? createPreparationExecutor;
       preparationExecutor = makeExecutor(repositories, {
         onError: (error) => logError("preparation-executor", error),
+        onEvent: (event) => {
+          const { message, context } = describePreparationEvent(event);
+          logInfo("preparation-executor", message, context);
+        },
       });
       void preparationExecutor.start().catch((error) => logError("preparation-executor", error));
     }
