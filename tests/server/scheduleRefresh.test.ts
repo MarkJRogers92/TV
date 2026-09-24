@@ -227,7 +227,7 @@ test("generates when no schedule has ever been stored", async () => {
   refresh.stop();
 });
 
-test("reports a refused generation as a warning and does not sync it", async () => {
+test("[SC03] reports a refused generation as a warning and does not sync it", async () => {
   const lines: string[] = [];
   logSink.sink = (line) => lines.push(line);
   // Passed as the implementation rather than set afterwards: the service runs its

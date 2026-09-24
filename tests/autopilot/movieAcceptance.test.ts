@@ -115,7 +115,7 @@ describe("movie acceptance (MV)", () => {
     };
   };
 
-  test("MV04 a completed Saturday opener yields exactly one linked Sunday overnight encore", () => {
+  test("[MV04][MV13] a completed Saturday opener yields exactly one linked Sunday overnight encore", () => {
     const { opener, encore, encores } = resolvePair("2026-09-26", "2026-09-27");
     expect(opener?.role).toBe("weekend-opener");
     expect(encore?.role).toBe("encore");

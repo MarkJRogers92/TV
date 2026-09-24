@@ -185,7 +185,7 @@ describe("matchCompletedFiles exact identity", () => {
     });
   });
 
-  test("returns none when the only remote candidate mimics a canonical extras name", () => {
+  test("[SC10] returns none when the only remote candidate mimics a canonical extras name", () => {
     const plan = matchCompletedFiles(
       [wanted()],
       [

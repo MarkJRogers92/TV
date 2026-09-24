@@ -71,7 +71,7 @@ const catalog = [
   media("next-roseanne", "bumper", 5_000, "marktv-up-next-roseanne"),
 ];
 
-test("replaces complete boundary items with scoped continuity and preserves every timing", () => {
+test("[SC02] replaces complete boundary items with scoped continuity and preserves every timing", () => {
   const result = applyContinuityToSchedule({
     schedule: fixtureSchedule,
     media: catalog,
@@ -450,7 +450,7 @@ test("leaves the break untouched when the channel pool cannot fill it exactly", 
   expect(applied.schedule).toBe(schedule);
 });
 
-test("refuses a second card when a legacy information bumper already owns the break", () => {
+test("[SC11] refuses a second card when a legacy information bumper already owns the break", () => {
   const base = sixtySecondBreak();
   const opening = base.entries[0]!;
   const trailing = base.entries[2]!;

@@ -185,7 +185,7 @@ describe("prepareContinuityMedia", () => {
     expect(result.diagnostics).toEqual([]);
   });
 
-  test("returns the original media when the render tool cannot run", async () => {
+  test("[SC08] returns the original media when the render tool cannot run", async () => {
     const fixture = await openMovieRepositories();
     const outputRoot = await mkdtemp(join(tmpdir(), "marktv-continuity-prepare-"));
     temporaryDirectories.push(outputRoot);

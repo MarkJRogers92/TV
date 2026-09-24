@@ -73,7 +73,7 @@ test("names and ids are stable and differ across schedules and targets", () => {
   ).not.toBe(generatedMediaId(plan()));
 });
 
-test("classifies generated cards as schedule scoped and air ready only when measured", () => {
+test("[SC07] classifies generated cards as schedule scoped and air ready only when measured", () => {
   const value = plan();
   const [asset] = classifyGeneratedContinuityAssets([generatedMedia(value)]);
   expect(asset).toMatchObject({
