@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { openDatabase, type MarkTvDatabase } from "../../src/db/database.js";
+import { recordPartialExposure } from "../../src/continuity/podExposure.js";
 import {
   airingLedgerTables,
   createAiringLedger,
@@ -973,4 +974,150 @@ test("[EP15] a track with no credible position is held rather than reset to epis
   }));
   expect(ledger.trackHold(track.trackKey)?.reason).toBe("ambiguous-position");
   expect(ledger.completionFloor(track.trackKey)).toBeUndefined();
+});
+
+/*
+ * SC06 durability — "Record 30/15/0 seconds for members, not three completed
+ * ads." The computation is covered by tests/continuity/podExposure.test.ts; these
+ * cover the RECORD, which is what the case's verb asks for: an interrupted pod's
+ * per-creative coverage has to survive a restart, be idempotent on replay, and
+ * never be silently overwritten by a conflicting write.
+ */
+
+const F16_POD = [
+  { id: "ad_a", durationMs: 30_000 },
+  { id: "ad_b", durationMs: 30_000 },
+  { id: "ad_c", durationMs: 30_000 },
+];
+const F16_AIRED = { startMs: 0, endMs: 45_000 };
+
+test("[SC06] fixture F16 is recorded durably and reads back as 30/15/0", async () => {
+  const ledger = createAiringLedger(openDatabase(await dataDir()));
+
+  const result = ledger.recordPodExposure({
+    exposureId: "pod-1-airing-1",
+    podId: "pod-1",
+    channelId: "marktv-laughs",
+    members: F16_POD,
+    aired: F16_AIRED,
+    at: AT,
+  });
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.created).toBe(true);
+  const written = result.value;
+  expect(written.members.map((m) => m.airedSeconds)).toEqual([30, 15, 0]);
+  expect(written.members.map((m) => m.completed)).toEqual([true, false, false]);
+  expect(written.podAiredSeconds).toBe(45);
+  expect(written.podCompleted).toBe(false);
+
+  const read = ledger.podExposure("pod-1-airing-1");
+  expect(read).toEqual(written);
+});
+
+test("[SC06] the record stores the tested computation, not a second copy of it", async () => {
+  const ledger = createAiringLedger(openDatabase(await dataDir()));
+  const written = ok(
+    ledger.recordPodExposure({
+      exposureId: "pod-2-airing-1",
+      podId: "pod-2",
+      channelId: "marktv-laughs",
+      members: F16_POD,
+      aired: F16_AIRED,
+      at: AT,
+    }),
+  );
+
+  // Exactly what src/continuity/podExposure.ts computes for the same inputs: the
+  // recorded figures cannot drift from the tested ones.
+  const computed = recordPartialExposure(F16_POD, F16_AIRED);
+  expect(written.members).toEqual(computed.members);
+  expect(written.podAiredMs).toBe(computed.podAiredMs);
+  expect(written.podCompleted).toBe(computed.podCompleted);
+});
+
+test("[SC06] an interrupted pod's coverage survives a restart", async () => {
+  const dir = await dataDir();
+  const first = createAiringLedger(openDatabase(dir));
+  ok(
+    first.recordPodExposure({
+      exposureId: "pod-3-airing-1",
+      podId: "pod-3",
+      channelId: "marktv-laughs",
+      members: F16_POD,
+      aired: F16_AIRED,
+      at: AT,
+    }),
+  );
+
+  const restarted = createAiringLedger(openDatabase(dir));
+  const after = restarted.podExposure("pod-3-airing-1");
+  expect(after?.members.map((m) => m.airedSeconds)).toEqual([30, 15, 0]);
+  expect(after?.members[2]?.completed).toBe(false);
+});
+
+test("[SC06] replaying the same exposure is idempotent, and a conflict is refused", async () => {
+  // openDatabase() opens a NEW connection to the same directory, so this is also
+  // the cross-connection case: one connection's write is visible to the other.
+  const ledger = createAiringLedger(openDatabase(await dataDir()));
+  const input = {
+    exposureId: "pod-4-airing-1",
+    podId: "pod-4",
+    channelId: "marktv-laughs",
+    members: F16_POD,
+    aired: F16_AIRED,
+    at: AT,
+  };
+  const first = ledger.recordPodExposure(input);
+  expect(first.ok).toBe(true);
+  if (!first.ok) return;
+  expect(first.created).toBe(true);
+
+  const replay = ledger.recordPodExposure(input);
+  expect(replay.ok).toBe(true);
+  if (!replay.ok) return;
+  expect(replay.created).toBe(false);
+  expect(replay.value).toEqual(first.value);
+
+  // The same id carrying different evidence is a conflict, not a silent rewrite:
+  // a pod that aired further must be recorded as its own exposure, because
+  // overwriting the first would erase what actually aired.
+  const longer = refused(
+    ledger.recordPodExposure({ ...input, aired: { startMs: 0, endMs: 60_000 } }),
+  );
+  expect(longer.reason).toBe("id-conflict");
+  expect(ledger.podExposure("pod-4-airing-1")?.members[2]?.airedSeconds).toBe(0);
+});
+
+test("[SC06] every airing of a pod is recorded, in order", async () => {
+  const ledger = createAiringLedger(openDatabase(await dataDir()));
+  ok(
+    ledger.recordPodExposure({
+      exposureId: "pod-5-airing-1",
+      podId: "pod-5",
+      channelId: "marktv-laughs",
+      members: F16_POD,
+      aired: { startMs: 0, endMs: 45_000 },
+      at: AT,
+    }),
+  );
+  ok(
+    ledger.recordPodExposure({
+      exposureId: "pod-5-airing-2",
+      podId: "pod-5",
+      channelId: "marktv-laughs",
+      members: F16_POD,
+      aired: { startMs: 0, endMs: 90_000 },
+      at: "2026-09-23T06:00:00.000Z",
+    }),
+  );
+
+  const airings = ledger.podExposuresForPod("pod-5");
+  expect(airings.map((a) => [a.exposureId, a.podAiredSeconds])).toEqual([
+    ["pod-5-airing-1", 45],
+    ["pod-5-airing-2", 90],
+  ]);
+  expect(airings[1]?.podCompleted).toBe(true);
+  // And nothing was recorded against a different pod.
+  expect(ledger.podExposuresForPod("pod-6")).toEqual([]);
 });

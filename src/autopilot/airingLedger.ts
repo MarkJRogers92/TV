@@ -1,4 +1,10 @@
 import type { MarkTvDatabase } from "../db/database.js";
+import {
+  recordPartialExposure,
+  type AiredInterval,
+  type MemberExposure,
+  type PodMember,
+} from "../continuity/podExposure.js";
 
 /*
  * Durable airing ledger (Stage 1, additive).
@@ -44,6 +50,7 @@ export const airingLedgerTables = [
   "airing_aired_source_intervals",
   "airing_active_occurrences",
   "airing_completion_floors",
+  "airing_pod_member_exposure",
 ] as const;
 
 export type TrackHoldReason = "missing-position" | "ambiguous-position";
@@ -88,6 +95,38 @@ export type TrackPosition = {
 export type AiringWriteResult<T> =
   | { ok: true; created: boolean; value: T }
   | { ok: false; reason: AiringRefusalReason; detail: string };
+
+/** One recorded exposure write. `at` defaults to now. */
+export type PodExposureInput = {
+  /** Unique per pod airing; a replay carries the same id. */
+  exposureId: string;
+  podId: string;
+  channelId: string;
+  /** The pod's members in playback order - the layout that aired. */
+  members: readonly PodMember[];
+  /** The part of the pod that actually aired. */
+  aired: AiredInterval;
+  at?: string;
+};
+
+/**
+ * What was recorded for one pod airing: the per-member seconds and completion
+ * flags, plus the pod-level totals. `members` is exactly the shape
+ * `recordPartialExposure` returns, so a stored record reads back as the
+ * computation's output.
+ */
+export type PodExposureRecord = {
+  exposureId: string;
+  podId: string;
+  channelId: string;
+  airedStartMs: number;
+  airedEndMs: number;
+  members: MemberExposure[];
+  podAiredMs: number;
+  podAiredSeconds: number;
+  podCompleted: boolean;
+  recordedAt: string;
+};
 
 export type SeriesTrackRecord = {
   trackKey: string;
@@ -908,6 +947,115 @@ export function createAiringLedger(database: MarkTvDatabase) {
     recordInterval("airing_aired_source_intervals", "aired_at", input),
   );
 
+  /**
+   * Durable per-creative coverage for a pod (SC06).
+   *
+   * The computation lives in `src/continuity/podExposure.ts` and is NOT
+   * duplicated here: this persists its result, so the recorded figures and the
+   * tested figures cannot drift apart. That matters because the case is about
+   * honesty - "record 30/15/0 seconds for members, not three completed ads" - and
+   * a second implementation of the arithmetic would be a second chance to get it
+   * wrong.
+   *
+   * Replaying an identical exposure is idempotent; the same id carrying
+   * different evidence is refused as `id-conflict` rather than overwriting the
+   * record, matching every other write in this ledger. A refusal leaves the
+   * database unchanged.
+   */
+  /**
+   * Reads one stored exposure. Returns `unreadable` rather than throwing or
+   * reporting "absent", because treating a corrupt row as absent would let the
+   * next write replace it - the one outcome this record must not allow. Callers
+   * refuse the write instead, which leaves the database unchanged.
+   */
+  const readPodExposure = (
+    exposureId: string,
+  ): { record?: PodExposureRecord; unreadable: boolean } => {
+    const row = database
+      .prepare("SELECT json FROM airing_pod_member_exposure WHERE exposure_id = ?")
+      .get(exposureId) as { json?: string } | undefined;
+    if (row?.json === undefined) {
+      return { unreadable: false };
+    }
+    try {
+      return { record: JSON.parse(row.json) as PodExposureRecord, unreadable: false };
+    } catch {
+      return { unreadable: true };
+    }
+  };
+
+  const podExposure = (exposureId: string): PodExposureRecord | undefined =>
+    readPodExposure(exposureId).record;
+
+  const podExposuresForPod = (podId: string): PodExposureRecord[] =>
+    (
+      database
+        .prepare(
+          "SELECT json FROM airing_pod_member_exposure WHERE pod_id = ? ORDER BY recorded_at, exposure_id",
+        )
+        .all(podId) as Array<{ json: string }>
+    ).flatMap((row) => {
+      try {
+        return [JSON.parse(row.json) as PodExposureRecord];
+      } catch {
+        return [];
+      }
+    });
+
+  const recordPodExposure = database.transaction((input: PodExposureInput) => {    const at = input.at ?? new Date().toISOString();
+    const computed = recordPartialExposure(input.members, input.aired);
+    const existing = readPodExposure(input.exposureId);
+    if (existing.unreadable) {
+      return refusal<PodExposureRecord>(
+        "id-conflict",
+        `${input.exposureId} exists but is unreadable; refusing to overwrite it`,
+      );
+    }
+    if (existing.record !== undefined) {
+      const same =
+        existing.record.podId === input.podId &&
+        existing.record.channelId === input.channelId &&
+        existing.record.airedStartMs === input.aired.startMs &&
+        existing.record.airedEndMs === input.aired.endMs &&
+        JSON.stringify(existing.record.members) ===
+          JSON.stringify(computed.members);
+      if (!same) {
+        return refusal<PodExposureRecord>(
+          "id-conflict",
+          `${input.exposureId} already recorded`,
+        );
+      }
+      return accepted(existing.record, false);
+    }
+    const record: PodExposureRecord = {
+      exposureId: input.exposureId,
+      podId: input.podId,
+      channelId: input.channelId,
+      airedStartMs: input.aired.startMs,
+      airedEndMs: input.aired.endMs,
+      members: computed.members,
+      podAiredMs: computed.podAiredMs,
+      podAiredSeconds: computed.podAiredSeconds,
+      podCompleted: computed.podCompleted,
+      recordedAt: at,
+    };
+    database
+      .prepare(
+        "INSERT INTO airing_pod_member_exposure(exposure_id, pod_id, channel_id, aired_start_ms, aired_end_ms, pod_aired_ms, recorded_at, json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        record.exposureId,
+        record.podId,
+        record.channelId,
+        record.airedStartMs,
+        record.airedEndMs,
+        record.podAiredMs,
+        record.recordedAt,
+        JSON.stringify(record),
+      );
+    return accepted(record, true);
+  });
+
   const beginOccurrence = database.transaction((input: {
     trackKey: string;
     occurrenceKey: string;
@@ -1243,6 +1391,9 @@ export function createAiringLedger(database: MarkTvDatabase) {
     attemptsFor,
     recordPublishedInterval,
     recordAiredInterval,
+    recordPodExposure,
+    podExposure,
+    podExposuresForPod,
     publishedIntervals,
     airedIntervals,
     beginOccurrence,

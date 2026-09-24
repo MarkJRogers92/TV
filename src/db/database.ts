@@ -302,6 +302,25 @@ function migrate(database: MarkTvDatabase) {
       updated_at TEXT NOT NULL,
       json TEXT NOT NULL
     );
+    -- Per-creative coverage for a pod that may not have finished (SC06). One row
+    -- per exposure, with the member figures carried in json so a replayed write
+    -- can be compared whole; the columns exist for querying by pod/channel/time
+    -- without parsing. Keyed by exposure_id, so the same id carrying different
+    -- evidence is refused as an id-conflict rather than overwriting the record.
+    CREATE TABLE IF NOT EXISTS airing_pod_member_exposure (
+      exposure_id TEXT PRIMARY KEY,
+      pod_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      aired_start_ms INTEGER NOT NULL,
+      aired_end_ms INTEGER NOT NULL,
+      pod_aired_ms INTEGER NOT NULL,
+      recorded_at TEXT NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS airing_pod_member_exposure_pod
+      ON airing_pod_member_exposure(pod_id);
+    CREATE INDEX IF NOT EXISTS airing_pod_member_exposure_channel
+      ON airing_pod_member_exposure(channel_id, recorded_at);
   `);
 
   /*
