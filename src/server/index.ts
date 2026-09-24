@@ -43,6 +43,10 @@ const app = await buildApp({
   // scan/probe cannot perturb what they assert.
   preparationIntake: process.env.MARKTV_PREPARATION_INTAKE !== "0",
   preparationExecutor: process.env.MARKTV_PREPARATION_EXECUTOR !== "0",
+  // Stage 4 observe-only watchdog. Off unless a streams root is configured, so it
+  // is a deliberate opt-in rather than a default background load.
+  healthShadow: Boolean(process.env.MARKTV_HEALTH_SHADOW_ROOT),
+  healthShadowRoot: process.env.MARKTV_HEALTH_SHADOW_ROOT,
 });
 if (process.env.MARKTV_DEV !== "1") {
   await registerStaticUi(app, join(process.cwd(), "dist"));

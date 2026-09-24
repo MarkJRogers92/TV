@@ -32,6 +32,7 @@ import {
   type PreparationExecutor,
 } from "../preparation/executor.js";
 import { describePreparationEvent } from "../preparation/events.js";
+import { createHealthShadow, type HealthShadow } from "../autopilot/healthShadow.js";
 import { KeychainCredentialStore } from "../security/keychain.js";
 import type { CredentialStore } from "../security/credentialStore.js";
 import type { ServerContext } from "./context.js";
@@ -94,6 +95,14 @@ export type BuildAppOptions = {
   preparationExecutor?: boolean;
   /** Test seam for the preparation executor; defaults to the real implementation. */
   createExecutor?: typeof createPreparationExecutor;
+  /**
+   * Observe-only continuity watchdog (Stage 4). Off by default; it samples each
+   * channel's published playlist and LOGS the continuity classifier's verdict
+   * without acting on it, so thresholds can be calibrated before any restart.
+   */
+  healthShadow?: boolean;
+  /** Root of the per-channel HLS stream directories for the shadow watchdog. */
+  healthShadowRoot?: string;
 };
 
 const IPV4_LOOPBACK = /^127(?:\.\d{1,3}){3}$/;
@@ -294,6 +303,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   let scheduleRefresh: ScheduleRefresh | null = null;
   let preparationIntake: PreparationIntakeRunner | null = null;
   let preparationExecutor: PreparationExecutor | null = null;
+  let healthShadow: HealthShadow | null = null;
   app.addHook("onClose", async () => {
     scheduleRefresh?.stop();
     // Stop the intake scanner before the database handle closes: its poll timer
@@ -302,6 +312,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
     // Stop the preparation executor after the scanner, before the DB closes, so
     // a probe in flight cannot write a job record into a closed handle.
     await preparationExecutor?.stop();
+    // Stop the observe-only watchdog; it only logs, but its timer must not
+    // outlive the process either.
+    await healthShadow?.stop();
     // The coordinator owns every durable acquisition write, so stop it
     // (clearing its timer, aborting local transfers, and persisting resumable
     // state) before the database handle is closed.
@@ -353,6 +366,22 @@ export async function buildApp(options: BuildAppOptions = {}) {
       });
       void preparationExecutor.start().catch((error) => logError("preparation-executor", error));
     }
+    if (options.healthShadow && options.healthShadowRoot) {
+      // Observe-only: the classifier's verdict is logged, never acted on.
+      healthShadow = createHealthShadow(repositories, {
+        streamsRoot: options.healthShadowRoot,
+        onResult: (result) =>
+          logInfo("health-shadow", "Continuity health (observe-only)", {
+            channelId: result.channelId,
+            health: result.health,
+            incident: result.incident,
+            recommendation: result.recommendation,
+          }),
+        onError: (error, channelId) =>
+          logError("health-shadow", error, channelId ? { channelId } : {}),
+      });
+      void healthShadow.start().catch((error) => logError("health-shadow", error));
+    }
     if (options.scheduleRefresh) {
       // Not awaited: a refresh that has to generate takes minutes, and serving must
       // not wait on it.
@@ -373,6 +402,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     // leaking them.
     await preparationIntake?.stop().catch(() => undefined);
     await preparationExecutor?.stop().catch(() => undefined);
+    await healthShadow?.stop().catch(() => undefined);
     await coordinator.stop().catch(() => undefined);
     repositories.close();
     throw error;
