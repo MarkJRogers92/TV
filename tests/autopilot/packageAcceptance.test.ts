@@ -39,6 +39,11 @@ import {
 } from "../../src/domain/movieProgramming.js";
 import type { MovieOccurrence } from "../../src/domain/movieProgramming.js";
 import { evaluateContinuityHealth } from "../../src/autopilot/continuityHealth.js";
+import {
+  cleanupRepositoryFixtures,
+  makeScheduleService,
+  openMovieRepositories,
+} from "../support/repositoryFixture.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -48,6 +53,7 @@ afterEach(async () => {
       .splice(0)
       .map((directory) => rm(directory, { recursive: true, force: true })),
   );
+  await cleanupRepositoryFixtures();
 });
 
 async function newLedger() {
@@ -74,6 +80,155 @@ function scenario(id: string) {
   if (!item) throw new Error(`missing package scenario ${id}`);
   return item;
 }
+
+async function compileDstMovieScenario(
+  scenarioId: "F14" | "F15",
+  override?: {
+    date?: string;
+    resolvedTarget?: string;
+    nowInstants?: [string, string, string];
+  },
+) {
+  const fixtureScenario = scenario(scenarioId);
+  const given = fixtureScenario.given as {
+    timezone: string;
+    nightly_slot_local_date: string;
+    target: string;
+  };
+  const fixtureExpected = fixtureScenario.expected as {
+    resolved_target: string;
+    slot_count: number;
+  };
+  const date = override?.date ?? given.nightly_slot_local_date;
+  const resolvedTarget = DateTime.fromISO(
+    override?.resolvedTarget ?? fixtureExpected.resolved_target,
+    { setZone: true },
+  );
+  const expectedStart = resolvedTarget.toUTC().toISO();
+  const expectedLocalStart = resolvedTarget
+    .setZone(given.timezone)
+    .toFormat("HH:mm");
+  const localDayStart = DateTime.fromISO(date, { zone: given.timezone }).startOf("day");
+  const expectedDayDurationMs = localDayStart
+    .plus({ days: 1 })
+    .diff(localDayStart)
+    .as("milliseconds");
+  const defaultNow = `${date}T12:00:00.000Z`;
+  const nowInstants = override?.nowInstants ?? [defaultNow, defaultNow, defaultNow];
+  let nowIndex = 0;
+  const now = () => new Date(nowInstants[nowIndex]);
+  const fixture = await openMovieRepositories({
+    timezone: given.timezone,
+    programming: { nightlyAnchor: given.target },
+    now,
+  });
+  const channel = fixture.fixture.channel;
+  let closeRepositories = fixture.close;
+  try {
+    if (override?.nowInstants) {
+      const beforeRollback = DateTime.fromISO(nowInstants[0], { setZone: true })
+        .setZone(given.timezone);
+      const afterRollback = DateTime.fromISO(nowInstants[1], { setZone: true })
+        .setZone(given.timezone);
+      expect(beforeRollback.toFormat("HH:mm")).toBe("01:55");
+      expect(beforeRollback.offset).toBe(-300);
+      expect(afterRollback.toFormat("HH:mm")).toBe("01:05");
+      expect(afterRollback.offset).toBe(-360);
+    }
+
+    const assertNightly = (result: Awaited<ReturnType<typeof fixture.service.generate>>) => {
+      expect(result.ok).toBe(true);
+      if (!result.ok) return undefined;
+      expect(result.schedule.durationMs).toBe(expectedDayDurationMs);
+      const nightly = result.schedule.entries.filter(
+        (entry) => entry.movieOccurrenceKey === `${date}:nightly`,
+      );
+      expect(nightly).toHaveLength(fixtureExpected.slot_count);
+      expect(nightly[0]).toMatchObject({
+        start: expectedStart,
+        localStart: expectedLocalStart,
+      });
+      return nightly[0];
+    };
+
+    const first = await fixture.service.generate(channel, date);
+    const firstNightly = assertNightly(first);
+    if (!firstNightly) return;
+
+    const assignment = fixture.repositories.movieOccurrences.get(
+      channel.id,
+      date,
+      "nightly",
+    );
+    expect(assignment?.date).toBe(date);
+    expect(firstNightly.mediaId).toBe(assignment?.mediaId);
+
+    // F15's supplied events cross the repeated 01:00 hour. Recompile once
+    // after the wall clock moves backward without closing the repository.
+    nowIndex = 1;
+    const afterRollback = await fixture.service.generate(channel, date);
+    const afterRollbackNightly = assertNightly(afterRollback);
+    expect(afterRollbackNightly?.mediaId).toBe(assignment?.mediaId);
+    expect(
+      fixture.repositories.movieOccurrences
+        .listForDate(channel.id, date)
+        .filter((occurrence) => occurrence.position === "nightly"),
+    ).toHaveLength(fixtureExpected.slot_count);
+
+    // Closing and reopening the repository models scheduler restart. Recompile
+    // after the rollback through the persisted occurrence ledger.
+    nowIndex = 2;
+    const reopened = fixture.reopen();
+    closeRepositories = () => reopened.close();
+    const restarted = await makeScheduleService(
+      reopened,
+      fixture.dataDir,
+      now,
+    ).generate(channel, date);
+    const restartedNightly = assertNightly(restarted);
+    expect(restartedNightly?.mediaId).toBe(assignment?.mediaId);
+    expect(
+      reopened.movieOccurrences
+        .listForDate(channel.id, date)
+        .filter((occurrence) => occurrence.position === "nightly"),
+    ).toHaveLength(fixtureExpected.slot_count);
+  } finally {
+    closeRepositories();
+  }
+}
+
+test("package F14: spring 02:00 fixture target is scheduled once at its first valid instant", async () => {
+  await compileDstMovieScenario("F14");
+});
+
+test("package F15: fall fixture creates one overnight movie through scheduler restart", async () => {
+  await compileDstMovieScenario("F15", {
+    nowInstants: [
+      "2026-11-01T06:55:00.000Z",
+      "2026-11-01T07:05:00.000Z",
+      "2026-11-01T07:05:00.000Z",
+    ],
+  });
+});
+
+test("2027 spring 02:00 movie airs once at the first valid instant", async () => {
+  await compileDstMovieScenario("F14", {
+    date: "2027-03-14",
+    resolvedTarget: "2027-03-14T03:00:00-05:00",
+  });
+});
+
+test("2027 fall transition does not duplicate the overnight movie after restart", async () => {
+  await compileDstMovieScenario("F15", {
+    date: "2027-11-07",
+    resolvedTarget: "2027-11-07T02:00:00-06:00",
+    nowInstants: [
+      "2027-11-07T06:55:00.000Z",
+      "2027-11-07T07:05:00.000Z",
+      "2027-11-07T07:05:00.000Z",
+    ],
+  });
+});
 
 test("package F01: restart restores fixture active occurrence, offset, and ordered reservations", async () => {
   const fixture = scenario("F01");
