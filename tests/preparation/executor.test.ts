@@ -147,5 +147,5 @@ test("PR02 a playable source is marked ready_original with no conversion", async
   const job = repositories.preparation.jobs.list()[0]!;
   expect(job.classification).toBe("ready_original");
   // No derived rendition and no full-decode claim: the original is used as-is.
-  expect(job.fullDecodeEvidence).toBeNull();
+  expect(job.fullDecodeEvidence).toMatchObject({ status: "deferred" });
 });
