@@ -8,6 +8,11 @@ import {
   createAiringLedger,
   type AiringWriteResult,
 } from "../../src/autopilot/airingLedger.js";
+import {
+  createSourceContinuation,
+  durablePublishedContiguousEnd,
+  type ContinuationResult,
+} from "../../src/autopilot/sourceContinuation.js";
 import type { MediaItem, Pool } from "../../src/domain/models.js";
 import { selectCandidate } from "../../src/scheduler/select.js";
 import { DateTime } from "luxon";
@@ -48,12 +53,14 @@ async function newLedger() {
   return { directory, database, ledger: createAiringLedger(database) };
 }
 
-function accepted<T>(result: AiringWriteResult<T>): T {
+type PackageWriteResult<T> = AiringWriteResult<T> | ContinuationResult<T>;
+
+function accepted<T>(result: PackageWriteResult<T>): T {
   if (!result.ok) throw new Error(`expected success, got ${result.reason}: ${result.detail}`);
   return result.value;
 }
 
-function refused<T>(result: AiringWriteResult<T>) {
+function refused<T>(result: PackageWriteResult<T>) {
   if (result.ok) throw new Error("expected a refusal");
   return result;
 }
@@ -936,4 +943,260 @@ test("package F08: confirmed stuck continuation recommends recovery for the affe
   expect(actualAction === "wait_until_next_program_slot").toBe(
     expected.wait_until_next_program_slot,
   );
+});
+
+/** Registers one occurrence of a single-source item for the continuation tests. */
+function continuationFixture(
+  ledger: ReturnType<typeof createAiringLedger>,
+  options: {
+    channelId: string;
+    scope: string;
+    itemKey: string;
+    occurrenceKey: string;
+    sourceMediaId: string;
+    sourceEndMs: number;
+  },
+) {
+  const track = accepted(
+    ledger.ensureSeriesTrack({
+      channelId: options.channelId,
+      seriesTitle: options.scope,
+      separateTrack: options.scope,
+    }),
+  );
+  accepted(
+    ledger.ensureEpisodeIdentity({
+      episodeKey: options.itemKey,
+      trackKey: track.trackKey,
+      title: options.scope,
+      ordinal: 1,
+    }),
+  );
+  accepted(
+    ledger.reserveOccurrence({
+      occurrenceKey: options.occurrenceKey,
+      trackKey: track.trackKey,
+      episodeKey: options.itemKey,
+      channelId: options.channelId,
+      plannedStart: "2026-09-24T00:00:00.000Z",
+      plannedEnd: "2026-09-24T01:30:00.000Z",
+      sourceMediaId: options.sourceMediaId,
+      sourceStartMs: 0,
+      sourceEndMs: options.sourceEndMs,
+    }),
+  );
+  return track;
+}
+
+test("package F09: chunk completion continues the same film at its durable published boundary", async () => {
+  const fixture = scenario("F09");
+  const given = fixture.given as {
+    occurrence: string;
+    film_source_duration_seconds: number;
+    last_contiguous_published_source_end_seconds: number;
+    chunk_source_begin_seconds: number;
+    chunk_source_end_seconds: number;
+    worker_exit_code: number;
+  };
+  const expected = fixture.expected as {
+    next_requested_source_begin_seconds: number;
+    same_occurrence: string;
+    film_completed: boolean;
+    restart_at_source_zero: boolean;
+  };
+  expect(given.occurrence).toBe(expected.same_occurrence);
+  expect(given.last_contiguous_published_source_end_seconds)
+    .toBe(expected.next_requested_source_begin_seconds);
+
+  const { database } = await newLedger();
+  const continuation = createSourceContinuation(database);
+  const ledger = continuation.ledger;
+  const occurrenceKey = expected.same_occurrence;
+  const track = continuationFixture(ledger, {
+    channelId: "package-f09-channel",
+    scope: "Package F09 Feature",
+    itemKey: "package-f09-feature",
+    occurrenceKey,
+    sourceMediaId: "package-f09-feature-source",
+    sourceEndMs: given.film_source_duration_seconds * 1_000,
+  });
+  accepted(
+    ledger.beginOccurrence({
+      trackKey: track.trackKey,
+      occurrenceKey,
+      attemptId: "package-f09-attempt",
+      sourceMediaId: "package-f09-feature-source",
+      sourceOffsetMs: 0,
+    }),
+  );
+
+  // The worker exited zero, but a worker exit proves nothing about content. With
+  // no durable publication the continuation holds instead of restarting the film
+  // at source zero.
+  expect(given.worker_exit_code).toBe(0);
+  expect(refused(continuation.planContinuation({ occurrenceKey })).reason)
+    .toBe("insufficient-evidence");
+  expect(ledger.activeOccurrence(track.trackKey)?.occurrenceKey).toBe(expected.same_occurrence);
+  expect(ledger.activeOccurrence(track.trackKey)?.sourceOffsetMs).toBe(0);
+
+  // Two durably published contiguous chunks place the boundary at the end of the
+  // whole contiguous run, not at the last chunk's start.
+  accepted(
+    ledger.recordPublishedInterval({
+      intervalId: "package-f09-chunk-1",
+      occurrenceKey,
+      sourceStartMs: 0,
+      sourceEndMs: given.chunk_source_begin_seconds * 1_000,
+      publishedAt: "2026-09-24T00:02:00.000Z",
+      evidence: "fixture-chunk-1-durably-published",
+    }),
+  );
+  accepted(
+    ledger.recordPublishedInterval({
+      intervalId: "package-f09-chunk-2",
+      occurrenceKey,
+      sourceStartMs: given.chunk_source_begin_seconds * 1_000,
+      sourceEndMs: given.chunk_source_end_seconds * 1_000,
+      publishedAt: "2026-09-24T00:03:00.000Z",
+      evidence: "fixture-chunk-2-durably-published",
+    }),
+  );
+
+  const plan = accepted(continuation.planContinuation({ occurrenceKey }));
+  expect(plan.occurrenceKey).toBe(expected.same_occurrence);
+  expect(plan.requestedSourceOffsetMs).toBe(expected.next_requested_source_begin_seconds * 1_000);
+  expect(plan.requestedSourceOffsetMs).not.toBe(0);
+  expect(plan.requestedSourceOffsetMs).toBeLessThan(given.film_source_duration_seconds * 1_000);
+  expect(ledger.evaluateOccurrence(occurrenceKey)?.complete).toBe(expected.film_completed);
+  expect(ledger.evaluateOccurrence(occurrenceKey)?.complete).toBe(false);
+  expect(plan.restartAtSourceZero).toBe(expected.restart_at_source_zero);
+  expect(plan.restartAtSourceZero).toBe(false);
+
+  // Applying the plan keeps the same occurrence and advances that occurrence's
+  // source offset; no other occurrence is started.
+  accepted(
+    ledger.advanceOccurrenceOffset({
+      trackKey: track.trackKey,
+      sourceOffsetMs: plan.requestedSourceOffsetMs,
+    }),
+  );
+  const active = ledger.activeOccurrence(track.trackKey);
+  expect(active?.occurrenceKey).toBe(expected.same_occurrence);
+  expect(active?.sourceOffsetMs).toBe(expected.next_requested_source_begin_seconds * 1_000);
+  database.close();
+});
+
+test("source continuation stops at the last published gap and never counts an aired-only interval", async () => {
+  const { database } = await newLedger();
+  const continuation = createSourceContinuation(database);
+  const ledger = continuation.ledger;
+  const occurrenceKey = "package-gap-occurrence";
+  continuationFixture(ledger, {
+    channelId: "package-gap-channel",
+    scope: "Package Gap Feature",
+    itemKey: "package-gap-feature",
+    occurrenceKey,
+    sourceMediaId: "package-gap-source",
+    sourceEndMs: 1_800_000,
+  });
+  accepted(
+    ledger.recordPublishedInterval({
+      intervalId: "package-gap-published-a",
+      occurrenceKey,
+      sourceStartMs: 0,
+      sourceEndMs: 120_000,
+      evidence: "fixture-chunk-published",
+    }),
+  );
+  accepted(
+    ledger.recordPublishedInterval({
+      intervalId: "package-gap-published-b",
+      occurrenceKey,
+      sourceStartMs: 240_000,
+      sourceEndMs: 360_000,
+      evidence: "fixture-chunk-published",
+    }),
+  );
+  // An aired observation is not published coverage and cannot bridge the gap.
+  accepted(
+    ledger.recordAiredInterval({
+      intervalId: "package-gap-aired",
+      occurrenceKey,
+      sourceStartMs: 120_000,
+      sourceEndMs: 240_000,
+      evidence: "fixture-player-observation",
+    }),
+  );
+
+  const plan = accepted(continuation.planContinuation({ occurrenceKey }));
+  expect(plan.requestedSourceOffsetMs).toBe(120_000);
+  expect(plan.restartAtSourceZero).toBe(false);
+
+  database.close();
+});
+
+test("source continuation requires matching published coverage and does not credit aired completion", async () => {
+  const { database } = await newLedger();
+  const continuation = createSourceContinuation(database);
+  const ledger = continuation.ledger;
+  const occurrenceKey = "package-media-occurrence";
+  continuationFixture(ledger, {
+    channelId: "package-media-channel",
+    scope: "Package Media Feature",
+    itemKey: "package-media-feature",
+    occurrenceKey,
+    sourceMediaId: "package-media-source",
+    sourceEndMs: 1_800_000,
+  });
+
+  expect(refused(continuation.planContinuation({ occurrenceKey: "package-absent" })).reason)
+    .toBe("unknown-occurrence");
+
+  // Publication for a different source media is not coverage of this occurrence.
+  accepted(
+    ledger.recordPublishedInterval({
+      intervalId: "package-media-other",
+      occurrenceKey,
+      sourceMediaId: "package-media-other-source",
+      sourceStartMs: 0,
+      sourceEndMs: 600_000,
+      evidence: "fixture-other-media-published",
+    }),
+  );
+  expect(refused(continuation.planContinuation({ occurrenceKey })).reason)
+    .toBe("insufficient-evidence");
+
+  // Full contiguous publication of this occurrence's own media covers its source.
+  accepted(
+    ledger.recordPublishedInterval({
+      intervalId: "package-media-full",
+      occurrenceKey,
+      sourceStartMs: 0,
+      sourceEndMs: 1_800_000,
+      evidence: "fixture-full-published",
+    }),
+  );
+  const result = refused(continuation.planContinuation({ occurrenceKey }));
+  expect(result.reason).toBe("source-fully-published");
+  // Full producer publication alone is not proof that anyone aired the source,
+  // and source exhaustion must not produce an empty-input worker request.
+  expect(ledger.evaluateOccurrence(occurrenceKey)?.complete).toBe(false);
+  database.close();
+});
+
+test("durablePublishedContiguousEnd joins touching intervals, clips, and stops at gaps", () => {
+  const intervals = [
+    { sourceStartMs: 240_000, sourceEndMs: 360_000 },
+    { sourceStartMs: 0, sourceEndMs: 120_000 },
+    { sourceStartMs: 120_000, sourceEndMs: 240_000 },
+  ];
+  expect(durablePublishedContiguousEnd(intervals, 0, 1_800_000)).toBe(360_000);
+  expect(durablePublishedContiguousEnd(intervals, 0, 200_000)).toBe(200_000);
+  expect(durablePublishedContiguousEnd(intervals, 100_000, 1_800_000)).toBe(360_000);
+  expect(durablePublishedContiguousEnd([{ sourceStartMs: 0, sourceEndMs: 5_000_000 }], 0, 1_800_000))
+    .toBe(1_800_000);
+  expect(durablePublishedContiguousEnd([{ sourceStartMs: 60_000, sourceEndMs: 90_000 }], 0, 1_800_000))
+    .toBe(0);
+  expect(durablePublishedContiguousEnd([], 0, 1_800_000)).toBe(0);
+  expect(durablePublishedContiguousEnd(intervals, 0, 0)).toBe(0);
 });
