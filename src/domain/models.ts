@@ -200,6 +200,15 @@ export const movieProgrammingSchema = z.object({
   bridgeMaxSeconds: z.number().positive().default(120),
   /** Rolling preview/coverage horizon; never shorter than a week. */
   lookaheadDays: z.number().int().min(7).max(30).default(8),
+  /**
+   * Whether a weekend opening film repeats in the following overnight slot.
+   *
+   * R05: "Sunday 2 AM repeats Saturday's opener" (and Monday repeats Sunday's) is
+   * the one pre-approved ordinary-program exception. It is a visible, reversible
+   * setting rather than a hidden rule; turning it off affects only uncommitted
+   * future reservations.
+   */
+  weekendOpenerEncoreEnabled: z.boolean().default(true),
   breakPolicy: movieProgrammingBreakSchema.default({
     targetMinutes: 2,
     maxMinutes: 2.5,

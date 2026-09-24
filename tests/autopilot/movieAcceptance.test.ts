@@ -7,7 +7,7 @@
 import { DateTime } from "luxon";
 import { describe, expect, test } from "vitest";
 import type { MovieOccurrence } from "../../src/domain/movieProgramming.js";
-import { movieOccurrenceKey } from "../../src/domain/movieProgramming.js";
+import { movieOccurrenceKey, movieOccurrenceSpecs } from "../../src/domain/movieProgramming.js";
 import {
   anchorInstant,
   assignMovieOccurrences,
@@ -198,6 +198,24 @@ describe("movie acceptance (MV)", () => {
     const instant = anchorInstant("2027-11-07", "02:00", "America/Chicago");
     expect(instant.hour).toBe(2);
     expect(instant.toUTC().hour).toBe(8); // 02:00 CST == 08:00Z
+  });
+
+  test("MV04b the weekend opener encore is a reversible setting", () => {
+    const { channel } = movieFixture();
+    const sunday = "2026-09-27"; // day 0
+    const withEncore = movieOccurrenceSpecs(sunday, channel.movieProgramming!);
+    expect(withEncore.find(({ position }) => position === "nightly")?.role).toBe(
+      "encore",
+    );
+
+    const without = movieOccurrenceSpecs(sunday, {
+      ...channel.movieProgramming!,
+      weekendOpenerEncoreEnabled: false,
+    });
+    const nightly = without.find(({ position }) => position === "nightly");
+    expect(nightly?.role).toBe("nightly");
+    expect(nightly?.consumes).toBe(true);
+    expect(nightly?.encoreOf).toBeUndefined();
   });
 
   test("MV09 a small library still plays a diverse cycle and is not starved by the floor", () => {

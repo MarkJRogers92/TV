@@ -140,7 +140,7 @@ export function movieOccurrenceSpecs(
   const day = weekday(date);
   const previousDate = calendarDate(date).minus({ days: 1 }).toISODate()!;
   const specs: MovieOccurrenceSpec[] = [];
-  if (day === 0 || day === 1) {
+  if ((day === 0 || day === 1) && programming.weekendOpenerEncoreEnabled) {
     specs.push({
       date,
       position: "nightly",

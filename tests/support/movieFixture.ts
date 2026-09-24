@@ -196,6 +196,8 @@ export function movieFixture(options: MovieFixtureOptions = {}) {
         shortMaxMinutes: 110,
       },
       ...options.programming,
+      weekendOpenerEncoreEnabled:
+        options.programming?.weekendOpenerEncoreEnabled ?? true,
     },
     breakPolicy: {
       boundaryMinutes: 30,
