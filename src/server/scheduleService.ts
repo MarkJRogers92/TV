@@ -14,6 +14,14 @@ import {
 } from "../media/episodeBreaks.js";
 import { DateTime } from "luxon";
 import {
+  backfillSeriesFloors,
+  floorHistory,
+  readSeriesFloors,
+  recordSeriesFloors,
+  type SeriesFloorRecord,
+} from "../scheduler/seriesFloors.js";
+import { seriesOrderKey } from "../scheduler/select.js";
+import {
   ensureMovieOccurrencesForDate,
   movieProgrammingPlan,
   openMovieProjection,
@@ -82,7 +90,9 @@ export function invalidateUnpublishedSchedules(
   channel: Channel,
   now: Date,
 ): number {
-  const today = DateTime.fromJSDate(now, { zone: channel.timezone }).toISODate();
+  const today = DateTime.fromJSDate(now, {
+    zone: channel.timezone,
+  }).toISODate();
   if (!today) return 0;
   repositories.movieOccurrences.removeAfterDate(channel.id, today);
   return repositories.schedules.removeAfterDate(channel.id, today);
@@ -190,13 +200,56 @@ export class ScheduleService {
     return analyses;
   }
 
+  /**
+   * The durable floors, seeded once from the schedules that already exist so the
+   * fix applies to today's chain rather than to days generated from now on.
+   */
+  private seriesFloors(channelId: string): SeriesFloorRecord[] {
+    const existing = readSeriesFloors(this.repositories, channelId);
+    if (existing.length > 0) return existing;
+    // Nothing recorded yet for this channel: migrate the retained history once.
+    return backfillSeriesFloors(
+      this.repositories,
+      channelId,
+      this.repositories.schedules.list(channelId),
+      (mediaId) => this.episodeIdentity(mediaId),
+    )
+      ? readSeriesFloors(this.repositories, channelId)
+      : existing;
+  }
+
+  private episodeIdentity(mediaId: string) {
+    const item = this.repositories.media.get(mediaId);
+    if (
+      item === undefined ||
+      item.kind !== "episode" ||
+      item.season === undefined ||
+      item.episode === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      seriesKey: seriesOrderKey(item),
+      season: item.season,
+      episode: item.episode,
+    };
+  }
+
   async generate(channel: Channel, date: string): Promise<PersistedGeneration> {
     const input = {
       channel,
       pools: this.repositories.pools.list(),
       items: this.repositories.media.list(),
       date,
-      history: this.repositories.schedules.historyBefore(channel.id, date),
+      // Two sources of history, on purpose. `historyBefore` is the right rule -
+      // the newest generation of each PRIOR date - but it cannot see a date that
+      // is missing, pruned, or rebuilt after its successors, and all three
+      // happen here (measured 2026-09-24). The durable floor is keyed by the
+      // broadcast date, so it survives those. See src/scheduler/seriesFloors.ts.
+      history: [
+        ...this.repositories.schedules.historyBefore(channel.id, date),
+        ...floorHistory(this.seriesFloors(channel.id), date),
+      ],
       now: this.now(),
     };
     // A preserved-lineup channel is sliced, not scheduled. The archive decides the
@@ -211,24 +264,32 @@ export class ScheduleService {
     } else {
       const movieProgramming = this.movieRuntime(channel, date);
       const slotMovieIds = new Set(
-        channel.slots.filter((slot) => slot.kind === "movie").map((slot) => slot.id),
+        channel.slots
+          .filter((slot) => slot.kind === "movie")
+          .map((slot) => slot.id),
       );
       const assignmentKey = `slot-movie-assignments:${channel.id}:${date}`;
-      const storedAssignments = this.repositories.settings.get(assignmentKey)?.value;
-      const priorSchedule = this.repositories.schedules.latestForDate(channel.id, date);
+      const storedAssignments =
+        this.repositories.settings.get(assignmentKey)?.value;
+      const priorSchedule = this.repositories.schedules.latestForDate(
+        channel.id,
+        date,
+      );
       const priorAssignments = priorSchedule?.entries
-        .filter((entry) =>
-          entry.kind === "movie" &&
-          entry.mediaId &&
-          !entry.sourceOffsetMs &&
-          entry.sourceSlotId &&
-          slotMovieIds.has(entry.sourceSlotId),
+        .filter(
+          (entry) =>
+            entry.kind === "movie" &&
+            entry.mediaId &&
+            !entry.sourceOffsetMs &&
+            entry.sourceSlotId &&
+            slotMovieIds.has(entry.sourceSlotId),
         )
         .map((entry) => entry.mediaId!);
-      const slotMovieAssignments = Array.isArray(storedAssignments) &&
+      const slotMovieAssignments =
+        Array.isArray(storedAssignments) &&
         storedAssignments.every((id) => typeof id === "string")
-        ? storedAssignments as string[]
-        : priorAssignments;
+          ? (storedAssignments as string[])
+          : priorAssignments;
       const ordinary = {
         ...input,
         movieProgramming: movieProgramming?.runtime,
@@ -289,18 +350,26 @@ export class ScheduleService {
       planned: 0,
     };
     try {
-      const continuityConfig = readContinuityConfig(this.repositories, channel.id);
+      const continuityConfig = readContinuityConfig(
+        this.repositories,
+        channel.id,
+      );
       // Cadence reads the successful insertions other generations published, so
       // a card that will air counts before it airs - but the schedule being
       // built right now is excluded, and nothing later than the planning instant
       // can influence an earlier break.
-      const history = readContinuityHistoryForPlanning(this.repositories, channel.id, {
-        before: input.now.toISOString(),
-        excludeScheduleRevision: lineup.id,
-      });
+      const history = readContinuityHistoryForPlanning(
+        this.repositories,
+        channel.id,
+        {
+          before: input.now.toISOString(),
+          excludeScheduleRevision: lineup.id,
+        },
+      );
       const adjacentSchedules = [-1, 1].flatMap((days) => {
         const adjacentDate = DateTime.fromISO(date, { zone: channel.timezone })
-          .plus({ days }).toISODate();
+          .plus({ days })
+          .toISODate();
         const adjacent = adjacentDate
           ? this.repositories.schedules.latestForDate(channel.id, adjacentDate)
           : undefined;
@@ -344,7 +413,12 @@ export class ScheduleService {
           error instanceof Error ? error.message : "unknown error"
         }`,
       });
-      continuity = { schedule: lineup, decisions: [], contentHash: "", planned: 0 };
+      continuity = {
+        schedule: lineup,
+        decisions: [],
+        contentHash: "",
+        planned: 0,
+      };
     }
     const schedule = continuity.schedule;
 
@@ -370,7 +444,9 @@ export class ScheduleService {
         );
         for (const decision of continuity.decisions) {
           appendContinuityDecision(this.repositories, channel.id, {
-            id: [schedule.id, decision.insertionInstant, decision.assetId].join(":"),
+            id: [schedule.id, decision.insertionInstant, decision.assetId].join(
+              ":",
+            ),
             state: "planned",
             assetId: decision.assetId,
             personaId: decision.personaId,
@@ -393,20 +469,38 @@ export class ScheduleService {
         });
       }
       this.repositories.schedules.replaceSuccessful(channel.id, schedule);
+      // Recorded AFTER persistence, so a floor never outruns a schedule that
+      // exists. Only for a selected lineup: a preserved archive decides its own
+      // day, and a floor taken from it would advance a series that did not move.
+      if (!preserved) {
+        recordSeriesFloors(
+          this.repositories,
+          channel.id,
+          date,
+          schedule,
+          (mediaId) => this.episodeIdentity(mediaId),
+        );
+      }
       if (!preserved && channel.slots.some((slot) => slot.kind === "movie")) {
         const slotMovieIds = new Set(
-          channel.slots.filter((slot) => slot.kind === "movie").map((slot) => slot.id),
+          channel.slots
+            .filter((slot) => slot.kind === "movie")
+            .map((slot) => slot.id),
         );
         const assignments = schedule.entries
-          .filter((entry) =>
-            entry.kind === "movie" &&
-            entry.mediaId &&
-            !entry.sourceOffsetMs &&
-            entry.sourceSlotId &&
-            slotMovieIds.has(entry.sourceSlotId),
+          .filter(
+            (entry) =>
+              entry.kind === "movie" &&
+              entry.mediaId &&
+              !entry.sourceOffsetMs &&
+              entry.sourceSlotId &&
+              slotMovieIds.has(entry.sourceSlotId),
           )
           .map((entry) => entry.mediaId!);
-        this.repositories.settings.put(`slot-movie-assignments:${channel.id}:${date}`, assignments);
+        this.repositories.settings.put(
+          `slot-movie-assignments:${channel.id}:${date}`,
+          assignments,
+        );
       }
     });
     return { ok: true, schedule, exportPath };
@@ -563,7 +657,8 @@ export class ScheduleService {
   private slotMovieContinuation(
     channel: Channel,
     date: string,
-  ): (NonNullable<MovieCarry["continuation"]> & { slotId: string }) | undefined {
+  ):
+    (NonNullable<MovieCarry["continuation"]> & { slotId: string }) | undefined {
     const previousDate = DateTime.fromISO(date, { zone: channel.timezone })
       .minus({ days: 1 })
       .toISODate();
@@ -591,9 +686,9 @@ export class ScheduleService {
   ): Promise<{ resolvedDates: string[]; generatedDate?: string }> {
     const programming = channel.movieProgramming;
     if (!programming?.enabled) return { resolvedDates: [] };
-    const start = DateTime.fromJSDate(today, { zone: channel.timezone }).startOf(
-      "day",
-    );
+    const start = DateTime.fromJSDate(today, {
+      zone: channel.timezone,
+    }).startOf("day");
     const horizon: string[] = [];
     for (let offset = 0; offset <= programming.lookaheadDays; offset += 1) {
       const date = start.plus({ days: offset }).toISODate();
@@ -634,12 +729,11 @@ export class ScheduleService {
     today: Date,
     isRootAvailable?: () => Promise<boolean>,
   ) {
-    const programming: MovieProgramming | undefined =
-      channel.movieProgramming;
+    const programming: MovieProgramming | undefined = channel.movieProgramming;
     if (!programming?.enabled) return { enabled: false as const, upcoming: [] };
-    const start = DateTime.fromJSDate(today, { zone: channel.timezone }).startOf(
-      "day",
-    );
+    const start = DateTime.fromJSDate(today, {
+      zone: channel.timezone,
+    }).startOf("day");
     const startDate = start.toISODate();
     if (!startDate) return { enabled: false as const, upcoming: [] };
     const projection = openMovieProjection(this.repositories, channel, {
@@ -687,7 +781,8 @@ export class ScheduleService {
           );
       }
     }
-    const rotation = projection?.rotation ?? this.repositories.movieRotations.get(channel.id);
+    const rotation =
+      projection?.rotation ?? this.repositories.movieRotations.get(channel.id);
     const rootAvailable = isRootAvailable ? await isRootAvailable() : true;
     if (!rootAvailable)
       degraded.push(
