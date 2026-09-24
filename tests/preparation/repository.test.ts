@@ -84,12 +84,32 @@ test("checks the claimed source outside the SQLite transaction", async () => {
   expect(prep.jobs.list().filter((job) => job.state === "running")).toHaveLength(1);
 });
 
+test("does not return another worker's recovered and reclaimed reservation", async () => {
+  const { dataDir, repositories } = await fixture();
+  const second = createRepositories(openDatabase(dataDir));
+  opened.push(second);
+  const prep = repositories.preparation;
+  prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(0) });
+  prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(60) });
+  let recoveredClaim: ReturnType<typeof second.preparation.claimNext>;
+
+  const firstClaim = prep.claimNext((path) => {
+    second.preparation.recoverInterrupted(time(120));
+    recoveredClaim = second.preparation.claimNext(() => source({ path }), time(121));
+    return source({ path });
+  });
+
+  expect(firstClaim).toBeUndefined();
+  expect(recoveredClaim).toMatchObject({ state: "running", attempt: 2, sourceMediaId: "movie-1" });
+  expect(prep.jobs.list().filter((job) => job.state === "running")).toHaveLength(1);
+});
+
 test("concurrent claims from two SQLite connections reserve at most one job without lock errors", async () => {
   const { dataDir, repositories } = await fixture();
   const prep = repositories.preparation;
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(0) });
   prep.observe({ sourceMediaId: "movie-1", source: source(), observedAt: time(60) });
-  const barrier = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const barrier = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
   const workers = Array.from({ length: 2 }, () => new Worker(join(process.cwd(), "tests/preparation/claimWorker.ts"), {
     workerData: { dataDir, barrier, source: source() },
     execArgv: ["--import", "tsx"],
@@ -100,8 +120,13 @@ test("concurrent claims from two SQLite connections reserve at most one job with
     worker.once("exit", (code) => { if (code !== 0) reject(new Error(`claim worker exited ${code}`)); });
   }));
 
-  Atomics.store(new Int32Array(barrier), 0, 1);
-  Atomics.notify(new Int32Array(barrier), 0, 2);
+  const gate = new Int32Array(barrier);
+  while (Atomics.load(gate, 1) < workers.length) {
+    const ready = Atomics.load(gate, 1);
+    Atomics.wait(gate, 1, ready, 1_000);
+  }
+  Atomics.store(gate, 0, 1);
+  Atomics.notify(gate, 0, workers.length);
   const outcomes = await Promise.all(results);
 
   expect(outcomes.filter((outcome) => outcome.kind === "error")).toEqual([]);

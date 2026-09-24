@@ -10,6 +10,8 @@ const data = workerData as {
   source: PreparationSourceVersion;
 };
 const gate = new Int32Array(data.barrier);
+Atomics.add(gate, 1, 1);
+Atomics.notify(gate, 1);
 if (Atomics.load(gate, 0) === 0) Atomics.wait(gate, 0, 0);
 
 const database = new Database(join(data.dataDir, "marktv.sqlite"));

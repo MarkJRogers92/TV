@@ -188,8 +188,9 @@ export function createPreparationRepository(database: MarkTvDatabase): Preparati
 
       return database.transaction(() => {
         const latest = jobFrom(jobGet.get(reserved.id) as { json: string } | undefined);
-        // A newer observation may have invalidated this reservation while stat ran.
-        if (!latest || latest.state !== "running") return undefined;
+        // A newer observation or recovery/reclaim may have replaced this lease
+        // while stat ran. The attempt is monotonic and identifies this reserver.
+        if (!latest || latest.state !== "running" || latest.attempt !== reserved.attempt) return undefined;
         if (!sameVersion(latest.source, current)) {
           invalidate(latest, current === null, now);
           return undefined;
