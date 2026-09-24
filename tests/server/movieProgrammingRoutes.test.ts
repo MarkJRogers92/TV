@@ -245,3 +245,24 @@ test("a generated day includes the movie the status endpoint promised", async ()
   expect(promised.mediaId).toBe(movie.mediaId);
   await app.close();
 });
+
+test("[OP07] the weekend encore setting updates live, without a restart", async () => {
+  const app = await appAt(() => new Date("2026-09-07T12:00:00Z"));
+  const enabled = await control(app, {
+    enabled: true,
+    poolIds: ["movies"],
+    rootPath: MOVIE_ROOT,
+  });
+  expect(enabled.statusCode).toBe(200);
+  // Defaults to on so the approved weekend behaviour is preserved.
+  expect(enabled.json().movieProgramming.weekendOpenerEncoreEnabled).toBe(true);
+
+  const off = await control(app, { weekendOpenerEncoreEnabled: false });
+  expect(off.statusCode).toBe(200);
+  expect(off.json().movieProgramming.weekendOpenerEncoreEnabled).toBe(false);
+
+  // A fresh read reflects the change, with no whole-stack restart.
+  const read = await app.inject("/api/v1/channels/marktv-laughs");
+  expect(read.json().movieProgramming.weekendOpenerEncoreEnabled).toBe(false);
+  await app.close();
+});

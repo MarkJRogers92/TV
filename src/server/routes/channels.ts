@@ -20,6 +20,7 @@ const movieProgrammingControlSchema = z.object({
   weekendAnchor: z.string().optional(),
   bridgePoolIds: z.array(z.string().min(1)).optional(),
   lookaheadDays: z.number().int().optional(),
+  weekendOpenerEncoreEnabled: z.boolean().optional(),
   breakPolicy: z
     .object({
       targetMinutes: z.number().positive().optional(),
