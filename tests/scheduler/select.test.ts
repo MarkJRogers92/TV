@@ -65,9 +65,105 @@ test('keeps distinct movie remake years in title order', () => {
 });
 
 test('enforces cooldown unless relaxation is explicitly enabled', () => {
-  const episode = item('episode', 'episode');
-  const pool: Pool = { id: 'episodes', name: 'Episodes', kinds: ['episode'], mediaIds: [episode.id], mode: 'chronological', noRepeatMinutes: 120, weight: 1 };
-  const input = { pool, items: [episode], kind: 'episode' as const, history: [{ mediaId: episode.id, at: '2026-09-18T19:00:00.000Z' }], at: '2026-09-18T20:00:00.000Z', seed: 'selection' };
+  const movie = item('movie', 'movie');
+  const pool: Pool = { id: 'movies', name: 'Movies', kinds: ['movie'], mediaIds: [movie.id], mode: 'chronological', noRepeatMinutes: 120, weight: 1 };
+  const input = { pool, items: [movie], kind: 'movie' as const, history: [{ mediaId: movie.id, at: '2026-09-18T19:00:00.000Z' }], at: '2026-09-18T20:00:00.000Z', seed: 'selection' };
   expect(selectCandidate(input)).toEqual({ item: undefined, relaxed: false });
-  expect(selectCandidate({ ...input, allowCooldownRelaxation: true })).toEqual({ item: episode, relaxed: true });
+  expect(selectCandidate({ ...input, allowCooldownRelaxation: true })).toEqual({ item: movie, relaxed: true });
+});
+
+test('episode cooldown relaxation cannot replay a completed episode', () => {
+  const episode = ep('completed', 'Show', 1, 1);
+  const pool = episodePool('show', [episode.id]);
+  pool.noRepeatMinutes = 120;
+  expect(selectCandidate({ pool, items: [episode], kind: 'episode', history: [{ mediaId: episode.id, at: '2026-09-18T19:00:00.000Z' }], at: AT, seed: 'selection', allowCooldownRelaxation: true }))
+    .toEqual({ item: undefined, relaxed: false });
+});
+
+test('another encode of a completed episode cannot replay the same season and episode', () => {
+  const original = ep('original', 'Show', 1, 1);
+  const alternate = ep('alternate', 'Show', 1, 1);
+  const second = ep('second', 'Show', 1, 2);
+  const pool = episodePool('show', [original.id, alternate.id, second.id]);
+  expect(selectCandidate({ pool, items: [original, alternate, second], kind: 'episode', history: [{ mediaId: original.id, at: '2026-09-18T19:00:00.000Z' }], at: AT, seed: 'selection' }).item?.id)
+    .toBe(second.id);
+});
+
+test('unknown episode position holds that series instead of guessing a successor', () => {
+  const unknown = { ...item('unknown', 'episode'), showTitle: 'Show' };
+  const numbered = ep('numbered', 'Show', 1, 2);
+  const pool = episodePool('show', [unknown.id, numbered.id]);
+  expect(selectCandidate({ pool, items: [unknown, numbered], kind: 'episode', history: [{ mediaId: unknown.id, at: '2026-09-18T19:00:00.000Z' }], at: AT, seed: 'selection' }).item)
+    .toBeUndefined();
+});
+
+const ep = (id: string, show: string, season: number, episode: number, available = true): MediaItem => ({
+  ...item(id, 'episode'),
+  showTitle: show,
+  season,
+  episode,
+  available,
+});
+const episodePool = (id: string, mediaIds: string[]): Pool => ({
+  id,
+  name: id,
+  kinds: ['episode'],
+  mediaIds,
+  mode: 'chronological',
+  noRepeatMinutes: 0,
+  weight: 1,
+});
+const AT = '2026-09-18T20:00:00.000Z';
+const historyAt = (mediaIds: string[]) => mediaIds.map((mediaId, index) => ({ mediaId, at: `2026-09-18T19:0${index}:00.000Z` }));
+
+test('EP03 does not wrap after the last episode of a series (F02)', () => {
+  const episodes = [1, 2, 3].map((n) => ep(`f02-e${n}`, 'F02 Show', 1, n));
+  const pool = episodePool('f02', episodes.map(({ id }) => id));
+  const exhausted = selectCandidate({ pool, items: episodes, kind: 'episode', history: historyAt(['f02-e1', 'f02-e2', 'f02-e3']), at: AT, seed: 'selection' });
+  expect(exhausted.item).toBeUndefined();
+});
+
+test('EP03 falls back to another series instead of wrapping the exhausted one', () => {
+  const alpha = [1, 2].map((n) => ep(`alpha-e${n}`, 'Alpha', 1, n));
+  const beta = ep('beta-e1', 'Beta', 1, 1);
+  const items = [...alpha, beta];
+  const pool = episodePool('mixed', items.map(({ id }) => id));
+  const selection = selectCandidate({ pool, items, kind: 'episode', history: historyAt(['alpha-e1', 'alpha-e2']), at: AT, seed: 'selection' });
+  expect(selection.item?.id).toBe('beta-e1');
+});
+
+test('EP04 does not skip over a missing or unavailable next episode (F02)', () => {
+  const missing = [ep('f02-e1', 'F02 Show', 1, 1), ep('f02-e3', 'F02 Show', 1, 3)];
+  const missingPool = episodePool('f02-missing', missing.map(({ id }) => id));
+  expect(
+    selectCandidate({ pool: missingPool, items: missing, kind: 'episode', history: historyAt(['f02-e1']), at: AT, seed: 'selection' }).item,
+  ).toBeUndefined();
+  const unavailable = [ep('f02-e1', 'F02 Show', 1, 1), ep('f02-e2', 'F02 Show', 1, 2, false), ep('f02-e3', 'F02 Show', 1, 3)];
+  const unavailablePool = episodePool('f02-unavailable', unavailable.map(({ id }) => id));
+  expect(
+    selectCandidate({ pool: unavailablePool, items: unavailable, kind: 'episode', history: historyAt(['f02-e1']), at: AT, seed: 'selection' }).item,
+  ).toBeUndefined();
+});
+
+test('EP05 does not select an earlier newly discovered episode below the history floor', () => {
+  const episodes = [1, 2, 3, 4].map((n) => ep(`floor-e${n}`, 'Floor Show', 1, n));
+  const pool = episodePool('floor', episodes.map(({ id }) => id));
+  const forward = selectCandidate({ pool, items: episodes, kind: 'episode', history: historyAt(['floor-e2', 'floor-e3']), at: AT, seed: 'selection' });
+  expect(forward.item?.id).toBe('floor-e4');
+  const exhausted = selectCandidate({ pool, items: episodes, kind: 'episode', history: historyAt(['floor-e2', 'floor-e3', 'floor-e4']), at: AT, seed: 'selection' });
+  expect(exhausted.item).toBeUndefined();
+});
+
+test('EP06 crosses seasons deterministically and stops when the season opener is missing (F17)', () => {
+  const season = [ep('f17-s1e1', 'F17 Show', 1, 1), ep('f17-s1e2', 'F17 Show', 1, 2), ep('f17-s2e1', 'F17 Show', 2, 1), ep('f17-s2e2', 'F17 Show', 2, 2)];
+  const shuffled = [season[2], season[0], season[3], season[1]];
+  const pool = episodePool('f17', season.map(({ id }) => id));
+  expect(
+    selectCandidate({ pool, items: shuffled, kind: 'episode', history: historyAt(['f17-s1e2']), at: AT, seed: 'selection' }).item?.id,
+  ).toBe('f17-s2e1');
+  const gapItems = [season[0], season[1], season[3]];
+  const gapPool = episodePool('f17-gap', gapItems.map(({ id }) => id));
+  expect(
+    selectCandidate({ pool: gapPool, items: gapItems, kind: 'episode', history: historyAt(['f17-s1e2']), at: AT, seed: 'selection' }).item,
+  ).toBeUndefined();
 });

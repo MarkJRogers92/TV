@@ -89,6 +89,7 @@ function setup(
     generate?: (channel: Channel, date: string) => Promise<PersistedGeneration>;
     lastSync?: () => { scheduleId?: string; status?: string } | undefined;
     now?: () => Date;
+    channels?: Channel[];
   } = {},
 ) {
   const clock = options.now ?? now;
@@ -126,7 +127,7 @@ function setup(
   };
   const context: ScheduleRefreshContext = {
     repositories: {
-      channels: { list: () => [channel] },
+      channels: { list: () => options.channels ?? [channel] },
       media: { list: () => media },
       schedules: {
         // Asked by date: the pass needs "is TODAY scheduled?", and the newest row
@@ -261,6 +262,33 @@ test("overlapping passes generate only once", async () => {
   await refresh.refreshOnce();
 
   expect(generate).toHaveBeenCalledTimes(1);
+  refresh.stop();
+});
+
+test("a failed channel does not prevent the next channel from refreshing", async () => {
+  const first = demo().channel;
+  const second = { ...demo().channel, id: "second-channel" };
+  const { refresh, generate, syncToTunarr } = setup({
+    channels: [first, second],
+    generate: async (channel, date) => {
+      if (channel.id === first.id) throw new Error("first channel failed");
+      return { ok: true, schedule: scheduleStub(date), exportPath: "/tmp/export.json" };
+    },
+  });
+
+  await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(syncToTunarr).toHaveBeenCalledTimes(1));
+  expect(syncToTunarr.mock.calls[0]?.[0]).toBe(second.id);
+  refresh.stop();
+});
+
+test("disabled channels are excluded from the automatic refresh", async () => {
+  const { refresh, generate, syncToTunarr } = setup({
+    channels: [{ ...demo().channel, enabled: false }],
+  });
+  await settle();
+  expect(generate).not.toHaveBeenCalled();
+  expect(syncToTunarr).not.toHaveBeenCalled();
   refresh.stop();
 });
 

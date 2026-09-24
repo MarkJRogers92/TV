@@ -61,6 +61,99 @@ function chooseChronological(candidates: MediaItem[], all: MediaItem[], history:
   return undefined;
 }
 
+type EpisodePosition = { season: number; episode: number };
+
+function episodePosition(item: MediaItem): EpisodePosition {
+  return { season: item.season ?? 0, episode: item.episode ?? 0 };
+}
+
+function compareEpisodePosition(left: EpisodePosition, right: EpisodePosition) {
+  return left.season - right.season || left.episode - right.episode;
+}
+
+function isImmediateSuccessor(floorItem: MediaItem, nextItem: MediaItem) {
+  if (floorItem.season === undefined || floorItem.episode === undefined) return false;
+  if (nextItem.season === undefined || nextItem.episode === undefined) return false;
+  if (nextItem.season === floorItem.season) {
+    return nextItem.episode === floorItem.episode + 1;
+  }
+  if (nextItem.season === floorItem.season + 1) {
+    return nextItem.episode === 1;
+  }
+  return false;
+}
+
+function chooseEpisodeChronological(
+  candidates: MediaItem[],
+  available: MediaItem[],
+  allItems: MediaItem[],
+  pool: Pool,
+  history: Played[],
+) {
+  const eligibleIds = new Set(candidates.map((item) => item.id));
+  const byId = new Map(allItems.map((item) => [item.id, item]));
+  const poolIds = new Set(pool.mediaIds);
+  const resolvedHistory = history
+    .filter((play) => {
+      const item = byId.get(play.mediaId);
+      return Boolean(item) && item?.kind === 'episode' && poolIds.has(play.mediaId);
+    })
+    .map((play) => ({ play, item: byId.get(play.mediaId)! }))
+    .sort((left, right) => Date.parse(left.play.at) - Date.parse(right.play.at));
+  // An old media ID that vanished from this pool has no trustworthy position.
+  // A rename must not silently restart the track at its first available file.
+  if (history.some((play) => poolIds.has(play.mediaId) && !byId.has(play.mediaId)))
+    return undefined;
+  if (resolvedHistory.some(({ item }) => item.season === undefined || item.episode === undefined))
+    return undefined;
+  const floors = new Map<string, { item: MediaItem; position: EpisodePosition }>();
+  for (const entry of resolvedHistory) {
+    const key = seriesOrderKey(entry.item);
+    const position = episodePosition(entry.item);
+    const current = floors.get(key);
+    if (!current || compareEpisodePosition(position, current.position) > 0) {
+      floors.set(key, { item: entry.item, position });
+    }
+  }
+  const activeSeries = resolvedHistory.length
+    ? seriesOrderKey(resolvedHistory[resolvedHistory.length - 1].item)
+    : undefined;
+  const grouped = new Map<string, MediaItem[]>();
+  for (const item of available) {
+    if (item.season === undefined || item.episode === undefined) continue;
+    const key = seriesOrderKey(item);
+    const list = grouped.get(key);
+    if (list) list.push(item);
+    else grouped.set(key, [item]);
+  }
+  for (const list of grouped.values()) {
+    list.sort((left, right) => compareEpisodePosition(episodePosition(left), episodePosition(right)));
+  }
+  const seriesNext = new Map<string, MediaItem>();
+  for (const [key, list] of grouped) {
+    const floor = floors.get(key);
+    if (!floor) {
+      // A new series starts only at an unambiguous opener. If it is missing or
+      // unavailable, hold the series instead of jumping to the first ready file.
+      const next = list[0];
+      if (next?.season !== 1 || next.episode !== 1) continue;
+      if (next && eligibleIds.has(next.id)) seriesNext.set(key, next);
+      continue;
+    }
+    const above = list.filter((item) => compareEpisodePosition(episodePosition(item), floor.position) > 0);
+    if (!above.length) continue;
+    const next = above[0];
+    if (!eligibleIds.has(next.id)) continue;
+    if (!isImmediateSuccessor(floor.item, next)) continue;
+    seriesNext.set(key, next);
+  }
+  const activeNext = activeSeries ? seriesNext.get(activeSeries) : undefined;
+  if (activeNext) return activeNext;
+  const fallbacks = [...seriesNext.values()].sort(chronologicalOrder);
+  if (fallbacks.length) return fallbacks[0];
+  return undefined;
+}
+
 function chooseShuffle(candidates: MediaItem[], seed: string) {
   const random = createSeededRandom(seed);
   return [...candidates]
@@ -85,8 +178,12 @@ export function selectCandidate(input: SelectionInput): SelectionResult {
     relaxed = true;
   }
   if (!candidates.length) return { item: undefined, relaxed: false };
-  const item = input.pool.mode === 'chronological'
-    ? chooseChronological(candidates, available, input.history)
-    : chooseShuffle(candidates, input.seed);
-  return { item, relaxed };
+  if (input.pool.mode !== 'chronological') {
+    return { item: chooseShuffle(candidates, input.seed), relaxed };
+  }
+  if (input.kind !== 'episode') {
+    return { item: chooseChronological(candidates, available, input.history), relaxed };
+  }
+  const item = chooseEpisodeChronological(candidates, available, input.items, input.pool, input.history);
+  return { item, relaxed: Boolean(item) && relaxed };
 }

@@ -33,7 +33,7 @@ function episodeMidrollFixture() {
   ];
   fixture.pools.find((pool) => pool.id === "apartment-4b")!.noRepeatMinutes = 0;
   fixture.media = fixture.media.filter((item) =>
-    ["apartment-4b-1", "ad-1", "bumper-1", "filler-1", "id-1"].includes(
+    ["apartment-4b-1", "apartment-4b-2", "ad-1", "bumper-1", "filler-1", "id-1"].includes(
       item.id,
     ),
   );
@@ -81,6 +81,7 @@ test("budgets two episode breaks inside each thirty-minute broadcast block", () 
     (entry, index) => index > 0 && entry.kind === "episode",
   );
   expect(nextEpisode?.localStart).toBe("00:30");
+  expect(nextEpisode?.mediaId).toBe("apartment-4b-2");
   const firstBlockDuration = result.schedule.entries
     .filter(
       (entry) =>
@@ -219,6 +220,9 @@ test("omits breaks that would overrun the half-hour and keeps the next show alig
       (entry, index) => index > 0 && entry.kind === "episode",
     )?.localStart,
   ).toBe("00:30");
+  expect(result.schedule.entries.find(
+    (entry, index) => index > 0 && entry.kind === "episode",
+  )?.mediaId).toBe("apartment-4b-2");
 });
 
 test("regenerates deterministically with the same detected offsets", () => {

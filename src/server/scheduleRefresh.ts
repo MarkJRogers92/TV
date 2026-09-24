@@ -210,163 +210,170 @@ export function startScheduleRefresh(
       // Read once per pass: every channel is checked against the same catalog.
       const media = context.repositories.media.list();
       for (const channel of context.repositories.channels.list()) {
-        const local = DateTime.fromJSDate(now(), { zone: channel.timezone });
-        const today = local.toISODate();
-        if (!today) continue;
-        const tomorrow = local.plus({ days: 1 }).toISODate();
+        if (!channel.enabled) continue;
+        try {
+          const local = DateTime.fromJSDate(now(), { zone: channel.timezone });
+          const today = local.toISODate();
+          if (!today) continue;
+          const tomorrow = local.plus({ days: 1 }).toISODate();
 
-        // Both questions are asked by date. Asking them of the newest row instead
-        // is what made this loop regenerate work it already had: the pre-generation
-        // below inserts a row dated tomorrow, which is then the newest row, so a
-        // "newest row is not today" test is true on every subsequent pass.
-        let schedule = context.repositories.schedules.latestForDate(
-          channel.id,
-          today,
-        );
-        const storedTomorrow = tomorrow
-          ? context.repositories.schedules.latestForDate(channel.id, tomorrow)
-          : undefined;
+          // Both questions are asked by date. Asking them of the newest row instead
+          // is what made this loop regenerate work it already had: the pre-generation
+          // below inserts a row dated tomorrow, which is then the newest row, so a
+          // "newest row is not today" test is true on every subsequent pass.
+          let schedule = context.repositories.schedules.latestForDate(
+            channel.id,
+            today,
+          );
+          const storedTomorrow = tomorrow
+            ? context.repositories.schedules.latestForDate(channel.id, tomorrow)
+            : undefined;
 
-        // A schedule for today that no longer matches the catalog is not a
-        // schedule for today. Regenerating for the SAME date is what replaces
-        // it; the stored one is dropped here so the generation below runs and
-        // the sync is aimed at the replacement rather than the stale row.
-        if (schedule && scheduleHasStaleMedia(schedule, media)) {
-          logWarn("schedule.refresh", "Replacing a stale schedule", {
-            channelId: channel.id,
-            date: today,
-            scheduleId: schedule.id,
-          });
-          schedule = undefined;
-        }
-
-        if (!schedule) {
-          logInfo("schedule.refresh", "Generating a schedule for today", {
-            channelId: channel.id,
-            date: today,
-          });
-          const generated = await context.schedules.generate(channel, today);
-          if (generated.ok === false) {
-            logWarn("schedule.refresh", "Schedule generation was refused", {
+          // A schedule for today that no longer matches the catalog is not a
+          // schedule for today. Regenerating for the SAME date is what replaces
+          // it; the stored one is dropped here so the generation below runs and
+          // the sync is aimed at the replacement rather than the stale row.
+          if (schedule && scheduleHasStaleMedia(schedule, media)) {
+            logWarn("schedule.refresh", "Replacing a stale schedule", {
               channelId: channel.id,
               date: today,
-              issues: generated.issues.map((issue) =>
-                "code" in issue ? issue.code : "unknown",
-              ),
+              scheduleId: schedule.id,
             });
-            continue;
+            schedule = undefined;
           }
-          schedule = generated.schedule;
-        }
 
-        // Having a schedule for today does NOT mean Tunarr has it. The sync is a
-        // separate step, and its plan-then-apply guard refuses when the channel's
-        // state moved between its two snapshots - which is exactly what an active
-        // viewer causes. So this keeps retrying until the sync for THIS schedule
-        // is recorded as synced, instead of assuming that generating was enough.
-        // Without that, one failed sync would strand the lineup until the next day.
-        const synced = dependencies.lastSync(channel.id);
-        if (synced?.scheduleId !== schedule.id || synced.status !== "synced") {
-          // The id is passed rather than letting the sync resolve "the newest
-          // schedule" for itself: in the quiet hours the newest is tomorrow's, and
-          // pushing that would air the wrong day.
-          const tunarr = await dependencies.syncToTunarr(
-            channel.id,
-            schedule.id,
-            now,
-          );
-          logInfo("schedule.refresh", "Tunarr sync attempted", {
-            channelId: channel.id,
-            date: today,
-            scheduleId: schedule.id,
-            tunarr: tunarr.status,
-          });
-        }
-
-        // Tomorrow, built in the quiet hours but deliberately NOT broadcast. A
-        // schedule covers one specific day, so pushing tomorrow's early would air
-        // the wrong day's programming. Paying the generation cost now is what keeps
-        // the midnight swap down to the sync alone.
-        //
-        // A pre-generated tomorrow that no longer matches the catalog is rebuilt
-        // for the same reason today's is: it is cheaper now than at midnight,
-        // and it is still not broadcast.
-        //
-        // A tomorrow that predates today's movie carry is the same kind of wrong,
-        // and is rebuilt even outside the quiet hours. Unlike staleness it cannot
-        // wait for the next quiet window: the carry is a film that airs across
-        // midnight TONIGHT, so by then tomorrow is already on air. One generation
-        // is the cost, and the alternative is that the rest of today's last
-        // feature is never aired.
-        const carryGap =
-          tomorrow && storedTomorrow
-            ? scheduleMissesPreviousCarry(schedule, storedTomorrow)
-            : false;
-        if (
-          tomorrow &&
-          (!storedTomorrow ||
-            scheduleHasStaleMedia(storedTomorrow, media) ||
-            carryGap) &&
-          (carryGap ||
-            (local.hour >= scheduleRefreshLimits.quietStartHour &&
-              local.hour < scheduleRefreshLimits.quietEndHour))
-        ) {
-          if (storedTomorrow)
-            logWarn(
-              "schedule.refresh",
-              carryGap
-                ? "Rebuilding a schedule that predates today's movie carry"
-                : "Replacing a stale pre-generated schedule",
-              {
+          if (!schedule) {
+            logInfo("schedule.refresh", "Generating a schedule for today", {
+              channelId: channel.id,
+              date: today,
+            });
+            const generated = await context.schedules.generate(channel, today);
+            if (generated.ok === false) {
+              logWarn("schedule.refresh", "Schedule generation was refused", {
                 channelId: channel.id,
-                date: tomorrow,
-                scheduleId: storedTomorrow.id,
-              },
+                date: today,
+                issues: generated.issues.map((issue) =>
+                  "code" in issue ? issue.code : "unknown",
+                ),
+              });
+              continue;
+            }
+            schedule = generated.schedule;
+          }
+
+          // Having a schedule for today does NOT mean Tunarr has it. The sync is a
+          // separate step, and its plan-then-apply guard refuses when the channel's
+          // state moved between its two snapshots - which is exactly what an active
+          // viewer causes. So this keeps retrying until the sync for THIS schedule
+          // is recorded as synced, instead of assuming that generating was enough.
+          // Without that, one failed sync would strand the lineup until the next day.
+          const synced = dependencies.lastSync(channel.id);
+          if (synced?.scheduleId !== schedule.id || synced.status !== "synced") {
+            // The id is passed rather than letting the sync resolve "the newest
+            // schedule" for itself: in the quiet hours the newest is tomorrow's, and
+            // pushing that would air the wrong day.
+            const tunarr = await dependencies.syncToTunarr(
+              channel.id,
+              schedule.id,
+              now,
             );
-          logInfo("schedule.refresh", "Pre-generating tomorrow's schedule", {
-            channelId: channel.id,
-            date: tomorrow,
-          });
-          const ahead = await context.schedules.generate(channel, tomorrow);
-          if (ahead.ok === false) {
-            logWarn("schedule.refresh", "Pre-generation was refused", {
+            logInfo("schedule.refresh", "Tunarr sync attempted", {
+              channelId: channel.id,
+              date: today,
+              scheduleId: schedule.id,
+              tunarr: tunarr.status,
+            });
+          }
+
+          // Tomorrow, built in the quiet hours but deliberately NOT broadcast. A
+          // schedule covers one specific day, so pushing tomorrow's early would air
+          // the wrong day's programming. Paying the generation cost now is what keeps
+          // the midnight swap down to the sync alone.
+          //
+          // A pre-generated tomorrow that no longer matches the catalog is rebuilt
+          // for the same reason today's is: it is cheaper now than at midnight,
+          // and it is still not broadcast.
+          //
+          // A tomorrow that predates today's movie carry is the same kind of wrong,
+          // and is rebuilt even outside the quiet hours. Unlike staleness it cannot
+          // wait for the next quiet window: the carry is a film that airs across
+          // midnight TONIGHT, so by then tomorrow is already on air. One generation
+          // is the cost, and the alternative is that the rest of today's last
+          // feature is never aired.
+          const carryGap =
+            tomorrow && storedTomorrow
+              ? scheduleMissesPreviousCarry(schedule, storedTomorrow)
+              : false;
+          if (
+            tomorrow &&
+            (!storedTomorrow ||
+              scheduleHasStaleMedia(storedTomorrow, media) ||
+              carryGap) &&
+            (carryGap ||
+              (local.hour >= scheduleRefreshLimits.quietStartHour &&
+                local.hour < scheduleRefreshLimits.quietEndHour))
+          ) {
+            if (storedTomorrow)
+              logWarn(
+                "schedule.refresh",
+                carryGap
+                  ? "Rebuilding a schedule that predates today's movie carry"
+                  : "Replacing a stale pre-generated schedule",
+                {
+                  channelId: channel.id,
+                  date: tomorrow,
+                  scheduleId: storedTomorrow.id,
+                },
+              );
+            logInfo("schedule.refresh", "Pre-generating tomorrow's schedule", {
               channelId: channel.id,
               date: tomorrow,
-              issues: ahead.issues.map((issue) =>
-                "code" in issue ? issue.code : "unknown",
-              ),
             });
+            const ahead = await context.schedules.generate(channel, tomorrow);
+            if (ahead.ok === false) {
+              logWarn("schedule.refresh", "Pre-generation was refused", {
+                channelId: channel.id,
+                date: tomorrow,
+                issues: ahead.issues.map((issue) =>
+                  "code" in issue ? issue.code : "unknown",
+                ),
+              });
+            }
           }
-        }
 
-        // Movie coverage rolls forward in the quiet hours too, and only here: it
-        // resolves a week or more of assignments (cheap and idempotent) and builds
-        // at most one missing future schedule per pass. Nothing about it touches
-        // the live date, and the sync above still aims at today's id alone.
-        if (
-          channel.movieProgramming?.enabled &&
-          dependencies.movieProgramming &&
-          local.hour >= scheduleRefreshLimits.quietStartHour &&
-          local.hour < scheduleRefreshLimits.quietEndHour
-        ) {
-          try {
-            const coverage = await dependencies.movieProgramming.ensureCoverage(
-              channel,
-              now(),
-            );
-            logInfo("schedule.refresh", "Movie coverage rolled forward", {
-              channelId: channel.id,
-              resolved: coverage.resolvedDates.length,
-              generated: coverage.generatedDate,
-            });
-          } catch (error) {
-            // Contained here rather than left to the pass-level catch: one
-            // channel's movie inventory must not stop every other channel's
-            // refresh.
-            logError("schedule.refresh.movies", error, {
-              channelId: channel.id,
-            });
+          // Movie coverage rolls forward in the quiet hours too, and only here: it
+          // resolves a week or more of assignments (cheap and idempotent) and builds
+          // at most one missing future schedule per pass. Nothing about it touches
+          // the live date, and the sync above still aims at today's id alone.
+          if (
+            channel.movieProgramming?.enabled &&
+            dependencies.movieProgramming &&
+            local.hour >= scheduleRefreshLimits.quietStartHour &&
+            local.hour < scheduleRefreshLimits.quietEndHour
+          ) {
+            try {
+              const coverage = await dependencies.movieProgramming.ensureCoverage(
+                channel,
+                now(),
+              );
+              logInfo("schedule.refresh", "Movie coverage rolled forward", {
+                channelId: channel.id,
+                resolved: coverage.resolvedDates.length,
+                generated: coverage.generatedDate,
+              });
+            } catch (error) {
+              // Contained here rather than left to the pass-level catch: one
+              // channel's movie inventory must not stop every other channel's
+              // refresh.
+              logError("schedule.refresh.movies", error, {
+                channelId: channel.id,
+              });
+            }
           }
+        } catch (error) {
+          // A bad catalog entry, failed generation, or Tunarr error on one
+          // channel must not keep the other channels from refreshing.
+          logError("schedule.refresh.channel", error, { channelId: channel.id });
         }
       }
     } catch (error) {
