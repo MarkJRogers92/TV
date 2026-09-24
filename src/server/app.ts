@@ -35,6 +35,7 @@ import { describePreparationEvent } from "../preparation/events.js";
 import { createHealthShadow, type HealthShadow } from "../autopilot/healthShadow.js";
 import { createChannelRecovery } from "../autopilot/recovery.js";
 import { createAlwaysOnSupervisor, type AlwaysOnSupervisor } from "../autopilot/alwaysOn.js";
+import { recordIncident } from "../autopilot/incidents.js";
 import { DateTime } from "luxon";
 import { KeychainCredentialStore } from "../security/keychain.js";
 import type { CredentialStore } from "../security/credentialStore.js";
@@ -411,12 +412,21 @@ export async function buildApp(options: BuildAppOptions = {}) {
               });
               return outcome.status === "synced";
             },
-            onDecision: (channelId, outcome, reason) =>
+            onDecision: (channelId, outcome, reason) => {
               logInfo("recovery", "Channel recovery decision", {
                 channelId,
                 outcome,
                 reason,
-              }),
+              });
+              // Record real decisions durably (not the routine no-action ones).
+              if (outcome !== "no-action")
+                recordIncident(repositories, {
+                  at: context.now().toISOString(),
+                  channelId,
+                  kind: outcome,
+                  reason,
+                });
+            },
           })
         : null;
       healthShadow = createHealthShadow(repositories, {
@@ -434,16 +444,25 @@ export async function buildApp(options: BuildAppOptions = {}) {
             }
           : {}),
         onResult: (result) =>
-          logInfo(
-            "health-shadow",
-            recovery ? "Continuity health (recovery armed)" : "Continuity health (observe-only)",
-            {
-              channelId: result.channelId,
-              health: result.health,
-              incident: result.incident,
-              recommendation: result.recommendation,
-            },
-          ),
+          {
+            logInfo(
+              "health-shadow",
+              recovery ? "Continuity health (recovery armed)" : "Continuity health (observe-only)",
+              {
+                channelId: result.channelId,
+                health: result.health,
+                incident: result.incident,
+                recommendation: result.recommendation,
+              },
+            );
+            if (result.incident)
+              recordIncident(repositories, {
+                at: context.now().toISOString(),
+                channelId: result.channelId,
+                kind: "incident",
+                reason: result.health,
+              });
+          },
         onError: (error, channelId) =>
           logError("health-shadow", error, channelId ? { channelId } : {}),
       });

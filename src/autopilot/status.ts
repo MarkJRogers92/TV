@@ -14,6 +14,7 @@ import type { Channel, ScheduleEntry } from "../domain/models.js";
 import { assertManagedDirectory, captureManagedDirectory } from "../acquisition/paths.js";
 import { listMediaRoots } from "../media/roots.js";
 import { assessCoverage } from "../scheduler/coverage.js";
+import { incidentCounts } from "./incidents.js";
 import type { PreparationClassification, PreparationJobState } from "../preparation/models.js";
 
 export type PreparationStatus = {
@@ -54,7 +55,11 @@ export type ChannelHorizonStatus = {
   gaps: number;
   contiguous: boolean;
   air: ChannelAirState;
+  /** 24-hour incident/repair counts (R17), with defined denominators. */
+  incidents: { incidents: number; dispatched: number; suppressed: number; recovered: number };
 };
+
+const INCIDENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function airEntry(entry: ScheduleEntry): AirEntry {
   return {
@@ -179,6 +184,7 @@ export function channelHorizonStatus(
       gaps: coverage.gaps.length,
       contiguous: coverage.contiguous,
       air: channelAirState(repositories, channel, now),
+      incidents: incidentCounts(repositories, channel.id, INCIDENT_WINDOW_MS, now),
     };
   });
 }
