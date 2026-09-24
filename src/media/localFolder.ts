@@ -1,4 +1,4 @@
-import { lstat, readdir, realpath } from "node:fs/promises";
+import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute, join } from "node:path";
 import type { MediaAdapter, MediaScanResult, ProbeResult } from "./adapter.js";
 import type { MediaItem } from "../domain/models.js";
@@ -161,6 +161,18 @@ export class LocalFolderAdapter implements MediaAdapter {
           continue;
 
         const path = await realpath(discoveredPath);
+        // dev+ino is the file's identity across a same-filesystem rename: it
+        // does not change when the path does, which is what lets the catalog
+        // join a moved file back to the ID it already had. `realpath` may have
+        // resolved a link, so stat the resolved path; a race that removes the
+        // file between the listing and here just leaves the item unidentified.
+        let identity: { deviceId: string; inode: string } | undefined;
+        try {
+          const stats = await stat(path);
+          identity = { deviceId: String(stats.dev), inode: String(stats.ino) };
+        } catch {
+          identity = undefined;
+        }
         let probed: ProbeResult;
         try {
           probed = normalizeProbe(await this.probe(path));
@@ -176,6 +188,8 @@ export class LocalFolderAdapter implements MediaAdapter {
           id: `local-${Buffer.from(path).toString("base64url")}`,
           source: "local-folder",
           path,
+          deviceId: identity?.deviceId,
+          inode: identity?.inode,
           kind: metadata.kind,
           title: metadata.title,
           durationMs: probed.durationMs,

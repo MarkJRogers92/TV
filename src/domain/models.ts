@@ -47,6 +47,17 @@ export const mediaSchema = z.object({
   id: z.string().min(1),
   source: z.enum(["placeholder", "local-folder"]),
   path: z.string().optional(),
+  /**
+   * Stable filesystem identity of the scanned file, as decimal strings.
+   *
+   * `stat`'s `dev`+`ino` are what survives a same-filesystem rename, so the
+   * catalog can recognize a moved file as the one it already knows instead of
+   * minting a second logical entry that forks its exposure history. Additive and
+   * optional: entries written before this field existed, and non-local sources,
+   * simply have none and are left alone by the reconciler.
+   */
+  deviceId: z.string().optional(),
+  inode: z.string().optional(),
   kind: z.enum(mediaKinds),
   title: z.string().min(1),
   durationMs: z.number().int().positive().nullable(),

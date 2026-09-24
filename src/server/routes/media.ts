@@ -1,12 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { mediaSchema, scheduleScopedContinuityTag } from "../../domain/models.js";
+import { mediaSchema } from "../../domain/models.js";
 import { validatePoolRecords } from "../../domain/validation.js";
 import {
   LocalFolderAdapter,
   MediaScanError,
   validateMediaRoot,
 } from "../../media/localFolder.js";
+import { persistScannedMedia } from "../../media/catalogReconcile.js";
 import {
   getMediaRoot,
   listMediaRoots,
@@ -32,49 +33,6 @@ function scanError(
   if (error instanceof MediaScanError)
     return reply.code(422).send({ code: error.code, message: error.message });
   return validationError(reply, error);
-}
-
-/**
- * Persist scanned items without discarding a manually-assigned `kind`.
- *
- * The scanner can only ever derive `episode` or `movie` from the path
- * (`src/media/localFolder.ts`), while `bumper`, `station-id` and `commercial`
- * are assigned through the API. Re-putting a scanned item verbatim therefore
- * resets those back to `episode`, which silently empties the pools that
- * reference them — and because `validatePoolRecords` is global, it also rejects
- * every subsequent pool write. A scan owns the path-derived fields; it does not
- * own `kind`, so an existing value wins.
- */
-function persistScanned(
-  repositories: ServerContext["repositories"],
-  items: Awaited<ReturnType<LocalFolderAdapter["scan"]>>["items"],
-) {
-  /**
-   * Generated continuity cards are ordinary video files inside a mapped root,
-   * so a library scan will rediscover them. They must not be re-registered: the
-   * scanner can only derive `episode`/`movie` from a path and knows nothing
-   * about the schedule binding, so a second, untagged catalog entry would strip
-   * the generated marker and let the same file be drawn as ordinary filler (or
-   * reclassified) on some other day. The registered card owns its path.
-   */
-  const generatedPaths = new Set(
-    repositories.media
-      .list()
-      .filter((item) => item.tags.includes(scheduleScopedContinuityTag))
-      .flatMap((item) => (item.path ? [item.path] : [])),
-  );
-  for (const item of items) {
-    // Also exclude an orphaned render whose registration failed or was removed.
-    if (item.path?.replaceAll("\\", "/").includes("/generated/continuity/")) continue;
-    if (item.path && generatedPaths.has(item.path)) continue;
-    const existing = repositories.media.get(item.id);
-    repositories.media.put(existing ? {
-      ...item,
-      kind: existing.kind,
-      // Scans own path-derived metadata, not the imported voiced classification.
-      tags: existing.tags.includes("voiced-continuity") ? existing.tags : item.tags,
-    } : item);
-  }
 }
 
 export async function registerMediaRoutes(
@@ -156,7 +114,7 @@ export async function registerMediaRoutes(
         diagnostics: result.diagnostics,
       };
       repositories.transaction(() => {
-        persistScanned(repositories, result.items);
+        persistScannedMedia(repositories, result.items);
         putMediaRoot(repositories, root);
         // A scan is one of the two moments the set of films can have changed, so
         // the movie pools are swept here; the write is a union and idempotent.
@@ -173,7 +131,7 @@ export async function registerMediaRoutes(
         path: (request.body as { root?: unknown } | undefined)?.root,
       });
       const result = await new LocalFolderAdapter().scan(path);
-      persistScanned(repositories, result.items);
+      persistScannedMedia(repositories, result.items);
       reconcileMovieProgramming(repositories);
       return result;
     } catch (error) {

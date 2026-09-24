@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -20,6 +20,8 @@ import {
 } from "../../src/scheduler/movieProgramming.js";
 import { movieFixture } from "../support/movieFixture.js";
 import { LocalFolderAdapter } from "../../src/media/localFolder.js";
+import { persistScannedMedia } from "../../src/media/catalogReconcile.js";
+import { createRepositories } from "../../src/db/repositories.js";
 import {
   movieOccurrenceKey,
   rotationMediaId,
@@ -498,7 +500,7 @@ test("package F05: a failed opener cannot become an encore instead of the ordina
     .toBe("movie_c");
 });
 
-test("package F06: renamed normalized movie identity keeps its repeat history", async () => {
+test("package F06: a same-filesystem rename keeps the movie's catalog identity and repeat history", async () => {
   const fixture = scenario("F06");
   const given = fixture.given as {
     content_id: string;
@@ -511,64 +513,40 @@ test("package F06: renamed normalized movie identity keeps its repeat history", 
     next_ordinary_nightly_pick: string;
     movie_a_still_recent: boolean;
   };
-  const { database, ledger } = await newLedger();
+  const { database } = await newLedger();
+  const repositories = createRepositories(database);
 
-  // The movie's stable content ID is its ledger identity. Catalog refreshes may
-  // change the display title, while title normalization keeps the logical track
-  // key stable across the original and normalized rendition.
-  const originalTrack = accepted(
-    ledger.ensureSeriesTrack({
-      channelId: "package-f06-channel",
-      seriesTitle: "Movie A (2026)",
-      at: given.last_nightly_air,
-    }),
+  // Drive the real catalog path: scan a library, persist it, rename the source
+  // on the same filesystem, and rescan. The scanner mints IDs from the path, so
+  // without a stable file identity the rename would fork a second logical movie
+  // and lose the first one's exposure history.
+  //
+  // The root is resolved because the adapter records `realpath`d paths, and on
+  // macOS `tmpdir()` is itself a symlink (`/var` -> `/private/var`).
+  const library = await realpath(
+    await mkdtemp(join(tmpdir(), "marktv-package-f06-media-")),
   );
-  const refreshedTrack = accepted(
-    ledger.ensureSeriesTrack({
-      channelId: "package-f06-channel",
-      seriesTitle: "movie-a",
-      at: given.now,
-    }),
-  );
-  expect(refreshedTrack.trackKey).toBe(originalTrack.trackKey);
-  accepted(
-    ledger.ensureEpisodeIdentity({
-      episodeKey: given.content_id,
-      trackKey: originalTrack.trackKey,
-      title: "Movie A Original",
-      ordinal: 1,
-      at: given.last_nightly_air,
-    }),
-  );
-  accepted(
-    ledger.ensureEpisodeIdentity({
-      episodeKey: given.content_id,
-      trackKey: refreshedTrack.trackKey,
-      title: "Movie A Normalized",
-      ordinal: 1,
-      at: given.now,
-    }),
-  );
-  expect(ledger.episodeIdentities(refreshedTrack.trackKey)).toHaveLength(
-    expected.logical_movie_count_for_a,
-  );
-
-  // The production catalog adapter assigns IDs from real paths. Renaming the
-  // source and creating a normalized rendition therefore creates a new ID for
-  // the same logical movie unless a stable identity joins the two records.
-  const library = await mkdtemp(join(tmpdir(), "marktv-package-f06-media-"));
   temporaryDirectories.push(library);
   const moviesDirectory = join(library, "Movies");
-  await mkdir(moviesDirectory);
+  const renditionDirectory = join(moviesDirectory, "renditions");
+  await mkdir(renditionDirectory, { recursive: true });
   const originalPath = join(moviesDirectory, "Movie A Original.mkv");
-  const normalizedPath = join(moviesDirectory, "Movie A Normalized.mkv");
-  await Promise.all([writeFile(originalPath, "fixture"), writeFile(normalizedPath, "fixture")]);
-  const catalog = await new LocalFolderAdapter(async () => 120_000).scan(library);
-  const originalMedia = catalog.items.find(({ title }) => title === "Movie A Original")!;
-  const normalizedMedia = catalog.items.find(({ title }) => title === "Movie A Normalized")!;
-  expect(originalMedia.kind).toBe("movie");
-  expect(normalizedMedia.kind).toBe("movie");
-  expect(normalizedMedia.id).not.toBe(originalMedia.id);
+  const alternativePath = join(moviesDirectory, "Movie B.mkv");
+  await Promise.all([
+    writeFile(originalPath, "fixture"),
+    writeFile(alternativePath, "fixture"),
+  ]);
+
+  const adapter = new LocalFolderAdapter(async () => 120_000);
+  const firstScan = await adapter.scan(library);
+  persistScannedMedia(repositories, firstScan.items);
+  const original = repositories.media.list().find(({ path }) => path === originalPath)!;
+  const alternative = repositories.media.list().find(({ path }) => path === alternativePath)!;
+  expect(original.kind).toBe("movie");
+  expect(alternative.kind).toBe("movie");
+  // The recorded identity is the file's dev+ino, which is what survives a rename.
+  expect(original.deviceId).toBeTruthy();
+  expect(original.inode).toBeTruthy();
 
   const timezone = "America/Chicago";
   const airDate = DateTime.fromISO(given.last_nightly_air, { setZone: true })
@@ -578,21 +556,78 @@ test("package F06: renamed normalized movie identity keeps its repeat history", 
     .setZone(timezone)
     .toISODate()!;
   const exposure = movieExposureIndex([
-    { mediaId: originalMedia.id, date: airDate },
+    { mediaId: original.id, date: airDate },
   ]);
+
+  // The rename keeps the inode; the normalized rendition is a *different* file
+  // under the same title, which must never be auto-merged by name or bytes.
+  const normalizedPath = join(moviesDirectory, "Movie A Normalized.mkv");
+  const renditionPath = join(renditionDirectory, "Movie A Normalized.mkv");
+  await rename(originalPath, normalizedPath);
+  await writeFile(renditionPath, "fixture");
+
+  const rescan = await adapter.scan(library);
+  const scannedOriginal = rescan.items.find(({ path }) => path === normalizedPath)!;
+  const scannedRendition = rescan.items.find(({ path }) => path === renditionPath)!;
+  // The scanner itself stays path-derived; reconciliation is what joins the move.
+  expect(scannedOriginal.id).not.toBe(original.id);
+  expect(scannedOriginal.deviceId).toBe(original.deviceId);
+  expect(scannedOriginal.inode).toBe(original.inode);
+
+  persistScannedMedia(repositories, rescan.items);
+
+  const renamed = repositories.media.get(original.id)!;
+  expect(renamed.path).toBe(normalizedPath);
+  expect(renamed.deviceId).toBe(original.deviceId);
+  expect(renamed.inode).toBe(original.inode);
+  // One logical movie A: the moved file adopts its prior ID and the old path is
+  // gone rather than left as a second catalog entry. Nothing reset its history.
+  expect(
+    repositories.media.list().filter(({ id }) => id === original.id),
+  ).toHaveLength(expected.logical_movie_count_for_a);
+  expect(repositories.media.list().some(({ path }) => path === originalPath)).toBe(false);
+  // The same-titled rendition stays its own entry: no title-only or byte-merge.
+  const sameTitle = repositories.media
+    .list()
+    .filter(({ title }) => title === "Movie A Normalized");
+  expect(sameTitle).toHaveLength(2);
+  expect(sameTitle.filter(({ id }) => id === original.id)).toHaveLength(1);
+  expect(repositories.media.get(scannedRendition.id)?.id).not.toBe(original.id);
+  // The unrenamed neighbour keeps its own ID and path.
+  expect(alternative.deviceId).toBeTruthy();
+  expect(repositories.media.get(alternative.id)?.path).toBe(alternativePath);
+
+  // A further scan with nothing changed must not fork the moved file again: the
+  // record that already owns the path keeps the prior ID instead of letting a
+  // fresh path-derived entry appear beside it.
+  persistScannedMedia(repositories, (await adapter.scan(library)).items);
+  expect(
+    repositories.media.list().filter(({ path }) => path === normalizedPath),
+  ).toHaveLength(1);
+  expect(repositories.media.get(renamed.id)?.path).toBe(normalizedPath);
+  expect(
+    repositories.media.list().filter(({ kind }) => kind === "movie"),
+  ).toHaveLength(3);
+
   const pick = spacedNightlyMovie({
-    order: [normalizedMedia.id, given.ordinary_alternative],
+    order: [renamed.id, alternative.id],
     ordinal: 0,
     date: pickDate,
     lastExposedOn: exposure.lastExposedOn,
   });
-  const lastMovieADate = exposure.lastExposedOn.get(originalMedia.id)!;
+  const logicalIds = new Map([
+    [given.content_id, renamed.id],
+    [given.ordinary_alternative, alternative.id],
+  ]);
+  const lastMovieADate = exposure.lastExposedOn.get(renamed.id)!;
   const movieAGapDays = DateTime.fromISO(pickDate, { zone: timezone })
     .startOf("day")
     .diff(DateTime.fromISO(lastMovieADate, { zone: timezone }).startOf("day"), "days")
     .days;
 
-  expect(pick?.mediaId).toBe(expected.next_ordinary_nightly_pick);
+  expect(renamed.id).toBe(original.id);
+  expect(pick?.mediaId).toBe(logicalIds.get(expected.next_ordinary_nightly_pick));
+  expect(pick?.mediaId).not.toBe(renamed.id);
   expect(movieAGapDays < movieNightlyMinSpacingDays).toBe(expected.movie_a_still_recent);
   database.close();
 });
