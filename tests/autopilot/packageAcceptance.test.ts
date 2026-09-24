@@ -22,6 +22,7 @@ import { movieFixture } from "../support/movieFixture.js";
 import { LocalFolderAdapter } from "../../src/media/localFolder.js";
 import { persistScannedMedia } from "../../src/media/catalogReconcile.js";
 import { createRepositories } from "../../src/db/repositories.js";
+import { ensureMovieProgrammingPool } from "../../src/media/movieEnrollment.js";
 import {
   movieOccurrenceKey,
   rotationMediaId,
@@ -574,7 +575,35 @@ test("package F06: a same-filesystem rename keeps the movie's catalog identity a
   expect(scannedOriginal.deviceId).toBe(original.deviceId);
   expect(scannedOriginal.inode).toBe(original.inode);
 
+  // Simulate the old state where a rendition was already enrolled before its
+  // explicit provenance was registered. A raw scan never infers provenance.
   persistScannedMedia(repositories, rescan.items);
+  const movieSetup = movieFixture({ movieCount: 0 });
+  const moviePool = movieSetup.pools.find(({ id }) => id === "movies")!;
+  repositories.channels.put({
+    ...movieSetup.channel,
+    movieProgramming: {
+      ...movieSetup.channel.movieProgramming!,
+      rootPath: moviesDirectory,
+    },
+  });
+  repositories.pools.put({ ...moviePool, mediaIds: [] });
+  const movieChannel = repositories.channels.get(movieSetup.channel.id)!;
+  ensureMovieProgrammingPool(repositories, movieChannel);
+  expect(repositories.pools.get("movies")?.mediaIds).toEqual(
+    [alternative.id, original.id, scannedRendition.id].sort(),
+  );
+
+  // The normalization workflow explicitly registers provenance; catalog scans
+  // alone never infer it from the shared title, bytes, or renditions folder.
+  persistScannedMedia(
+    repositories,
+    rescan.items.map((item) =>
+      item.id === scannedRendition.id
+        ? { ...item, sourceMediaId: original.id }
+        : item,
+    ),
+  );
 
   const renamed = repositories.media.get(original.id)!;
   expect(renamed.path).toBe(normalizedPath);
@@ -583,7 +612,10 @@ test("package F06: a same-filesystem rename keeps the movie's catalog identity a
   // One logical movie A: the moved file adopts its prior ID and the old path is
   // gone rather than left as a second catalog entry. Nothing reset its history.
   expect(
-    repositories.media.list().filter(({ id }) => id === original.id),
+    repositories.media.list().filter(
+      ({ title, sourceMediaId }) =>
+        title === "Movie A Normalized" && !sourceMediaId,
+    ),
   ).toHaveLength(expected.logical_movie_count_for_a);
   expect(repositories.media.list().some(({ path }) => path === originalPath)).toBe(false);
   // The same-titled rendition stays its own entry: no title-only or byte-merge.
@@ -593,6 +625,7 @@ test("package F06: a same-filesystem rename keeps the movie's catalog identity a
   expect(sameTitle).toHaveLength(2);
   expect(sameTitle.filter(({ id }) => id === original.id)).toHaveLength(1);
   expect(repositories.media.get(scannedRendition.id)?.id).not.toBe(original.id);
+  expect(repositories.media.get(scannedRendition.id)?.sourceMediaId).toBe(original.id);
   // The unrenamed neighbour keeps its own ID and path.
   expect(alternative.deviceId).toBeTruthy();
   expect(repositories.media.get(alternative.id)?.path).toBe(alternativePath);
@@ -605,12 +638,20 @@ test("package F06: a same-filesystem rename keeps the movie's catalog identity a
     repositories.media.list().filter(({ path }) => path === normalizedPath),
   ).toHaveLength(1);
   expect(repositories.media.get(renamed.id)?.path).toBe(normalizedPath);
+  expect(repositories.media.get(scannedRendition.id)?.sourceMediaId).toBe(original.id);
   expect(
     repositories.media.list().filter(({ kind }) => kind === "movie"),
   ).toHaveLength(3);
 
+  ensureMovieProgrammingPool(repositories, movieChannel);
+  expect(repositories.pools.get("movies")?.mediaIds).toEqual(
+    [alternative.id, renamed.id].sort(),
+  );
+  expect(repositories.pools.get("movies")?.mediaIds).not.toContain(scannedRendition.id);
+
+  const enrolledMovieIds = repositories.pools.get("movies")!.mediaIds;
   const pick = spacedNightlyMovie({
-    order: [renamed.id, alternative.id],
+    order: enrolledMovieIds,
     ordinal: 0,
     date: pickDate,
     lastExposedOn: exposure.lastExposedOn,

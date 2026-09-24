@@ -1,17 +1,35 @@
+import { readdirSync } from "node:fs";
+import { basename, dirname } from "node:path";
 import type { Repositories } from "../db/repositories.js";
 import { scheduleScopedContinuityTag, type MediaItem } from "../domain/models.js";
 
 /**
  * Stable filesystem identity of a catalog entry, or `undefined` when it has none.
  *
- * Identity is the file's `dev`+`ino`, not its path: a same-filesystem rename
- * keeps both, so the file that moved can be recognized as the one already in the
- * catalog. Entries written before this field existed, and non-local sources,
- * carry no identity and are never treated as a rename source.
+ * A same-filesystem rename keeps device, inode, size and timestamps. Requiring
+ * the whole tuple reduces the chance that a deleted file's reused inode can
+ * inherit older playback history. Legacy rows without the tuple stay unlinked.
  */
 export function fileIdentityKey(item: MediaItem): string | undefined {
-  if (!item.deviceId || !item.inode) return undefined;
-  return `${item.deviceId}:${item.inode}`;
+  if (
+    !item.deviceId || !item.inode || !item.fileSizeBytes ||
+    !item.fileModifiedMs || !item.fileBirthMs
+  ) return undefined;
+  return [
+    item.deviceId, item.inode, item.fileSizeBytes,
+    item.fileModifiedMs, item.fileBirthMs,
+  ].join(":");
+}
+
+function pathIsGone(path: string): boolean {
+  try {
+    // On case-insensitive filesystems lstat("Movie.mkv") can succeed after
+    // the entry was renamed to "movie.mkv". Compare the directory's actual
+    // names so that this spelling is treated as gone.
+    return !readdirSync(dirname(path)).includes(basename(path));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
 }
 
 /**
@@ -22,9 +40,9 @@ export function fileIdentityKey(item: MediaItem): string | undefined {
  * rotation history, which is keyed by ID, onto a second logical entry. This
  * function finds the one prior ID a scanned path may adopt:
  *
- * - the file identity (dev+ino) must match exactly, and
- * - the prior record's own path must be absent from this scan, i.e. the file
- *   moved rather than a second link appeared, and
+ * - the file identity tuple must match exactly, and
+ * - the prior record's own path must actually be gone, so a partial scan of
+ *   another media root cannot masquerade as a move, and
  * - the match must be unique on BOTH sides.
  *
  * Anything else fails closed: the scanned item keeps its path-derived ID and is
@@ -33,11 +51,9 @@ export function fileIdentityKey(item: MediaItem): string | undefined {
  * record, and a hardlink farm or a recycled inode (one identity, several
  * candidates) is deliberately left unmerged rather than guessed.
  *
- * A prepared/normalized rendition is a *different file* with its own inode, so
- * it never joins by name or content: it stays a separate catalog entry. Modeling
- * such a rendition as an immutable internal cache asset with explicit
- * `sourceMediaId` provenance (and excluding it from the raw library scan) is a
- * required future gate; there is no such cache today.
+ * A prepared/normalized rendition is a different file with its own inode. It
+ * stays a separate catalog entry and is linked only when its registration
+ * explicitly supplies `sourceMediaId`; rescans retain that catalog provenance.
  */
 export function reconcileRenamedMediaIds(
   scanned: readonly MediaItem[],
@@ -51,22 +67,25 @@ export function reconcileRenamedMediaIds(
     existing.flatMap((item) => (item.path ? [item.path] : [])),
   );
 
-  const priorByIdentity = new Map<string, MediaItem[]>();
-  for (const item of existing) {
-    const key = fileIdentityKey(item);
-    if (!key || !item.path) continue;
-    // A record whose path is still present in this scan was not renamed.
-    if (scannedPaths.has(item.path)) continue;
-    // Guard against re-keying a record onto itself.
-    if (scannedIds.has(item.id)) continue;
-    priorByIdentity.set(key, [...(priorByIdentity.get(key) ?? []), item]);
-  }
-
   const scannedByIdentity = new Map<string, MediaItem[]>();
   for (const item of scanned) {
     const key = fileIdentityKey(item);
     if (!key || !item.path) continue;
     scannedByIdentity.set(key, [...(scannedByIdentity.get(key) ?? []), item]);
+  }
+
+  const priorByIdentity = new Map<string, MediaItem[]>();
+  for (const item of existing) {
+    const key = fileIdentityKey(item);
+    if (!key || !item.path) continue;
+    // Avoid filesystem I/O for prior identities that cannot match this scan.
+    if (!scannedByIdentity.has(key)) continue;
+    // A partial scan of another root cannot prove a rename. The old path must
+    // actually be gone; permission errors or an offline volume fail closed.
+    if (scannedPaths.has(item.path) || !pathIsGone(item.path)) continue;
+    // Guard against re-keying a record onto itself.
+    if (scannedIds.has(item.id)) continue;
+    priorByIdentity.set(key, [...(priorByIdentity.get(key) ?? []), item]);
   }
 
   const assignments = new Map<string, string>();
@@ -148,6 +167,9 @@ export function persistScannedMedia(
         ? {
             ...incoming,
             kind: existing.kind,
+            // Explicit rendition provenance is catalog-owned metadata. A raw
+            // rescan cannot infer it and must not erase it.
+            sourceMediaId: existing.sourceMediaId ?? incoming.sourceMediaId,
             // Scans own path-derived metadata, not the imported voiced classification.
             tags: existing.tags.includes("voiced-continuity")
               ? existing.tags

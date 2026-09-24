@@ -166,10 +166,22 @@ export class LocalFolderAdapter implements MediaAdapter {
         // join a moved file back to the ID it already had. `realpath` may have
         // resolved a link, so stat the resolved path; a race that removes the
         // file between the listing and here just leaves the item unidentified.
-        let identity: { deviceId: string; inode: string } | undefined;
+        let identity: {
+          deviceId: string;
+          inode: string;
+          fileSizeBytes: string;
+          fileModifiedMs: string;
+          fileBirthMs: string;
+        } | undefined;
         try {
           const stats = await stat(path);
-          identity = { deviceId: String(stats.dev), inode: String(stats.ino) };
+          identity = {
+            deviceId: String(stats.dev),
+            inode: String(stats.ino),
+            fileSizeBytes: String(stats.size),
+            fileModifiedMs: String(stats.mtimeMs),
+            fileBirthMs: String(stats.birthtimeMs),
+          };
         } catch {
           identity = undefined;
         }
@@ -190,6 +202,9 @@ export class LocalFolderAdapter implements MediaAdapter {
           path,
           deviceId: identity?.deviceId,
           inode: identity?.inode,
+          fileSizeBytes: identity?.fileSizeBytes,
+          fileModifiedMs: identity?.fileModifiedMs,
+          fileBirthMs: identity?.fileBirthMs,
           kind: metadata.kind,
           title: metadata.title,
           durationMs: probed.durationMs,

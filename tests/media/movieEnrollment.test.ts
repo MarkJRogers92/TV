@@ -55,6 +55,32 @@ test("only movies inside the configured folder are eligible", () => {
   ]);
 });
 
+test("same-title movies without explicit provenance remain independently eligible", () => {
+  const first = movieAt("movie-original", `${ROOT}/Movie A.mkv`, "Movie A");
+  const unrelated = movieAt(
+    "movie-unrelated",
+    `${ROOT}/renditions/Movie A.mkv`,
+    "Movie A",
+  );
+
+  expect(eligibleMovieMediaIds([first, unrelated], ROOT)).toEqual([
+    "movie-original",
+    "movie-unrelated",
+  ]);
+});
+
+test("explicitly derived renditions are excluded from movie eligibility", () => {
+  const original = movieAt("movie-original", `${ROOT}/Movie A.mkv`, "Movie A");
+  const rendition = {
+    ...movieAt("movie-rendition", `${ROOT}/renditions/Movie A.mkv`, "Movie A"),
+    sourceMediaId: original.id,
+  };
+
+  expect(eligibleMovieMediaIds([original, rendition], ROOT)).toEqual([
+    original.id,
+  ]);
+});
+
 test("excludes configured child roots from a broader movie pool", () => {
   const items = [
     movieAt("top-level-movie", `${ROOT}/Top Level.mkv`),

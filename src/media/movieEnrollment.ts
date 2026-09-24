@@ -59,6 +59,7 @@ export function eligibleMovieMediaIds(
     .filter(
       (item) =>
         item.kind === "movie" &&
+        !item.sourceMediaId &&
         item.available &&
         (item.durationMs ?? 0) > 0 &&
         item.durationStatus !== "missing" &&
@@ -93,14 +94,28 @@ export function ensureMovieProgrammingPool(
     programming.rootPath,
     exclusions,
   );
+  const derivedMediaIds = new Set(
+    repositories.media
+      .list()
+      .filter((item) => item.sourceMediaId)
+      .map((item) => item.id),
+  );
   const outcomes: MoviePoolOutcome[] = [];
   for (const poolId of programming.poolIds) {
     const existing = repositories.pools.get(poolId);
-    const members = [...new Set([...(existing?.mediaIds ?? []), ...movies])].sort();
+    // Keep the pool additive for ordinary inventory, but remove an entry once
+    // catalog provenance proves it is a prepared rendition of another movie.
+    const retainedMembers = (existing?.mediaIds ?? []).filter(
+      (id) => !derivedMediaIds.has(id),
+    );
+    const members = [...new Set([...retainedMembers, ...movies])].sort();
+    const removedDerived = (existing?.mediaIds ?? []).some((id) =>
+      derivedMediaIds.has(id),
+    );
     const added = members.filter(
       (id) => !(existing?.mediaIds ?? []).includes(id),
     ).length;
-    if (existing && added === 0) {
+    if (existing && added === 0 && !removedDerived) {
       outcomes.push({
         channelId: channel.id,
         poolId,

@@ -26,6 +26,9 @@ function media(overrides: Partial<MediaItem> & { id: string }): MediaItem {
     durationStatus: "ok",
     available: true,
     tags: [],
+    fileSizeBytes: "7",
+    fileModifiedMs: "100",
+    fileBirthMs: "50",
     ...overrides,
   };
 }
@@ -76,6 +79,23 @@ test("fails closed on ambiguous identity and on records with no recorded dev+ino
   // A pre-existing record with no identity can never be a rename source.
   const legacy = media({ id: "local-legacy", path: "/lib/Movies/Legacy.mkv" });
   expect(reconcileRenamedMediaIds([arrival], [legacy]).size).toBe(0);
+  // A deleted file's inode can be reused. The replacement must not inherit
+  // its history when its file metadata differs.
+  expect(reconcileRenamedMediaIds([
+    { ...arrival, fileBirthMs: "51" },
+  ], [first]).size).toBe(0);
+});
+
+test("does not treat a still-present file in another root as a rename", async () => {
+  const source = await libraryWith(["Movie A.mkv"]);
+  const alias = await libraryWith([]);
+  const aliasPath = alias.path("Movie A Alias.mkv");
+  await link(source.path("Movie A.mkv"), aliasPath);
+  const first = (await adapter().scan(source.root)).items[0]!;
+  const second = (await adapter().scan(alias.root)).items[0]!;
+  expect(first.deviceId).toBe(second.deviceId);
+  expect(first.inode).toBe(second.inode);
+  expect(reconcileRenamedMediaIds([second], [first]).size).toBe(0);
 });
 
 test("persists a moved file under its prior id and still fails closed on a hardlink", async () => {
@@ -103,4 +123,22 @@ test("persists a moved file under its prior id and still fails closed on a hardl
   expect(rows.get(original.id)?.path).toBe(movedPath);
   expect([...rows.values()].filter((item) => item.path === linkedPath)).toHaveLength(1);
   expect(before.every((item) => rows.get(item.id)?.path === item.path)).toBe(true);
+});
+
+test("preserves catalog identity across a case-only filename rename", async () => {
+  const library = await libraryWith(["Movie.mkv"]);
+  const { repositories, rows } = memoryCatalog();
+  persistScannedMedia(repositories, (await adapter().scan(library.root)).items);
+  const original = [...rows.values()].find(
+    (item) => item.path === library.path("Movie.mkv"),
+  )!;
+
+  // Works on both case-sensitive and case-insensitive filesystems. On APFS,
+  // lstat of the old spelling can still reach the renamed entry, so reconciliation
+  // must check the directory's exact entry spelling.
+  await rename(library.path("Movie.mkv"), library.path("movie.mkv"));
+  persistScannedMedia(repositories, (await adapter().scan(library.root)).items);
+
+  expect(rows.get(original.id)?.path).toBe(library.path("movie.mkv"));
+  expect([...rows.values()]).toHaveLength(1);
 });

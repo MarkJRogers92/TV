@@ -131,8 +131,10 @@ export async function registerMediaRoutes(
         path: (request.body as { root?: unknown } | undefined)?.root,
       });
       const result = await new LocalFolderAdapter().scan(path);
-      persistScannedMedia(repositories, result.items);
-      reconcileMovieProgramming(repositories);
+      repositories.transaction(() => {
+        persistScannedMedia(repositories, result.items);
+        reconcileMovieProgramming(repositories);
+      });
       return result;
     } catch (error) {
       return scanError(reply, error);

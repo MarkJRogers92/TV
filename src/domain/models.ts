@@ -58,6 +58,11 @@ export const mediaSchema = z.object({
    */
   deviceId: z.string().optional(),
   inode: z.string().optional(),
+  fileSizeBytes: z.string().optional(),
+  fileModifiedMs: z.string().optional(),
+  fileBirthMs: z.string().optional(),
+  /** Explicit provenance for a prepared rendition derived from another movie. */
+  sourceMediaId: z.string().min(1).optional(),
   kind: z.enum(mediaKinds),
   title: z.string().min(1),
   durationMs: z.number().int().positive().nullable(),
