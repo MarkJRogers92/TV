@@ -50,7 +50,8 @@ const SOURCE_END = 1_440_000;
 const AT = "2026-09-23T05:00:00.000Z";
 
 function ok<T>(result: AiringWriteResult<T>): T {
-  if (!result.ok) throw new Error(`expected success, got ${result.reason}: ${result.detail}`);
+  if (!result.ok)
+    throw new Error(`expected success, got ${result.reason}: ${result.detail}`);
   return result.value;
 }
 
@@ -60,9 +61,16 @@ function refused<T>(result: AiringWriteResult<T>) {
 }
 
 /** Registers the track plus a contiguous run of season 1 episodes. */
-function trackWithEpisodes(ledger: AiringLedger, episodes: Array<[string, number]>) {
+function trackWithEpisodes(
+  ledger: AiringLedger,
+  episodes: Array<[string, number]>,
+) {
   const track = ok(
-    ledger.ensureSeriesTrack({ channelId: CHANNEL, seriesTitle: SERIES, at: AT }),
+    ledger.ensureSeriesTrack({
+      channelId: CHANNEL,
+      seriesTitle: SERIES,
+      at: AT,
+    }),
   );
   for (const [episodeKey, episode] of episodes) {
     ok(
@@ -118,7 +126,10 @@ function creditEpisode(
 function recordFullEvidence(
   ledger: AiringLedger,
   occurrenceKey: string,
-  options: { published?: Array<[number, number]>; aired?: Array<[number, number]> } = {},
+  options: {
+    published?: Array<[number, number]>;
+    aired?: Array<[number, number]>;
+  } = {},
 ) {
   const published = options.published ?? [[SOURCE_START, SOURCE_END]];
   const aired = options.aired ?? [[SOURCE_START, SOURCE_END]];
@@ -163,11 +174,17 @@ test("the ledger schema is additive and leaves existing rows untouched", async (
 
   // Reopening runs the additive migration a second time; it must be idempotent.
   const second = openDatabase(dir);
-  const tables = (second
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'airing\\_%' ESCAPE '\\' ORDER BY name")
-    .all() as Array<{ name: string }>).map((row) => row.name);
+  const tables = (
+    second
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'airing\\_%' ESCAPE '\\' ORDER BY name",
+      )
+      .all() as Array<{ name: string }>
+  ).map((row) => row.name);
   const preserved = second
-    .prepare("SELECT json FROM documents WHERE type = 'setting' AND id = 'existing'")
+    .prepare(
+      "SELECT json FROM documents WHERE type = 'setting' AND id = 'existing'",
+    )
     .get() as { json: string } | undefined;
   const generations = second
     .prepare("SELECT COUNT(*) AS count FROM schedule_generations")
@@ -182,10 +199,18 @@ test("the ledger schema is additive and leaves existing rows untouched", async (
 test("a series track keeps one identity across spelling, case, channel and trailing-year renames", async () => {
   const ledger = createAiringLedger(openDatabase(await dataDir()));
   const original = ok(
-    ledger.ensureSeriesTrack({ channelId: CHANNEL, seriesTitle: "Home Improvement (1991)", at: AT }),
+    ledger.ensureSeriesTrack({
+      channelId: CHANNEL,
+      seriesTitle: "Home Improvement (1991)",
+      at: AT,
+    }),
   );
   const renamed = ok(
-    ledger.ensureSeriesTrack({ channelId: CHANNEL, seriesTitle: "home improvement", at: AT }),
+    ledger.ensureSeriesTrack({
+      channelId: CHANNEL,
+      seriesTitle: "home improvement",
+      at: AT,
+    }),
   );
   // Same series on another channel shares the one logical track, so the two
   // channels contend for a single floor instead of each holding a partial one.
@@ -206,15 +231,23 @@ test("a series track keeps one identity across spelling, case, channel and trail
     }),
   );
   const other = ok(
-    ledger.ensureSeriesTrack({ channelId: CHANNEL, seriesTitle: "Night Court", at: AT }),
+    ledger.ensureSeriesTrack({
+      channelId: CHANNEL,
+      seriesTitle: "Night Court",
+      at: AT,
+    }),
   );
 
   expect(renamed.trackKey).toBe(original.trackKey);
   expect(otherChannel.trackKey).toBe(original.trackKey);
   expect(separate.trackKey).not.toBe(original.trackKey);
   expect(other.trackKey).not.toBe(original.trackKey);
-  expect(ledger.seriesTrack(original.trackKey)?.trackKey).toBe(original.trackKey);
-  expect(seriesTrackKey("Home Improvement (1991)")).toBe(seriesTrackKey("home improvement"));
+  expect(ledger.seriesTrack(original.trackKey)?.trackKey).toBe(
+    original.trackKey,
+  );
+  expect(seriesTrackKey("Home Improvement (1991)")).toBe(
+    seriesTrackKey("home improvement"),
+  );
   expect(seriesTrackKey("Home Improvement")).not.toBe(
     seriesTrackKey("Home Improvement", "marktv-movies"),
   );
@@ -290,15 +323,26 @@ test("[F18] schedule generation history alone credits no airing", async () => {
       .prepare(
         "INSERT INTO schedule_generations(channel_id, schedule_id, generated_at, json) VALUES (?, ?, ?, ?)",
       )
-      .run(CHANNEL, `schedule-${index}`, AT, JSON.stringify({ id: `schedule-${index}` }));
+      .run(
+        CHANNEL,
+        `schedule-${index}`,
+        AT,
+        JSON.stringify({ id: `schedule-${index}` }),
+      );
   }
 
   const evaluation = ledger.evaluateOccurrence(occurrence.occurrenceKey)!;
   expect(evaluation.contiguousPublished).toBe(false);
   expect(evaluation.explicitAiredInterval).toBe(false);
   expect(evaluation.complete).toBe(false);
-  expect(refused(ledger.completeOccurrence({ occurrenceKey: occurrence.occurrenceKey, at: AT })).reason)
-    .toBe("insufficient-evidence");
+  expect(
+    refused(
+      ledger.completeOccurrence({
+        occurrenceKey: occurrence.occurrenceKey,
+        at: AT,
+      }),
+    ).reason,
+  ).toBe("insufficient-evidence");
   expect(ledger.completionFloor(track.trackKey)).toBeUndefined();
 });
 
@@ -317,8 +361,10 @@ test("[F03] a gap in published coverage withholds completion", async () => {
   expect(evaluation.contiguousPublished).toBe(false);
   expect(evaluation.contiguousAired).toBe(true);
   expect(evaluation.complete).toBe(false);
-  expect(refused(ledger.completeOccurrence({ occurrenceKey: "occ-1", at: AT })).reason)
-    .toBe("insufficient-evidence");
+  expect(
+    refused(ledger.completeOccurrence({ occurrenceKey: "occ-1", at: AT }))
+      .reason,
+  ).toBe("insufficient-evidence");
   expect(ledger.completionFloor(track.trackKey)).toBeUndefined();
 });
 
@@ -350,17 +396,25 @@ test("[EP01] contiguous publication plus an explicit aired interval credits the 
   ok(reserve(ledger, track.trackKey, "occ-1", "S01E01"));
   recordFullEvidence(ledger, "occ-1");
 
-  const credited = ok(ledger.completeOccurrence({ occurrenceKey: "occ-1", at: AT }));
+  const credited = ok(
+    ledger.completeOccurrence({ occurrenceKey: "occ-1", at: AT }),
+  );
   expect(credited.credited).toBe(true);
   expect(credited.floor.episode).toBe(1);
   expect(credited.floor.completedEpisodeKey).toBe("S01E01");
   expect(ledger.occurrence("occ-1")?.state).toBe("completed");
-  expect(ledger.completionFloor(track.trackKey)?.completedOccurrenceKey).toBe("occ-1");
+  expect(ledger.completionFloor(track.trackKey)?.completedOccurrenceKey).toBe(
+    "occ-1",
+  );
 
   // Crediting the same occurrence again is idempotent rather than an error.
-  const replay = ok(ledger.completeOccurrence({ occurrenceKey: "occ-1", at: AT }));
+  const replay = ok(
+    ledger.completeOccurrence({ occurrenceKey: "occ-1", at: AT }),
+  );
   expect(replay.credited).toBe(true);
-  expect(ledger.completionFloor(track.trackKey)?.completedEpisodeKey).toBe("S01E01");
+  expect(ledger.completionFloor(track.trackKey)?.completedEpisodeKey).toBe(
+    "S01E01",
+  );
 });
 
 test("[F10] a later successor cannot be credited before its predecessor", async () => {
@@ -379,13 +433,17 @@ test("[F10] a later successor cannot be credited before its predecessor", async 
     recordFullEvidence(ledger, occurrenceKey);
   }
 
-  expect(refused(ledger.completeOccurrence({ occurrenceKey: "occ-3", at: AT })).reason)
-    .toBe("predecessor-incomplete");
+  expect(
+    refused(ledger.completeOccurrence({ occurrenceKey: "occ-3", at: AT }))
+      .reason,
+  ).toBe("predecessor-incomplete");
   expect(ledger.completionFloor(track.trackKey)).toBeUndefined();
 
   ok(ledger.completeOccurrence({ occurrenceKey: "occ-1", at: AT }));
-  expect(refused(ledger.completeOccurrence({ occurrenceKey: "occ-3", at: AT })).reason)
-    .toBe("predecessor-incomplete");
+  expect(
+    refused(ledger.completeOccurrence({ occurrenceKey: "occ-3", at: AT }))
+      .reason,
+  ).toBe("predecessor-incomplete");
   expect(ledger.completionFloor(track.trackKey)?.episode).toBe(1);
 
   ok(ledger.completeOccurrence({ occurrenceKey: "occ-2", at: AT }));
@@ -410,8 +468,20 @@ test("[EP09] a restart reopens the same active occurrence at the same source off
       at: AT,
     }),
   );
-  ok(firstLedger.advanceOccurrenceOffset({ trackKey: track.trackKey, sourceOffsetMs: 540_000, at: AT }));
-  ok(firstLedger.interruptOccurrence({ trackKey: track.trackKey, sourceOffsetMs: 540_000, at: AT }));
+  ok(
+    firstLedger.advanceOccurrenceOffset({
+      trackKey: track.trackKey,
+      sourceOffsetMs: 540_000,
+      at: AT,
+    }),
+  );
+  ok(
+    firstLedger.interruptOccurrence({
+      trackKey: track.trackKey,
+      sourceOffsetMs: 540_000,
+      at: AT,
+    }),
+  );
   first.close();
 
   const second = openDatabase(dir);
@@ -421,12 +491,21 @@ test("[EP09] a restart reopens the same active occurrence at the same source off
   expect(active.sourceOffsetMs).toBe(540_000);
   expect(active.state).toBe("interrupted");
 
-  const resumed = ok(secondLedger.resumeActiveOccurrence({ trackKey: track.trackKey, at: AT }));
+  const resumed = ok(
+    secondLedger.resumeActiveOccurrence({ trackKey: track.trackKey, at: AT }),
+  );
   expect(resumed.occurrenceKey).toBe("occ-1");
   expect(resumed.sourceOffsetMs).toBe(540_000);
   expect(resumed.state).toBe("active");
-  expect(refused(secondLedger.advanceOccurrenceOffset({ trackKey: track.trackKey, sourceOffsetMs: 60_000, at: AT })).reason)
-    .toBe("offset-regression");
+  expect(
+    refused(
+      secondLedger.advanceOccurrenceOffset({
+        trackKey: track.trackKey,
+        sourceOffsetMs: 60_000,
+        at: AT,
+      }),
+    ).reason,
+  ).toBe("offset-regression");
   second.close();
 });
 
@@ -449,7 +528,9 @@ test("[EP14] a missing or ambiguous track position is held instead of resetting 
   );
   expect(missing.reason).toBe("missing-position");
   expect(ledger.trackHold(track.trackKey)?.reason).toBe("missing-position");
-  expect(refused(reserve(ledger, track.trackKey, "occ-2", "S01EXX")).reason).toBe("track-held");
+  expect(
+    refused(reserve(ledger, track.trackKey, "occ-2", "S01EXX")).reason,
+  ).toBe("track-held");
 
   // A different episode claiming an already-taken position is ambiguous, too.
   const ambiguous = refused(
@@ -466,7 +547,9 @@ test("[EP14] a missing or ambiguous track position is held instead of resetting 
   expect(ledger.episodeIdentities(track.trackKey)).toHaveLength(1);
 
   // Held, not reset: the established floor survives the disruption.
-  expect(ledger.completionFloor(track.trackKey)?.completedEpisodeKey).toBe("S01E01");
+  expect(ledger.completionFloor(track.trackKey)?.completedEpisodeKey).toBe(
+    "S01E01",
+  );
   expect(ledger.completionFloor(track.trackKey)?.episode).toBe(1);
 });
 
@@ -495,14 +578,20 @@ test("a held track can be released once the position is resolved", async () => {
   );
   expect(ledger.releaseTrackHold(track.trackKey, AT)).toBe(true);
   expect(ledger.trackHold(track.trackKey)).toBeUndefined();
-  expect(ok(reserve(ledger, track.trackKey, "occ-2", "S01E02")).occurrenceKey).toBe("occ-2");
+  expect(
+    ok(reserve(ledger, track.trackKey, "occ-2", "S01E02")).occurrenceKey,
+  ).toBe("occ-2");
 });
 
 test("an occurrence cannot be reserved for an unknown track or episode", async () => {
   const ledger = createAiringLedger(openDatabase(await dataDir()));
   const track = trackWithEpisodes(ledger, [["S01E01", 1]]);
-  expect(refused(reserve(ledger, "missing-track", "occ-x", "S01E01")).reason).toBe("unknown-track");
-  expect(refused(reserve(ledger, track.trackKey, "occ-y", "S09E99")).reason).toBe("unknown-episode");
+  expect(
+    refused(reserve(ledger, "missing-track", "occ-x", "S01E01")).reason,
+  ).toBe("unknown-track");
+  expect(
+    refused(reserve(ledger, track.trackKey, "occ-y", "S09E99")).reason,
+  ).toBe("unknown-episode");
   expect(
     refused(
       ledger.reserveOccurrence({
@@ -535,7 +624,9 @@ test("ledger reads survive a restart with the same identities and state", async 
   const second = createAiringLedger(openDatabase(dir));
   expect(second.seriesTrack(track.trackKey)?.seriesKey).toBe(seriesKey);
   expect(second.episodeIdentity("S01E01")?.episode).toBe(1);
-  expect(second.completionFloor(track.trackKey)?.completedOccurrenceKey).toBe("occ-1");
+  expect(second.completionFloor(track.trackKey)?.completedOccurrenceKey).toBe(
+    "occ-1",
+  );
   expect(second.airedIntervals("occ-1")).toHaveLength(1);
   expect(second.publishedIntervals("occ-1")).toHaveLength(1);
 });
@@ -546,7 +637,14 @@ test("[F01] restart/reconnect keeps the active occurrence and its furthest sourc
   const firstLedger = createAiringLedger(first);
   const track = trackWithEpisodes(
     firstLedger,
-    Array.from({ length: 13 }, (_, index) => [`S01E${String(index + 1).padStart(2, "0")}`, index + 1] as [string, number]),
+    Array.from(
+      { length: 13 },
+      (_, index) =>
+        [`S01E${String(index + 1).padStart(2, "0")}`, index + 1] as [
+          string,
+          number,
+        ],
+    ),
   );
   for (let episode = 1; episode <= 9; episode += 1) {
     const key = `S01E${String(episode).padStart(2, "0")}`;
@@ -608,7 +706,9 @@ test("[F01] restart/reconnect keeps the active occurrence and its furthest sourc
       }),
     ).reason,
   ).toBe("occurrence-in-progress");
-  expect(secondLedger.activeOccurrence(track.trackKey)?.occurrenceKey).toBe("occ-S01E10");
+  expect(secondLedger.activeOccurrence(track.trackKey)?.occurrenceKey).toBe(
+    "occ-S01E10",
+  );
   expect(secondLedger.completionFloor(track.trackKey)?.episode).toBe(9);
   second.close();
 });
@@ -627,7 +727,13 @@ test("[F01] a duplicate start preserves a recorded interruption", async () => {
       at: AT,
     }),
   );
-  ok(ledger.interruptOccurrence({ trackKey: track.trackKey, sourceOffsetMs: 300_000, at: AT }));
+  ok(
+    ledger.interruptOccurrence({
+      trackKey: track.trackKey,
+      sourceOffsetMs: 300_000,
+      at: AT,
+    }),
+  );
 
   const duplicate = ok(
     ledger.beginOccurrence({
@@ -651,26 +757,52 @@ test("[F01] a competing occurrence is refused until the active one is cleared", 
   ]);
   ok(reserve(ledger, track.trackKey, "occ-1", "S01E01"));
   ok(reserve(ledger, track.trackKey, "occ-2", "S01E02"));
-  ok(ledger.beginOccurrence({ trackKey: track.trackKey, occurrenceKey: "occ-1", at: AT }));
+  ok(
+    ledger.beginOccurrence({
+      trackKey: track.trackKey,
+      occurrenceKey: "occ-1",
+      at: AT,
+    }),
+  );
 
   expect(
-    refused(ledger.beginOccurrence({ trackKey: track.trackKey, occurrenceKey: "occ-2", at: AT }))
-      .reason,
+    refused(
+      ledger.beginOccurrence({
+        trackKey: track.trackKey,
+        occurrenceKey: "occ-2",
+        at: AT,
+      }),
+    ).reason,
   ).toBe("occurrence-in-progress");
   // Clearing a different occurrence than the one that is active is refused.
   expect(
     refused(
-      ledger.clearActiveOccurrence({ trackKey: track.trackKey, occurrenceKey: "occ-2", at: AT }),
+      ledger.clearActiveOccurrence({
+        trackKey: track.trackKey,
+        occurrenceKey: "occ-2",
+        at: AT,
+      }),
     ).reason,
   ).toBe("active-occurrence-mismatch");
   expect(ledger.activeOccurrence(track.trackKey)?.occurrenceKey).toBe("occ-1");
 
   // An explicit clear releases the track so the next occurrence can start.
-  ok(ledger.clearActiveOccurrence({ trackKey: track.trackKey, occurrenceKey: "occ-1", at: AT }));
+  ok(
+    ledger.clearActiveOccurrence({
+      trackKey: track.trackKey,
+      occurrenceKey: "occ-1",
+      at: AT,
+    }),
+  );
   expect(ledger.occurrence("occ-1")?.state).toBe("abandoned");
   expect(
-    ok(ledger.beginOccurrence({ trackKey: track.trackKey, occurrenceKey: "occ-2", at: AT }))
-      .occurrenceKey,
+    ok(
+      ledger.beginOccurrence({
+        trackKey: track.trackKey,
+        occurrenceKey: "occ-2",
+        at: AT,
+      }),
+    ).occurrenceKey,
   ).toBe("occ-2");
 });
 
@@ -678,14 +810,53 @@ test("a completed occurrence cannot reopen and source offsets stay inside its re
   const ledger = createAiringLedger(openDatabase(await dataDir()));
   const track = trackWithEpisodes(ledger, [["S01E01", 1]]);
   ok(reserve(ledger, track.trackKey, "occ-1", "S01E01"));
-  expect(refused(ledger.beginOccurrence({ trackKey: track.trackKey, occurrenceKey: "occ-1", sourceOffsetMs: -1, at: AT })).reason).toBe("invalid-interval");
-  ok(ledger.beginOccurrence({ trackKey: track.trackKey, occurrenceKey: "occ-1", at: AT }));
-  expect(refused(ledger.advanceOccurrenceOffset({ trackKey: track.trackKey, sourceOffsetMs: Number.NaN, at: AT })).reason).toBe("invalid-interval");
-  expect(refused(ledger.interruptOccurrence({ trackKey: track.trackKey, sourceOffsetMs: SOURCE_END + 1, at: AT })).reason).toBe("invalid-interval");
+  expect(
+    refused(
+      ledger.beginOccurrence({
+        trackKey: track.trackKey,
+        occurrenceKey: "occ-1",
+        sourceOffsetMs: -1,
+        at: AT,
+      }),
+    ).reason,
+  ).toBe("invalid-interval");
+  ok(
+    ledger.beginOccurrence({
+      trackKey: track.trackKey,
+      occurrenceKey: "occ-1",
+      at: AT,
+    }),
+  );
+  expect(
+    refused(
+      ledger.advanceOccurrenceOffset({
+        trackKey: track.trackKey,
+        sourceOffsetMs: Number.NaN,
+        at: AT,
+      }),
+    ).reason,
+  ).toBe("invalid-interval");
+  expect(
+    refused(
+      ledger.interruptOccurrence({
+        trackKey: track.trackKey,
+        sourceOffsetMs: SOURCE_END + 1,
+        at: AT,
+      }),
+    ).reason,
+  ).toBe("invalid-interval");
   expect(ledger.activeOccurrence(track.trackKey)?.sourceOffsetMs).toBe(0);
   recordFullEvidence(ledger, "occ-1");
   ok(ledger.completeOccurrence({ occurrenceKey: "occ-1", at: AT }));
-  expect(refused(ledger.beginOccurrence({ trackKey: track.trackKey, occurrenceKey: "occ-1", at: AT })).reason).toBe("already-credited");
+  expect(
+    refused(
+      ledger.beginOccurrence({
+        trackKey: track.trackKey,
+        occurrenceKey: "occ-1",
+        at: AT,
+      }),
+    ).reason,
+  ).toBe("already-credited");
   expect(ledger.activeOccurrence(track.trackKey)).toBeUndefined();
 });
 
@@ -693,7 +864,14 @@ test("[F02] a missing E11 does not let E12 jump the floor, and another series st
   const ledger = createAiringLedger(openDatabase(await dataDir()));
   const track = trackWithEpisodes(
     ledger,
-    Array.from({ length: 10 }, (_, index) => [`S01E${String(index + 1).padStart(2, "0")}`, index + 1] as [string, number]),
+    Array.from(
+      { length: 10 },
+      (_, index) =>
+        [`S01E${String(index + 1).padStart(2, "0")}`, index + 1] as [
+          string,
+          number,
+        ],
+    ),
   );
   for (let episode = 1; episode <= 10; episode += 1) {
     const key = `S01E${String(episode).padStart(2, "0")}`;
@@ -715,13 +893,18 @@ test("[F02] a missing E11 does not let E12 jump the floor, and another series st
   ok(reserve(ledger, track.trackKey, "occ-12", "S01E12"));
   recordFullEvidence(ledger, "occ-12");
   expect(
-    refused(ledger.completeOccurrence({ occurrenceKey: "occ-12", at: AT })).reason,
+    refused(ledger.completeOccurrence({ occurrenceKey: "occ-12", at: AT }))
+      .reason,
   ).toBe("predecessor-incomplete");
   expect(ledger.completionFloor(track.trackKey)?.episode).toBe(10);
 
   // A different series is a different track and remains eligible.
   const other = ok(
-    ledger.ensureSeriesTrack({ channelId: CHANNEL, seriesTitle: "Night Court", at: AT }),
+    ledger.ensureSeriesTrack({
+      channelId: CHANNEL,
+      seriesTitle: "Night Court",
+      at: AT,
+    }),
   );
   ok(
     ledger.ensureEpisodeIdentity({
@@ -733,7 +916,12 @@ test("[F02] a missing E11 does not let E12 jump the floor, and another series st
       at: AT,
     }),
   );
-  const credited = creditEpisode(ledger, other.trackKey, "occ-nc-1", "NC-S01E01");
+  const credited = creditEpisode(
+    ledger,
+    other.trackKey,
+    "occ-nc-1",
+    "NC-S01E01",
+  );
   expect(credited.floor.completedEpisodeKey).toBe("NC-S01E01");
   expect(ledger.completionFloor(other.trackKey)?.episode).toBe(1);
 });
@@ -741,7 +929,11 @@ test("[F02] a missing E11 does not let E12 jump the floor, and another series st
 test("the same series on two channels contends for one floor; an explicit track is independent", async () => {
   const ledger = createAiringLedger(openDatabase(await dataDir()));
   const channelA = ok(
-    ledger.ensureSeriesTrack({ channelId: CHANNEL, seriesTitle: SERIES, at: AT }),
+    ledger.ensureSeriesTrack({
+      channelId: CHANNEL,
+      seriesTitle: SERIES,
+      at: AT,
+    }),
   );
   const channelB = ok(
     ledger.ensureSeriesTrack({
@@ -768,10 +960,13 @@ test("the same series on two channels contends for one floor; an explicit track 
   // both channels share the one floor.
   ok(reserve(ledger, channelB.trackKey, "occ-b", "S01E01", "marktv-movies"));
   recordFullEvidence(ledger, "occ-b");
-  expect(refused(ledger.completeOccurrence({ occurrenceKey: "occ-b", at: AT })).reason).toBe(
-    "already-credited",
-  );
-  expect(ledger.completionFloor(channelA.trackKey)?.completedOccurrenceKey).toBe("occ-a");
+  expect(
+    refused(ledger.completeOccurrence({ occurrenceKey: "occ-b", at: AT }))
+      .reason,
+  ).toBe("already-credited");
+  expect(
+    ledger.completionFloor(channelA.trackKey)?.completedOccurrenceKey,
+  ).toBe("occ-a");
 
   // An explicit separate track keeps its own independent floor.
   const separate = ok(
@@ -793,9 +988,19 @@ test("the same series on two channels contends for one floor; an explicit track 
       at: AT,
     }),
   );
-  creditEpisode(ledger, separate.trackKey, "occ-sep", "MOVIES-S01E01", "marktv-movies");
-  expect(ledger.completionFloor(separate.trackKey)?.completedEpisodeKey).toBe("MOVIES-S01E01");
-  expect(ledger.completionFloor(channelA.trackKey)?.completedEpisodeKey).toBe("S01E01");
+  creditEpisode(
+    ledger,
+    separate.trackKey,
+    "occ-sep",
+    "MOVIES-S01E01",
+    "marktv-movies",
+  );
+  expect(ledger.completionFloor(separate.trackKey)?.completedEpisodeKey).toBe(
+    "MOVIES-S01E01",
+  );
+  expect(ledger.completionFloor(channelA.trackKey)?.completedEpisodeKey).toBe(
+    "S01E01",
+  );
 });
 
 test("an intentionally non-consecutive series advances only by explicit ordinal position", async () => {
@@ -809,15 +1014,20 @@ test("an intentionally non-consecutive series advances only by explicit ordinal 
   creditEpisode(ledger, numbered.trackKey, "occ-n1", "S01E01");
   ok(reserve(ledger, numbered.trackKey, "occ-n3", "S01E03"));
   recordFullEvidence(ledger, "occ-n3");
-  expect(refused(ledger.completeOccurrence({ occurrenceKey: "occ-n3", at: AT })).reason).toBe(
-    "predecessor-incomplete",
-  );
+  expect(
+    refused(ledger.completeOccurrence({ occurrenceKey: "occ-n3", at: AT }))
+      .reason,
+  ).toBe("predecessor-incomplete");
   expect(ledger.completionFloor(numbered.trackKey)?.episode).toBe(1);
 
   // Ordinals are the explicit position metadata for a genuinely non-consecutive
   // series; contiguity is then by ordinal, not by episode number.
   const anthology = ok(
-    ledger.ensureSeriesTrack({ channelId: CHANNEL, seriesTitle: "Anthology", at: AT }),
+    ledger.ensureSeriesTrack({
+      channelId: CHANNEL,
+      seriesTitle: "Anthology",
+      at: AT,
+    }),
   );
   for (const [index, episodeNumber] of [4, 9, 15].entries()) {
     const ordinal = index + 1;
@@ -846,7 +1056,11 @@ test("an intentionally non-consecutive series advances only by explicit ordinal 
 test("a late-registered episode cannot open a track without an explicit initial position", async () => {
   const ledger = createAiringLedger(openDatabase(await dataDir()));
   const track = ok(
-    ledger.ensureSeriesTrack({ channelId: CHANNEL, seriesTitle: SERIES, at: AT }),
+    ledger.ensureSeriesTrack({
+      channelId: CHANNEL,
+      seriesTitle: SERIES,
+      at: AT,
+    }),
   );
   ok(
     ledger.ensureEpisodeIdentity({
@@ -864,13 +1078,23 @@ test("a late-registered episode cannot open a track without an explicit initial 
   // E12 is the only registered identity, but "first registered" is not a
   // trustworthy start.
   expect(
-    refused(ledger.completeOccurrence({ occurrenceKey: "occ-12", at: AT })).reason,
+    refused(ledger.completeOccurrence({ occurrenceKey: "occ-12", at: AT }))
+      .reason,
   ).toBe("predecessor-incomplete");
   expect(ledger.completionFloor(track.trackKey)).toBeUndefined();
 
   // A migrated/explicit initial position makes the legitimate start trustworthy.
-  ok(ledger.establishInitialPosition({ trackKey: track.trackKey, season: 1, episode: 12, at: AT }));
-  const credited = ok(ledger.completeOccurrence({ occurrenceKey: "occ-12", at: AT }));
+  ok(
+    ledger.establishInitialPosition({
+      trackKey: track.trackKey,
+      season: 1,
+      episode: 12,
+      at: AT,
+    }),
+  );
+  const credited = ok(
+    ledger.completeOccurrence({ occurrenceKey: "occ-12", at: AT }),
+  );
   expect(credited.floor.completedEpisodeKey).toBe("S01E12");
   expect(ledger.completionFloor(track.trackKey)?.episode).toBe(12);
 });
@@ -882,14 +1106,16 @@ test("[EP02] re-registering an episode after rename/remux keeps identity and com
   const before = ledger.completionFloor(track.trackKey);
 
   // A rename, remux and normalize all re-register the SAME logical episode.
-  ok(ledger.ensureEpisodeIdentity({
-    episodeKey: "S01E01",
-    trackKey: track.trackKey,
-    title: `${SERIES} 1`,
-    season: 1,
-    episode: 1,
-    at: "2026-09-24T05:00:00.000Z",
-  }));
+  ok(
+    ledger.ensureEpisodeIdentity({
+      episodeKey: "S01E01",
+      trackKey: track.trackKey,
+      title: `${SERIES} 1`,
+      season: 1,
+      episode: 1,
+      at: "2026-09-24T05:00:00.000Z",
+    }),
+  );
 
   // No new unseen episode was minted and the floor did not move backward.
   expect(ledger.episodeIdentities(track.trackKey)).toHaveLength(1);
@@ -904,7 +1130,13 @@ test("[EP08] a permanently interrupted episode marks the track and blocks its su
   ]);
   ok(reserve(ledger, track.trackKey, "occ-1", "S01E01"));
   ok(reserve(ledger, track.trackKey, "occ-2", "S01E02"));
-  ok(ledger.beginOccurrence({ trackKey: track.trackKey, occurrenceKey: "occ-1", at: AT }));
+  ok(
+    ledger.beginOccurrence({
+      trackKey: track.trackKey,
+      occurrenceKey: "occ-1",
+      at: AT,
+    }),
+  );
   ok(ledger.interruptOccurrence({ trackKey: track.trackKey, at: AT }));
   expect(ledger.activeOccurrence(track.trackKey)?.state).toBe("interrupted");
 
@@ -912,7 +1144,8 @@ test("[EP08] a permanently interrupted episode marks the track and blocks its su
   // credited and the floor does not advance.
   recordFullEvidence(ledger, "occ-2");
   expect(
-    refused(ledger.completeOccurrence({ occurrenceKey: "occ-2", at: AT })).reason,
+    refused(ledger.completeOccurrence({ occurrenceKey: "occ-2", at: AT }))
+      .reason,
   ).toBe("predecessor-incomplete");
   expect(ledger.completionFloor(track.trackKey)).toBeUndefined();
 });
@@ -930,14 +1163,19 @@ test("[EP11] a reservation alone is never counted as viewed or complete", async 
 test("[EP10] a shared-track reservation is atomic and idempotent, never doubled", async () => {
   const ledger = createAiringLedger(openDatabase(await dataDir()));
   const track = trackWithEpisodes(ledger, [["S01E01", 1]]);
-  const first = ok(reserve(ledger, track.trackKey, "occ-1", "S01E01", "channel-a"));
+  const first = ok(
+    reserve(ledger, track.trackKey, "occ-1", "S01E01", "channel-a"),
+  );
   // A second request for the same occurrence returns the same record.
-  const again = ok(reserve(ledger, track.trackKey, "occ-1", "S01E01", "channel-a"));
+  const again = ok(
+    reserve(ledger, track.trackKey, "occ-1", "S01E01", "channel-a"),
+  );
   expect(again.occurrenceKey).toBe(first.occurrenceKey);
   expect(ledger.occurrencesForTrack(track.trackKey)).toHaveLength(1);
   // A conflicting write to the same key is refused, not silently overwritten.
   expect(
-    refused(reserve(ledger, track.trackKey, "occ-1", "S01E01", "channel-b")).reason,
+    refused(reserve(ledger, track.trackKey, "occ-1", "S01E01", "channel-b"))
+      .reason,
   ).toBe("id-conflict");
 });
 
@@ -946,14 +1184,16 @@ test("[EP16] committed output is not completion until the interval actually airs
   const track = trackWithEpisodes(ledger, [["S01E01", 1]]);
   ok(reserve(ledger, track.trackKey, "occ-1", "S01E01"));
   // The output is produced and published, but no aired interval yet.
-  ok(ledger.recordPublishedInterval({
-    intervalId: "occ-1-pub",
-    occurrenceKey: "occ-1",
-    sourceStartMs: SOURCE_START,
-    sourceEndMs: SOURCE_END,
-    publishedAt: AT,
-    evidence: "hls-publisher-ack",
-  }));
+  ok(
+    ledger.recordPublishedInterval({
+      intervalId: "occ-1-pub",
+      occurrenceKey: "occ-1",
+      sourceStartMs: SOURCE_START,
+      sourceEndMs: SOURCE_END,
+      publishedAt: AT,
+      evidence: "hls-publisher-ack",
+    }),
+  );
   const evaluation = ledger.evaluateOccurrence("occ-1")!;
   expect(evaluation.contiguousPublished).toBe(true);
   expect(evaluation.explicitAiredInterval).toBe(false);
@@ -964,14 +1204,20 @@ test("[EP16] committed output is not completion until the interval actually airs
 test("[EP15] a track with no credible position is held rather than reset to episode one", async () => {
   const ledger = createAiringLedger(openDatabase(await dataDir()));
   const track = ok(
-    ledger.ensureSeriesTrack({ channelId: CHANNEL, seriesTitle: SERIES, at: AT }),
+    ledger.ensureSeriesTrack({
+      channelId: CHANNEL,
+      seriesTitle: SERIES,
+      at: AT,
+    }),
   );
-  ok(ledger.holdTrack({
-    trackKey: track.trackKey,
-    reason: "ambiguous-position",
-    detail: "legacy history with no trustworthy cursor",
-    at: AT,
-  }));
+  ok(
+    ledger.holdTrack({
+      trackKey: track.trackKey,
+      reason: "ambiguous-position",
+      detail: "legacy history with no trustworthy cursor",
+      at: AT,
+    }),
+  );
   expect(ledger.trackHold(track.trackKey)?.reason).toBe("ambiguous-position");
   expect(ledger.completionFloor(track.trackKey)).toBeUndefined();
 });
@@ -1083,10 +1329,15 @@ test("[SC06] replaying the same exposure is idempotent, and a conflict is refuse
   // a pod that aired further must be recorded as its own exposure, because
   // overwriting the first would erase what actually aired.
   const longer = refused(
-    ledger.recordPodExposure({ ...input, aired: { startMs: 0, endMs: 60_000 } }),
+    ledger.recordPodExposure({
+      ...input,
+      aired: { startMs: 0, endMs: 60_000 },
+    }),
   );
   expect(longer.reason).toBe("id-conflict");
-  expect(ledger.podExposure("pod-4-airing-1")?.members[2]?.airedSeconds).toBe(0);
+  expect(ledger.podExposure("pod-4-airing-1")?.members[2]?.airedSeconds).toBe(
+    0,
+  );
 });
 
 test("[SC06] every airing of a pod is recorded, in order", async () => {
@@ -1120,4 +1371,29 @@ test("[SC06] every airing of a pod is recorded, in order", async () => {
   expect(airings[1]?.podCompleted).toBe(true);
   // And nothing was recorded against a different pod.
   expect(ledger.podExposuresForPod("pod-6")).toEqual([]);
+});
+
+test("[SC06] an ABSOLUTE aired interval is measured against the pod's start, not against zero", async () => {
+  // The bug this pins: without `podStartMs` the members are laid out from zero,
+  // so a real (absolute, epoch-ms) aired interval overlaps none of them and every
+  // member is recorded at zero seconds - a record that quietly says the pod never
+  // aired. The observer passes absolute times, so this is the production shape.
+  const ledger = createAiringLedger(openDatabase(await dataDir()));
+  const podStart = Date.parse("2026-09-24T12:00:00.000Z");
+
+  const written = ok(
+    ledger.recordPodExposure({
+      exposureId: "pod-abs-airing-1",
+      podId: "pod-abs",
+      channelId: "marktv-laughs",
+      members: F16_POD,
+      // The pod's first 45 seconds, in absolute time.
+      aired: { startMs: podStart, endMs: podStart + 45_000 },
+      podStartMs: podStart,
+      at: AT,
+    }),
+  );
+
+  expect(written.members.map((m) => m.airedSeconds)).toEqual([30, 15, 0]);
+  expect(written.podAiredSeconds).toBe(45);
 });

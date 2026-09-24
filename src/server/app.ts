@@ -6,7 +6,7 @@ import {
 } from "../acquisition/coordinator.js";
 import type { ProviderName } from "../acquisition/providerTypes.js";
 import { openDatabase } from "../db/database.js";
-import { createRepositories, type Repositories } from "../db/repositories.js";
+import { createRepositories } from "../db/repositories.js";
 import { logError, logInfo } from "./logging.js";
 import {
   startScheduleRefresh,
@@ -20,7 +20,10 @@ import { seedDemoIfEmpty } from "../demo/marktvLaughs.js";
 import { RealDebridProvider } from "../integrations/acquisition/realDebrid.js";
 import { TorBoxProvider } from "../integrations/acquisition/torBox.js";
 import type { AcquisitionProvider } from "../integrations/acquisition/provider.js";
-import { pinRegisteredMediaRoots, registerManagedLibrary } from "../media/roots.js";
+import {
+  pinRegisteredMediaRoots,
+  registerManagedLibrary,
+} from "../media/roots.js";
 import { reconcileImportedSeries } from "../media/seriesEnrollment.js";
 import { reconcileMovieProgramming } from "../media/movieEnrollment.js";
 import {
@@ -32,9 +35,20 @@ import {
   type PreparationExecutor,
 } from "../preparation/executor.js";
 import { describePreparationEvent } from "../preparation/events.js";
-import { createHealthShadow, type HealthShadow } from "../autopilot/healthShadow.js";
+import {
+  createHealthShadow,
+  type HealthShadow,
+} from "../autopilot/healthShadow.js";
 import { createChannelRecovery } from "../autopilot/recovery.js";
-import { createAlwaysOnSupervisor, type AlwaysOnSupervisor } from "../autopilot/alwaysOn.js";
+import {
+  createAlwaysOnSupervisor,
+  type AlwaysOnSupervisor,
+} from "../autopilot/alwaysOn.js";
+import {
+  createPodExposureObserver,
+  type PodExposureObserver,
+} from "../autopilot/podExposureObserver.js";
+import { createAiringLedger } from "../autopilot/airingLedger.js";
 import { recordIncident } from "../autopilot/incidents.js";
 import { DateTime } from "luxon";
 import { KeychainCredentialStore } from "../security/keychain.js";
@@ -121,12 +135,23 @@ export type BuildAppOptions = {
    * repeat idempotent, so it can never create a second producer.
    */
   alwaysOn?: boolean;
+  /**
+   * Record per-creative pod exposure (SC06) from each channel's own advertised
+   * playlist. Read-only with respect to serving: it reads playlist files and
+   * writes ledger rows.
+   */
+  podExposure?: boolean;
+  /** Root of the per-channel HLS stream directories, shared with the watchdog. */
+  podExposureStreamsRoot?: string;
 };
 
 const IPV4_LOOPBACK = /^127(?:\.\d{1,3}){3}$/;
 const IPV6_LOOPBACK = new Set(["::1", "[::1]", "0:0:0:0:0:0:0:1"]);
 
-const REQUIRED_PROVIDERS = ["real-debrid", "torbox"] as const satisfies readonly ProviderName[];
+const REQUIRED_PROVIDERS = [
+  "real-debrid",
+  "torbox",
+] as const satisfies readonly ProviderName[];
 
 /**
  * Fail closed when the injected provider map is incomplete or routes a key to
@@ -142,8 +167,13 @@ export function assertValidProviderMap(
   }
   const keys = Object.keys(providers).sort();
   const expected = [...REQUIRED_PROVIDERS].sort();
-  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
-    throw new Error("Invalid provider map: providers must contain exactly real-debrid and torbox");
+  if (
+    keys.length !== expected.length ||
+    keys.some((key, index) => key !== expected[index])
+  ) {
+    throw new Error(
+      "Invalid provider map: providers must contain exactly real-debrid and torbox",
+    );
   }
   for (const name of REQUIRED_PROVIDERS) {
     const implementation = (providers as Record<string, unknown>)[name] as {
@@ -171,9 +201,7 @@ export function assertLoopbackHost(host: string): void {
   const normalized = host.trim().toLowerCase();
   const octetsValid =
     IPV4_LOOPBACK.test(normalized) &&
-    normalized
-      .split(".")
-      .every((octet) => Number(octet) <= 255);
+    normalized.split(".").every((octet) => Number(octet) <= 255);
   if (
     normalized !== "localhost" &&
     !IPV6_LOOPBACK.has(normalized) &&
@@ -194,21 +222,31 @@ export function isLoopbackAuthority(value: string | undefined): boolean {
   if (!match) return false;
   const hostname = match[1];
   if (hostname === "localhost") return true;
-  return IPV4_LOOPBACK.test(hostname) && hostname.split(".").every((octet) => Number(octet) <= 255);
+  return (
+    IPV4_LOOPBACK.test(hostname) &&
+    hostname.split(".").every((octet) => Number(octet) <= 255)
+  );
 }
 
 /** Browser origins/referers must explicitly name a loopback authority. */
 export function isLoopbackBrowserUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) return false;
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.username ||
+      url.password
+    )
+      return false;
     return isLoopbackAuthority(url.host);
   } catch {
     return false;
   }
 }
 
-function rejectNonLocalRequest(reply: { code: (status: number) => { send: (body: object) => unknown } }) {
+function rejectNonLocalRequest(reply: {
+  code: (status: number) => { send: (body: object) => unknown };
+}) {
   return reply.code(403).send({
     code: "LOCAL_ONLY",
     message: "MarkTV accepts local browser requests only",
@@ -256,16 +294,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
   // but Host/Origin checks also prevent DNS rebinding and hostile browser tabs
   // from reaching local credential or acquisition controls.
   app.addHook("onRequest", async (request, reply) => {
-    if (!isLoopbackAuthority(request.headers.host)) return rejectNonLocalRequest(reply);
+    if (!isLoopbackAuthority(request.headers.host))
+      return rejectNonLocalRequest(reply);
     for (const value of [request.headers.origin, request.headers.referer]) {
-      if (value !== undefined && !isLoopbackBrowserUrl(value)) return rejectNonLocalRequest(reply);
+      if (value !== undefined && !isLoopbackBrowserUrl(value))
+        return rejectNonLocalRequest(reply);
     }
   });
   const dataDir =
     options.dataDir ??
     process.env.MARKTV_DATA_DIR ??
     join(process.cwd(), "data");
-  const repositories = createRepositories(openDatabase(dataDir));
+  const database = openDatabase(dataDir);
+  const repositories = createRepositories(database);
   const now = options.now ?? (() => new Date());
   const credentials = options.credentials ?? new KeychainCredentialStore();
   // Create/verify the managed inbox and library, then register the resolved
@@ -323,6 +364,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   let preparationExecutor: PreparationExecutor | null = null;
   let healthShadow: HealthShadow | null = null;
   let alwaysOn: AlwaysOnSupervisor | null = null;
+  let podExposureObserver: PodExposureObserver | null = null;
   app.addHook("onClose", async () => {
     scheduleRefresh?.stop();
     // Stop the intake scanner before the database handle closes: its poll timer
@@ -335,6 +377,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
     // outlive the process either.
     await healthShadow?.stop();
     await alwaysOn?.stop();
+    // Stop the pod-exposure observer before the repositories close: it writes
+    // ledger rows through them.
+    await podExposureObserver?.stop();
     // The coordinator owns every durable acquisition write, so stop it
     // (clearing its timer, aborting local transfers, and persisting resumable
     // state) before the database handle is closed.
@@ -363,15 +408,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
       // One background intake worker for the process. Its first pass is bounded
       // (a fixed entry budget and at most one probe), and it never blocks
       // serving, so it is started but not awaited.
-      const makeRunner = options.createIntakeRunner ?? createPreparationIntakeRunner;
+      const makeRunner =
+        options.createIntakeRunner ?? createPreparationIntakeRunner;
       preparationIntake = makeRunner(repositories, {
-        onError: (error, path) => logError("preparation-intake", error, path ? { path } : {}),
+        onError: (error, path) =>
+          logError("preparation-intake", error, path ? { path } : {}),
         onEvent: (event) => {
           const { message, context } = describePreparationEvent(event);
           logInfo("preparation-intake", message, context);
         },
       });
-      void preparationIntake.start().catch((error) => logError("preparation-intake", error));
+      void preparationIntake
+        .start()
+        .catch((error) => logError("preparation-intake", error));
     }
     if (options.preparationExecutor) {
       // One background executor for the process; it claims at most one job per
@@ -384,7 +433,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
           logInfo("preparation-executor", message, context);
         },
       });
-      void preparationExecutor.start().catch((error) => logError("preparation-executor", error));
+      void preparationExecutor
+        .start()
+        .catch((error) => logError("preparation-executor", error));
     }
     if (options.healthShadow && options.healthShadowRoot) {
       // Bounded, channel-scoped recovery. Present only when acting is opted in;
@@ -433,7 +484,10 @@ export async function buildApp(options: BuildAppOptions = {}) {
         streamsRoot: options.healthShadowRoot,
         // A MarkTV channel id is not its Tunarr UUID; resolve the real one.
         streamsDirectoryFor: (channel) => {
-          const tunarrChannelId = readTunarrMappingForChannel(repositories, channel.id)?.channelId;
+          const tunarrChannelId = readTunarrMappingForChannel(
+            repositories,
+            channel.id,
+          )?.channelId;
           return tunarrChannelId
             ? join(options.healthShadowRoot!, `stream_${tunarrChannelId}`)
             : null;
@@ -443,30 +497,75 @@ export async function buildApp(options: BuildAppOptions = {}) {
               consume: async (result) => (await recovery.handle(result)).state,
             }
           : {}),
-        onResult: (result) =>
-          {
-            logInfo(
-              "health-shadow",
-              recovery ? "Continuity health (recovery armed)" : "Continuity health (observe-only)",
-              {
-                channelId: result.channelId,
-                health: result.health,
-                incident: result.incident,
-                recommendation: result.recommendation,
-              },
-            );
-            if (result.incident)
-              recordIncident(repositories, {
-                at: context.now().toISOString(),
-                channelId: result.channelId,
-                kind: "incident",
-                reason: result.health,
-              });
-          },
+        onResult: (result) => {
+          logInfo(
+            "health-shadow",
+            recovery
+              ? "Continuity health (recovery armed)"
+              : "Continuity health (observe-only)",
+            {
+              channelId: result.channelId,
+              health: result.health,
+              incident: result.incident,
+              recommendation: result.recommendation,
+            },
+          );
+          if (result.incident)
+            recordIncident(repositories, {
+              at: context.now().toISOString(),
+              channelId: result.channelId,
+              kind: "incident",
+              reason: result.health,
+            });
+        },
         onError: (error, channelId) =>
           logError("health-shadow", error, channelId ? { channelId } : {}),
       });
-      void healthShadow.start().catch((error) => logError("health-shadow", error));
+      void healthShadow
+        .start()
+        .catch((error) => logError("health-shadow", error));
+    }
+    if (options.podExposure && options.podExposureStreamsRoot) {
+      // Record what each finished pod actually advertised (SC06). Deliberately
+      // NOT driven by the schedule: a plan recorded as exposure would log every
+      // pod as three completed ads, which is the fault this case exists to
+      // prevent. It reads the same stream directories the watchdog does.
+      const ledger = createAiringLedger(database);
+      podExposureObserver = createPodExposureObserver(repositories, ledger, {
+        streamsRoot: options.podExposureStreamsRoot,
+        // A MarkTV channel id is not its Tunarr UUID; resolve the real one, the
+        // same way the watchdog does, or there is no playlist to read.
+        streamsDirectoryFor: (channel) => {
+          const tunarrChannelId = readTunarrMappingForChannel(
+            repositories,
+            channel.id,
+          )?.channelId;
+          return tunarrChannelId
+            ? join(options.podExposureStreamsRoot!, `stream_${tunarrChannelId}`)
+            : null;
+        },
+        onDecision: (decision) => {
+          // Only the outcomes that carry a decision worth reading are logged at
+          // info; a channel with no finished pods says nothing on purpose.
+          if (
+            decision.outcome === "recorded" ||
+            decision.outcome === "refused"
+          ) {
+            logInfo("pod-exposure", decision.outcome, {
+              channelId: decision.channelId,
+              podId: decision.podId,
+              airedSeconds: decision.record?.podAiredSeconds,
+              completed: decision.record?.podCompleted,
+              detail: decision.detail,
+            });
+          }
+        },
+        onError: (error, channelId) =>
+          logError("pod-exposure", error, channelId ? { channelId } : {}),
+      });
+      void podExposureObserver
+        .start()
+        .catch((error) => logError("pod-exposure", error));
     }
     if (options.alwaysOn) {
       // Start each enabled channel's producer so it keeps running with no viewers.
@@ -477,7 +576,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
           return `${mapping.url.replace(/\/+$/, "")}/stream/channels/${mapping.channelId}.m3u8`;
         },
         onResult: (channelId, ok, status) =>
-          logInfo("always-on", "Channel session ensured", { channelId, ok, status }),
+          logInfo("always-on", "Channel session ensured", {
+            channelId,
+            ok,
+            status,
+          }),
         onError: (error, channelId) =>
           logError("always-on", error, channelId ? { channelId } : {}),
       });

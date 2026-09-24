@@ -53,6 +53,14 @@ const app = await buildApp({
     process.env.MARKTV_HEALTH_RECOVERY === "1",
   // R01 always-on: start each channel's producer so it runs with no viewers.
   alwaysOn: process.env.MARKTV_ALWAYS_ON === "1",
+  // SC06: record each finished pod's per-creative exposure from the channel's own
+  // advertised playlist. On by default whenever a streams root is configured,
+  // because it only reads playlist files and writes ledger rows - it cannot
+  // perturb serving. Set MARKTV_POD_EXPOSURE=0 to switch it off.
+  podExposure:
+    Boolean(process.env.MARKTV_HEALTH_SHADOW_ROOT) &&
+    process.env.MARKTV_POD_EXPOSURE !== "0",
+  podExposureStreamsRoot: process.env.MARKTV_HEALTH_SHADOW_ROOT,
 });
 if (process.env.MARKTV_DEV !== "1") {
   await registerStaticUi(app, join(process.cwd(), "dist"));
