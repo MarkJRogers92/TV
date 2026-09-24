@@ -48,6 +48,34 @@ export function splicePreservedLineup(
   windowStart: number,
   replacement: TunarrLineup,
 ): TunarrLineup {
+  return splicePreservedLineupWithOffset(
+    original,
+    origin,
+    windowStart,
+    replacement,
+  ).lineup;
+}
+
+export type PreservedSplice = {
+  lineup: TunarrLineup;
+  /**
+   * Preserved slots ahead of the replacement window.
+   *
+   * Counted by the same loop that builds the splice, so a caller that has to
+   * quote a replacement slot inside the published lineup reads the offset the
+   * splice actually used instead of re-deriving it from the result (which a
+   * repeated programme would make guesswork).
+   */
+  prefixLength: number;
+};
+
+/** `splicePreservedLineup` plus the offset it placed the window at. */
+export function splicePreservedLineupWithOffset(
+  original: TunarrLineup,
+  origin: number,
+  windowStart: number,
+  replacement: TunarrLineup,
+): PreservedSplice {
   const valid = (items: TunarrLineup) =>
     items.length > 0 &&
     items.every((item) => Number.isFinite(item.duration) && item.duration > 0);
@@ -92,5 +120,8 @@ export function splicePreservedLineup(
       );
     cursor = end;
   }
-  return [...prefix, ...replacement, ...suffix];
+  return {
+    lineup: [...prefix, ...replacement, ...suffix],
+    prefixLength: prefix.length,
+  };
 }

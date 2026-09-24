@@ -1294,3 +1294,506 @@ test("still matches a playable program when an unusable one shares its path", ()
   expect(plan.syncEligible).toBe(true);
   expect(plan.matchCounts).toMatchObject({ matched: 2, unmatched: 0 });
 });
+
+test("captures the entry and source segment behind each planned slot", () => {
+  // The sync's programming operation is a flat list, so the schedule entry
+  // identity is captured while the planner still knows it - not recovered from
+  // the slot shapes afterwards.
+  const plan = buildTunarrSyncPlan(
+    schedule,
+    inventory,
+    capabilities,
+    mapping,
+    snapshots,
+  );
+  const start = Date.parse(schedule.entries[0].start);
+  expect(plan.bindings).toEqual([
+    {
+      channelId: "marktv",
+      date: "2026-09-13",
+      occurrenceKey: `airing:marktv:2026-09-13:movie-entry:${schedule.entries[0].start}`,
+      entryId: "movie-entry",
+      kind: "movie",
+      tunarrProgramId: "movie",
+      segmentIndex: 0,
+      segmentCount: 3,
+      lineupIndex: 0,
+      lineupStartOffsetMs: 0,
+      plannedStartMs: start,
+      plannedEndMs: start + 1_800_000,
+      sourceStartMs: 0,
+      sourceEndMs: 1_800_000,
+    },
+    {
+      channelId: "marktv",
+      date: "2026-09-13",
+      occurrenceKey: `airing:marktv:2026-09-13:movie-entry:${schedule.entries[0].start}`,
+      entryId: "movie-entry",
+      kind: "movie",
+      tunarrProgramId: "movie",
+      segmentIndex: 1,
+      segmentCount: 3,
+      lineupIndex: 2,
+      lineupStartOffsetMs: 1_800_000,
+      plannedStartMs: start + 1_860_000,
+      plannedEndMs: start + 5_460_000,
+      sourceStartMs: 1_800_000,
+      sourceEndMs: 5_400_000,
+    },
+    {
+      channelId: "marktv",
+      date: "2026-09-13",
+      occurrenceKey: `airing:marktv:2026-09-13:movie-entry:${schedule.entries[0].start}`,
+      entryId: "movie-entry",
+      kind: "movie",
+      tunarrProgramId: "movie",
+      segmentIndex: 2,
+      segmentCount: 3,
+      lineupIndex: 4,
+      lineupStartOffsetMs: 5_400_000,
+      plannedStartMs: start + 5_520_000,
+      plannedEndMs: start + 7_320_000,
+      sourceStartMs: 5_400_000,
+      sourceEndMs: 7_200_000,
+    },
+    {
+      channelId: "marktv",
+      date: "2026-09-13",
+      occurrenceKey: `airing:marktv:2026-09-13:ad-entry:${schedule.entries[1].start}`,
+      entryId: "ad-entry",
+      kind: "commercial",
+      tunarrProgramId: "ad",
+      segmentIndex: 0,
+      segmentCount: 1,
+      lineupIndex: 5,
+      lineupStartOffsetMs: 0,
+      plannedStartMs: start + 7_320_000,
+      plannedEndMs: start + 7_380_000,
+      sourceStartMs: 0,
+      sourceEndMs: 60_000,
+    },
+  ]);
+  // Additive and shadow-only: the slots sent to Tunarr are still the same flat
+  // list, and no binding rides along in the operations.
+  expect(plannedLineup(plan)).toEqual([
+    { type: "content", id: "movie", duration: 1_800_000, startOffsetMs: 0 },
+    { type: "content", id: "ad", duration: 60_000 },
+    {
+      type: "content",
+      id: "movie",
+      duration: 3_600_000,
+      startOffsetMs: 1_800_000,
+    },
+    { type: "content", id: "ad", duration: 60_000 },
+    {
+      type: "content",
+      id: "movie",
+      duration: 1_800_000,
+      startOffsetMs: 5_400_000,
+    },
+    { type: "content", id: "ad", duration: 60_000 },
+  ]);
+  expect(JSON.stringify(plan.operations)).not.toContain("bindings");
+});
+
+test("keeps two airings of the same media as distinct bindings", () => {
+  // The same file matched twice must not collapse into one binding, and the two
+  // instances must not be told apart by their shape alone.
+  const repeated: Schedule = {
+    ...schedule,
+    durationMs: 1_200_000,
+    entries: [
+      {
+        id: "episode-a",
+        start: "2026-09-13T00:00:00.000Z",
+        end: "2026-09-13T00:10:00.000Z",
+        localStart: "00:00",
+        localEnd: "00:10",
+        durationMs: 600_000,
+        kind: "episode",
+        title: "Episode",
+        mediaId: "episode",
+        path: "/media/episode.mkv",
+      },
+      {
+        id: "episode-b",
+        start: "2026-09-13T00:10:00.000Z",
+        end: "2026-09-13T00:20:00.000Z",
+        localStart: "00:10",
+        localEnd: "00:20",
+        durationMs: 600_000,
+        kind: "episode",
+        title: "Episode",
+        mediaId: "episode",
+        path: "/media/episode.mkv",
+      },
+    ],
+  };
+  const plan = buildTunarrSyncPlan(
+    repeated,
+    inventory,
+    capabilities,
+    mapping,
+    snapshots,
+  );
+  expect(plan.syncEligible).toBe(true);
+  expect(plan.bindings).toHaveLength(2);
+  expect(
+    plan.bindings.map((binding) => ({
+      entryId: binding.entryId,
+      mediaId: binding.mediaId,
+      tunarrProgramId: binding.tunarrProgramId,
+      lineupIndex: binding.lineupIndex,
+      plannedStartMs: binding.plannedStartMs,
+      sourceStartMs: binding.sourceStartMs,
+      sourceEndMs: binding.sourceEndMs,
+    })),
+  ).toEqual([
+    {
+      entryId: "episode-a",
+      mediaId: "episode",
+      tunarrProgramId: "episode",
+      lineupIndex: 0,
+      plannedStartMs: Date.parse(repeated.entries[0].start),
+      sourceStartMs: 0,
+      sourceEndMs: 600_000,
+    },
+    {
+      entryId: "episode-b",
+      mediaId: "episode",
+      tunarrProgramId: "episode",
+      lineupIndex: 1,
+      plannedStartMs: Date.parse(repeated.entries[1].start),
+      sourceStartMs: 0,
+      sourceEndMs: 600_000,
+    },
+  ]);
+  expect(new Set(plan.bindings.map((binding) => binding.occurrenceKey)).size).toBe(2);
+  expect(plan.bindings[0]!.occurrenceKey).toContain("episode-a");
+  expect(plan.bindings[1]!.occurrenceKey).toContain("episode-b");
+});
+
+test("binds a resumed movie's source range, including a break it opens on", () => {
+  const resumeEntry = {
+    id: "resume-entry",
+    start: "2026-09-13T00:00:00.000Z",
+    end: "2026-09-13T00:30:00.000Z",
+    localStart: "00:00",
+    localEnd: "00:30",
+    durationMs: 1_800_000,
+    sourceOffsetMs: 3_600_000,
+    kind: "movie" as const,
+    title: "Movie",
+    mediaId: "movie",
+    path: "/media/movie.mkv",
+  };
+  const resumed: Schedule = {
+    ...schedule,
+    durationMs: 1_800_000,
+    entries: [resumeEntry],
+  };
+  const start = Date.parse(resumeEntry.start);
+  const plain = buildTunarrSyncPlan(
+    resumed,
+    inventory,
+    capabilities,
+    mapping,
+    snapshots,
+  );
+  expect(plain.syncEligible).toBe(true);
+  expect(plain.bindings).toEqual([
+    {
+      channelId: "marktv",
+      date: "2026-09-13",
+      occurrenceKey: `airing:marktv:2026-09-13:resume-entry:${resumeEntry.start}`,
+      entryId: "resume-entry",
+      mediaId: "movie",
+      kind: "movie",
+      tunarrProgramId: "movie",
+      segmentIndex: 0,
+      segmentCount: 1,
+      lineupIndex: 0,
+      lineupStartOffsetMs: 3_600_000,
+      plannedStartMs: start,
+      plannedEndMs: start + 1_800_000,
+      sourceStartMs: 3_600_000,
+      sourceEndMs: 5_400_000,
+    },
+  ]);
+  // A film that resumes exactly on one of its breaks opens the continuation with
+  // that break, so its first content slot is no longer the entry's first slot.
+  const onBreak: Schedule = {
+    ...schedule,
+    durationMs: 1_920_000,
+    entries: [
+      {
+        ...resumeEntry,
+        id: "resume-break",
+        end: "2026-09-13T00:31:00.000Z",
+        localEnd: "00:31",
+        durationMs: 1_860_000,
+        contentDurationMs: 1_800_000,
+        midrolls: [{ offsetMs: 0, durationMs: 60_000 }],
+      },
+      {
+        id: "ad-entry",
+        start: "2026-09-13T00:31:00.000Z",
+        end: "2026-09-13T00:32:00.000Z",
+        localStart: "00:31",
+        localEnd: "00:32",
+        durationMs: 60_000,
+        kind: "commercial",
+        title: "Ad",
+        mediaId: "ad",
+        path: "/media/ad.mkv",
+      },
+    ],
+  };
+  const split = buildTunarrSyncPlan(
+    onBreak,
+    inventory,
+    capabilities,
+    mapping,
+    snapshots,
+  );
+  expect(split.syncEligible).toBe(true);
+  expect(plannedLineup(split)).toEqual([
+    { type: "content", id: "ad", duration: 60_000 },
+    {
+      type: "content",
+      id: "movie",
+      duration: 1_800_000,
+      startOffsetMs: 3_600_000,
+    },
+    { type: "content", id: "ad", duration: 60_000 },
+  ]);
+  expect(
+    split.bindings
+      .filter((binding) => binding.entryId === "resume-break")
+      .map((binding) => ({
+        segmentIndex: binding.segmentIndex,
+        segmentCount: binding.segmentCount,
+        lineupIndex: binding.lineupIndex,
+        lineupStartOffsetMs: binding.lineupStartOffsetMs,
+        plannedStartMs: binding.plannedStartMs,
+        plannedEndMs: binding.plannedEndMs,
+        sourceStartMs: binding.sourceStartMs,
+        sourceEndMs: binding.sourceEndMs,
+      })),
+  ).toEqual([
+    {
+      segmentIndex: 0,
+      segmentCount: 1,
+      lineupIndex: 1,
+      lineupStartOffsetMs: 3_600_000,
+      plannedStartMs: start + 60_000,
+      plannedEndMs: start + 1_860_000,
+      sourceStartMs: 3_600_000,
+      sourceEndMs: 5_400_000,
+    },
+  ]);
+});
+
+test("moves planned bindings past a preserved lineup prefix", () => {
+  const start = Date.parse(schedule.entries[0].start);
+  const day: Schedule = {
+    ...schedule,
+    durationMs: 120_000,
+    entries: [
+      {
+        ...schedule.entries[0],
+        durationMs: 120_000,
+        contentDurationMs: undefined,
+        midrolls: undefined,
+        end: new Date(start + 120_000).toISOString(),
+      },
+    ],
+  };
+  const remote: TunarrSnapshots = {
+    ...snapshots,
+    channels: [
+      { ...existingChannel, startTime: start - 60_000, duration: 300_000 },
+    ],
+    programming: {
+      ...programming,
+      totalPrograms: 3,
+      lineup: [
+        { type: "content", id: "ad", duration: 60_000 },
+        { type: "content", id: "movie", duration: 120_000 },
+        { type: "content", id: "future", duration: 120_000 },
+      ],
+    },
+  };
+  const plan = buildTunarrSyncPlan(
+    day,
+    inventory,
+    capabilities,
+    {
+      libraryId: "lib",
+      channelId: "7",
+      createChannel: false,
+      preserveExistingLineup: true,
+    },
+    remote,
+  );
+  expect(plan.blockingErrors).toEqual([]);
+  // The published lineup keeps its imported hour before and after the day, so
+  // the day's only slot is index 1 - not index 0 as it is in the day itself.
+  expect(plannedLineup(plan)).toEqual(remote.programming!.lineup);
+  expect(plan.bindings).toEqual([
+    {
+      channelId: "marktv",
+      date: "2026-09-13",
+      occurrenceKey: `airing:marktv:2026-09-13:movie-entry:${schedule.entries[0].start}`,
+      entryId: "movie-entry",
+      kind: "movie",
+      tunarrProgramId: "movie",
+      segmentIndex: 0,
+      segmentCount: 1,
+      lineupIndex: 1,
+      lineupStartOffsetMs: 0,
+      plannedStartMs: start,
+      plannedEndMs: start + 120_000,
+      sourceStartMs: 0,
+      sourceEndMs: 120_000,
+    },
+  ]);
+});
+
+test("refuses bindings it cannot place at one offset in a preserved lineup", () => {
+  // The imported lineup already holds an identical copy of the day's only slot
+  // ahead of the window, so index 0 and index 1 read the same. A binding
+  // pointed at either copy would be a guess, so the plan emits none and blocks
+  // rather than hand a later consumer another airing's source interval.
+  const start = Date.parse(schedule.entries[0].start);
+  const day: Schedule = {
+    ...schedule,
+    durationMs: 120_000,
+    entries: [
+      {
+        id: "episode-entry",
+        start: schedule.entries[0].start,
+        end: new Date(start + 120_000).toISOString(),
+        localStart: "00:00",
+        localEnd: "00:02",
+        durationMs: 120_000,
+        kind: "episode",
+        title: "Episode",
+        mediaId: "episode",
+        path: "/media/episode.mkv",
+      },
+    ],
+  };
+  const remote: TunarrSnapshots = {
+    ...snapshots,
+    channels: [
+      { ...existingChannel, startTime: start - 120_000, duration: 420_000 },
+    ],
+    programming: {
+      ...programming,
+      totalPrograms: 4,
+      lineup: [
+        { type: "content", id: "episode", duration: 120_000 },
+        { type: "content", id: "ad", duration: 60_000 },
+        { type: "content", id: "episode", duration: 120_000 },
+        { type: "content", id: "future", duration: 120_000 },
+      ],
+    },
+  };
+  const plan = buildTunarrSyncPlan(
+    day,
+    inventory,
+    capabilities,
+    {
+      libraryId: "lib",
+      channelId: "7",
+      createChannel: false,
+      preserveExistingLineup: true,
+    },
+    remote,
+  );
+  expect(plan.bindings).toEqual([]);
+  expect(plan.syncEligible).toBe(true);
+  expect(plan.warnings).toContainEqual(
+    expect.objectContaining({ code: "PLANNED_BINDING_UNPROVABLE" }),
+  );
+  // A shadow binding refusal must not block the existing lineup sync.
+  expect(plannedLineup(plan)).toEqual([
+    { type: "content", id: "episode", duration: 120_000 },
+    { type: "content", id: "episode", duration: 120_000 },
+    {
+      type: "content",
+      id: "episode",
+      duration: 60_000,
+      startOffsetMs: 60_000,
+    },
+    { type: "content", id: "future", duration: 120_000 },
+  ]);
+  // The same day on a plain channel binds at index 0.
+  const plain = buildTunarrSyncPlan(
+    day,
+    inventory,
+    capabilities,
+    mapping,
+    snapshots,
+  );
+  expect(plain.syncEligible).toBe(true);
+  expect(plain.bindings).toHaveLength(1);
+  expect(plain.bindings[0]).toMatchObject({
+    entryId: "episode-entry",
+    tunarrProgramId: "episode",
+    lineupIndex: 0,
+  });
+});
+
+test("leaves a day of flex slots without bindings and without a refusal", () => {
+  const start = Date.parse(schedule.entries[0].start);
+  const day: Schedule = {
+    ...schedule,
+    durationMs: 120_000,
+    entries: [
+      {
+        id: "flex-entry",
+        start: schedule.entries[0].start,
+        end: new Date(start + 120_000).toISOString(),
+        localStart: "00:00",
+        localEnd: "00:02",
+        durationMs: 120_000,
+        kind: "flex",
+        title: "Flex",
+      },
+    ],
+  };
+  const remote: TunarrSnapshots = {
+    ...snapshots,
+    channels: [
+      { ...existingChannel, startTime: start - 60_000, duration: 300_000 },
+    ],
+    programming: {
+      ...programming,
+      totalPrograms: 3,
+      lineup: [
+        { type: "content", id: "ad", duration: 60_000 },
+        { type: "flex", duration: 120_000 },
+        { type: "content", id: "future", duration: 120_000 },
+      ],
+    },
+  };
+  const plan = buildTunarrSyncPlan(
+    day,
+    inventory,
+    capabilities,
+    {
+      libraryId: "lib",
+      channelId: "7",
+      createChannel: false,
+      preserveExistingLineup: true,
+    },
+    remote,
+  );
+  // Nothing in the day names an entry, so there is nothing to bind and no
+  // offset to prove.
+  expect(plan.bindings).toEqual([]);
+  expect(plan.blockingErrors).toEqual([]);
+  expect(plan.syncEligible).toBe(true);
+});

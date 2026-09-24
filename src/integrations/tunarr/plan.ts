@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import type { MediaItem, Schedule, ScheduleEntry } from "../../domain/models.js";
 import { parseVoicedChannelScope, voicedChannelAllows } from "../../continuity/voicedChannels.js";
 import { normalizeLocalPath } from "./client.js";
-import { assertPreservedMovies, splicePreservedLineup } from "./preserveLineup.js";
+import {
+  assertPreservedMovies,
+  splicePreservedLineupWithOffset,
+} from "./preserveLineup.js";
 import type {
   TunarrCapabilities,
   TunarrChannel,
@@ -44,6 +47,57 @@ export type TunarrOperation =
   | FillerUpdateOperation
   | ProgrammingOperation;
 
+/**
+ * Shadow-only link from one MarkTV schedule entry to the Tunarr lineup slot the
+ * plan puts it in.
+ *
+ * The sync's `programming` operation is a flat list of Tunarr programs and flex
+ * slots, so publishing it drops which MarkTV entry each slot came from. This
+ * record is captured *while* the lineup is built - where the planner still
+ * knows the entry and the exact program `matchEntry` returned - and never
+ * recovered afterwards by matching durations or ids, because a spot that
+ * shares a file with the programme would make that guess wrong.
+ *
+ * It is a mapping, not evidence. Nothing here is sent to Tunarr, nothing is
+ * credited as aired, and a slot that loops on the channel is not thereby
+ * observed: it is the input a later, separately authorized bridge needs.
+ */
+export type TunarrPlannedBinding = {
+  /** Channel this broadcast day belongs to. */
+  channelId: string;
+  /** MarkTV broadcast date of the schedule the binding was planned from. */
+  date: string;
+  /**
+   * Stable key for one airing: channel + broadcast date + schedule entry +
+   * planned start instant. A regenerated entry at a different start is a
+   * different airing, so it gets a different key rather than reusing one.
+   */
+  occurrenceKey: string;
+  /** MarkTV schedule entry that produced this segment. */
+  entryId: string;
+  /** MarkTV media identity the entry airs, when it carries one. */
+  mediaId?: string;
+  /** MarkTV kind of the entry. */
+  kind: ScheduleEntry["kind"];
+  /** Exact Tunarr program id `matchEntry` returned for the entry's path. */
+  tunarrProgramId: string;
+  /** Zero-based index of this content segment inside the entry. */
+  segmentIndex: number;
+  /** Number of content segments the entry was planned as. */
+  segmentCount: number;
+  /** Index of this segment's slot in the published lineup. */
+  lineupIndex: number;
+  /** Offset the slot resumes the source file at. */
+  lineupStartOffsetMs: number;
+  /** Planned broadcast instant the segment starts at. */
+  plannedStartMs: number;
+  /** Planned broadcast instant the segment ends at. */
+  plannedEndMs: number;
+  /** Source-relative range the segment plays, in the media file. */
+  sourceStartMs: number;
+  sourceEndMs: number;
+};
+
 export type TunarrSyncPlan = {
   fingerprint: string;
   createdAt: string;
@@ -59,6 +113,14 @@ export type TunarrSyncPlan = {
     placeholder: number;
   };
   operations: TunarrOperation[];
+  /**
+   * Shadow-only entry-to-slot mapping for `operations`' programming lineup.
+   *
+   * Empty when the published lineup cannot be attributed to one identifiable
+   * window (see `PLANNED_BINDING_UNPROVABLE`). Read-only output: the sync sends
+   * only `operations`, so this never reaches Tunarr.
+   */
+  bindings: TunarrPlannedBinding[];
   capabilities: TunarrCapabilities;
   snapshots: TunarrSnapshots;
   inventorySnapshot: TunarrInventory;
@@ -257,11 +319,36 @@ function validMidrollLayout(entry: ScheduleEntry) {
   return true;
 }
 
+/** Where one content segment sits in the slots its entry produced. */
+type SplitContentSegment = {
+  /** Index of the segment inside `SplitContent.lineup`. */
+  index: number;
+  /** Broadcast offset from the entry's start instant to the segment's start. */
+  broadcastOffsetMs: number;
+  /** Offset the segment resumes the source file at. */
+  sourceStartMs: number;
+  /** Broadcast length of the segment. */
+  durationMs: number;
+};
+
+/**
+ * The slots one entry produces, and where that entry's own content sits in
+ * them.
+ *
+ * A break's pod slots are interleaved with the entry's content, so the content
+ * positions are recorded as the layout is built rather than recovered
+ * afterwards from the slot shapes.
+ */
+type SplitContent = {
+  lineup: TunarrLineup;
+  segments: SplitContentSegment[];
+};
+
 function splitContent(
   entry: ScheduleEntry,
   contentId: string,
   midrollPods: Array<TunarrLineup | undefined>,
-): TunarrLineup {
+): SplitContent {
   const breaks = entry.midrolls ?? [];
   // A movie that crossed a broadcast day boundary resumes partway through the
   // file, so every content segment is quoted at its offset in the SOURCE rather
@@ -269,42 +356,58 @@ function splitContent(
   // restarting it.
   const sourceBase = entry.sourceOffsetMs ?? 0;
   if (!breaks.length)
-    return [
-      {
-        type: "content",
-        id: contentId,
-        duration: entry.durationMs,
-        ...(sourceBase ? { startOffsetMs: sourceBase } : {}),
-      },
-    ];
+    return {
+      lineup: [
+        {
+          type: "content",
+          id: contentId,
+          duration: entry.durationMs,
+          ...(sourceBase ? { startOffsetMs: sourceBase } : {}),
+        },
+      ],
+      segments: [
+        {
+          index: 0,
+          broadcastOffsetMs: 0,
+          sourceStartMs: sourceBase,
+          durationMs: entry.durationMs,
+        },
+      ],
+    };
   const contentDurationMs = entry.contentDurationMs!;
   const lineup: TunarrLineup = [];
+  const segments: SplitContentSegment[] = [];
   let offset = 0;
-  for (const [index, midroll] of breaks.entries()) {
-    if (midroll.offsetMs < offset) continue;
-    if (midroll.offsetMs > offset)
-      lineup.push({
-        type: "content",
-        id: contentId,
-        duration: midroll.offsetMs - offset,
-        startOffsetMs: sourceBase + offset,
-      });
-    lineup.push(
-      ...(midrollPods[index] ?? [
-        { type: "flex" as const, duration: midroll.durationMs },
-      ]),
-    );
-    offset = midroll.offsetMs;
-  }
-  if (offset < contentDurationMs) {
+  let broadcastOffsetMs = 0;
+  const pushContent = (sourceStartMs: number, durationMs: number) => {
     lineup.push({
       type: "content",
       id: contentId,
-      duration: contentDurationMs - offset,
-      startOffsetMs: sourceBase + offset,
+      duration: durationMs,
+      startOffsetMs: sourceStartMs,
     });
+    segments.push({
+      index: lineup.length - 1,
+      broadcastOffsetMs,
+      sourceStartMs,
+      durationMs,
+    });
+    broadcastOffsetMs += durationMs;
+  };
+  for (const [index, midroll] of breaks.entries()) {
+    if (midroll.offsetMs < offset) continue;
+    if (midroll.offsetMs > offset)
+      pushContent(sourceBase + offset, midroll.offsetMs - offset);
+    const pod = midrollPods[index] ?? [
+      { type: "flex" as const, duration: midroll.durationMs },
+    ];
+    lineup.push(...pod);
+    broadcastOffsetMs += pod.reduce((total, item) => total + item.duration, 0);
+    offset = midroll.offsetMs;
   }
-  return lineup;
+  if (offset < contentDurationMs)
+    pushContent(sourceBase + offset, contentDurationMs - offset);
+  return { lineup, segments };
 }
 
 function selectExactMidrollFill(
@@ -516,6 +619,73 @@ export function resolveFillerId(lineup: TunarrLineup, fillerListId: string) {
   ) as TunarrLineup;
 }
 
+/**
+ * Stable key for one planned airing.
+ *
+ * Channel and broadcast date scope it to one channel's one day, the schedule
+ * entry names the programme, and the entry's own start instant separates two
+ * airings of the same entry in a regenerated day. It is derived from the entry
+ * alone, so neither the break filler nor a preserved prefix can move it.
+ */
+function plannedOccurrenceKey(
+  schedule: Schedule,
+  entry: ScheduleEntry,
+): string {
+  return `airing:${schedule.channelId}:${schedule.date}:${entry.id}:${entry.start}`;
+}
+
+/**
+ * Everything about a slot that a reader could use to tell it from another one.
+ *
+ * A slot's index is only meaningful if the slots around it are distinguishable,
+ * so two slots with the same type, program, length, resume offset and filler
+ * configuration are the same thing Tunarr would play.
+ */
+function lineupSlotKey(item: TunarrLineup[number]): string {
+  const id = "id" in item ? item.id : undefined;
+  const startOffsetMs = "startOffsetMs" in item ? (item.startOffsetMs ?? 0) : 0;
+  const fillerConfig = (item as unknown as Record<string, unknown>)
+    .fillerConfig;
+  return JSON.stringify([
+    item.type,
+    id,
+    item.duration,
+    startOffsetMs,
+    fillerConfig ?? null,
+  ]);
+}
+
+/**
+ * Every offset at which a day's own lineup appears verbatim in the published
+ * one.
+ *
+ * The splice is the authority on where the day went; this only asks whether a
+ * reader could tell. Identical slots around the window make the same index
+ * readable as two different copies, and a binding pointed at the wrong copy
+ * would hand a later consumer another entry's source interval.
+ */
+function plannedWindowOffsets(
+  published: TunarrLineup,
+  day: TunarrLineup,
+): number[] {
+  if (!day.length || published.length < day.length) return [];
+  const publishedKeys = published.map(lineupSlotKey);
+  const dayKeys = day.map(lineupSlotKey);
+  const offsets: number[] = [];
+  for (let start = 0; start + day.length <= published.length; start += 1) {
+    if (publishedKeys[start] !== dayKeys[0]) continue;
+    let matches = true;
+    for (let index = 1; index < day.length; index += 1) {
+      if (publishedKeys[start + index] !== dayKeys[index]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) offsets.push(start);
+  }
+  return offsets;
+}
+
 export function buildTunarrSyncPlan(
   schedule: Schedule,
   inventory: TunarrInventory,
@@ -525,6 +695,7 @@ export function buildTunarrSyncPlan(
   catalog: readonly MediaItem[] = [],
 ): TunarrSyncPlan {
   const blockingErrors: Diagnostic[] = [];
+  const warnings: Diagnostic[] = [];
   const matchCounts = {
     matched: 0,
     unmatched: 0,
@@ -654,6 +825,7 @@ export function buildTunarrSyncPlan(
     }
   }
   const lineup: TunarrLineup = [];
+  const plannedBindings: TunarrPlannedBinding[] = [];
   let hasMidroll = false;
   for (const entry of schedule.entries) {
     if (entry.kind === "flex") {
@@ -742,7 +914,34 @@ export function buildTunarrSyncPlan(
         return pod;
       });
     }
-    lineup.push(...splitContent(entry, match.id, midrollPods));
+    // Identity is recorded here, at the only point where the planner knows
+    // which entry and which matched Tunarr program produced each slot. The pods
+    // a break just drew are deliberately not bound: they come from the shared
+    // filler bag, not from this entry.
+    const daySlot = lineup.length;
+    const split = splitContent(entry, match.id, midrollPods);
+    lineup.push(...split.lineup);
+    const entryStartMs = Date.parse(entry.start);
+    split.segments.forEach((segment, segmentIndex) => {
+      const plannedStartMs = entryStartMs + segment.broadcastOffsetMs;
+      plannedBindings.push({
+        channelId: schedule.channelId,
+        date: schedule.date,
+        occurrenceKey: plannedOccurrenceKey(schedule, entry),
+        entryId: entry.id,
+        ...(entry.mediaId ? { mediaId: entry.mediaId } : {}),
+        kind: entry.kind,
+        tunarrProgramId: match.id,
+        segmentIndex,
+        segmentCount: split.segments.length,
+        lineupIndex: daySlot + segment.index,
+        lineupStartOffsetMs: segment.sourceStartMs,
+        plannedStartMs,
+        plannedEndMs: plannedStartMs + segment.durationMs,
+        sourceStartMs: segment.sourceStartMs,
+        sourceEndMs: segment.sourceStartMs + segment.durationMs,
+      });
+    });
     const explicitVoice = voicedCandidates.find(
       (candidate) => candidate.id === match.id,
     );
@@ -792,6 +991,10 @@ export function buildTunarrSyncPlan(
     });
   }
   let publishedLineup = lineup;
+  // A binding names the slot in the lineup the sync actually posts. A plain day
+  // is its own published lineup; a preserved one is spliced into the live
+  // imported lineup, so the day's slots move down by the preserved prefix.
+  let bindings = plannedBindings;
   if (mapping.preserveExistingLineup) {
     try {
       const existing = snapshots.channels.find(channel => channel.id === mapping.channelId);
@@ -807,8 +1010,28 @@ export function buildTunarrSyncPlan(
       }
       assertPreservedMovies(snapshots.programming.lineup,
         Date.parse(schedule.entries[0]!.start) - existing.startTime, lineup, movieIds);
-      publishedLineup = splicePreservedLineup(snapshots.programming.lineup,
-        existing.startTime, Date.parse(schedule.entries[0]!.start), lineup);
+      const splice = splicePreservedLineupWithOffset(
+        snapshots.programming.lineup, existing.startTime,
+        Date.parse(schedule.entries[0]!.start), lineup);
+      publishedLineup = splice.lineup;
+      // Refuse rather than guess: an imported lineup that repeats the whole day
+      // makes the day's offset unreadable, and a binding pointing at the wrong
+      // copy would hand a later consumer another airing's source interval.
+      const offsets = plannedWindowOffsets(publishedLineup, lineup);
+      const provable =
+        offsets.length === 1 && offsets[0] === splice.prefixLength;
+      if (bindings.length && !provable) {
+        bindings = [];
+        warnings.push({
+          code: "PLANNED_BINDING_UNPROVABLE",
+          message: "The preserved lineup places this day at no unique offset",
+        });
+      } else if (bindings.length) {
+        bindings = bindings.map(binding => ({
+          ...binding,
+          lineupIndex: binding.lineupIndex + splice.prefixLength,
+        }));
+      }
       const operation = operations.find(operation => operation.type === "channel-update");
       if (operation?.type === "channel-update") {
         operation.payload.startTime = existing.startTime;
@@ -852,9 +1075,10 @@ export function buildTunarrSyncPlan(
     mapping,
     syncEligible: blockingErrors.length === 0,
     blockingErrors,
-    warnings: [],
+    warnings,
     matchCounts,
     operations,
+    bindings,
     capabilities,
     snapshots,
     inventorySnapshot: inventory,
