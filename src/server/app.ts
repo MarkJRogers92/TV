@@ -6,7 +6,7 @@ import {
 } from "../acquisition/coordinator.js";
 import type { ProviderName } from "../acquisition/providerTypes.js";
 import { openDatabase } from "../db/database.js";
-import { createRepositories } from "../db/repositories.js";
+import { createRepositories, type Repositories } from "../db/repositories.js";
 import { logError } from "./logging.js";
 import {
   startScheduleRefresh,
@@ -23,6 +23,10 @@ import type { AcquisitionProvider } from "../integrations/acquisition/provider.j
 import { pinRegisteredMediaRoots, registerManagedLibrary } from "../media/roots.js";
 import { reconcileImportedSeries } from "../media/seriesEnrollment.js";
 import { reconcileMovieProgramming } from "../media/movieEnrollment.js";
+import {
+  createPreparationIntakeRunner,
+  type PreparationIntakeRunner,
+} from "../preparation/intakeRunner.js";
 import { KeychainCredentialStore } from "../security/keychain.js";
 import type { CredentialStore } from "../security/credentialStore.js";
 import type { ServerContext } from "./context.js";
@@ -63,6 +67,17 @@ export type BuildAppOptions = {
    * run, or a script must not inherit it. The real service opts in.
    */
   scheduleRefresh?: boolean;
+  /**
+   * Whether to run the background media-intake scanner.
+   *
+   * Off by default, for the same reason as `scheduleRefresh`: it walks registered
+   * roots on a timer and writes catalog rows, so anything that builds an app for
+   * a test, a verification run, or a script must not inherit it. The real service
+   * opts in.
+   */
+  preparationIntake?: boolean;
+  /** Test seam for the intake runner; defaults to the real implementation. */
+  createIntakeRunner?: typeof createPreparationIntakeRunner;
 };
 
 const IPV4_LOOPBACK = /^127(?:\.\d{1,3}){3}$/;
@@ -261,8 +276,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
   // Held out here because the close hook is registered before startup runs, so it
   // needs something to stop by the time it fires.
   let scheduleRefresh: ScheduleRefresh | null = null;
+  let preparationIntake: PreparationIntakeRunner | null = null;
   app.addHook("onClose", async () => {
     scheduleRefresh?.stop();
+    // Stop the intake scanner before the database handle closes: its poll timer
+    // and file watchers must not outlive the repositories they write through.
+    await preparationIntake?.stop();
     // The coordinator owns every durable acquisition write, so stop it
     // (clearing its timer, aborting local transfers, and persisting resumable
     // state) before the database handle is closed.
@@ -286,6 +305,16 @@ export async function buildApp(options: BuildAppOptions = {}) {
   // unreferenced poll timer before the app begins serving.
   try {
     await coordinator.start();
+    if (options.preparationIntake) {
+      // One background intake worker for the process. Its first pass is bounded
+      // (a fixed entry budget and at most one probe), and it never blocks
+      // serving, so it is started but not awaited.
+      const makeRunner = options.createIntakeRunner ?? createPreparationIntakeRunner;
+      preparationIntake = makeRunner(repositories, {
+        onError: (error, path) => logError("preparation-intake", error, path ? { path } : {}),
+      });
+      void preparationIntake.start().catch((error) => logError("preparation-intake", error));
+    }
     if (options.scheduleRefresh) {
       // Not awaited: a refresh that has to generate takes minutes, and serving must
       // not wait on it.
@@ -301,8 +330,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
       });
     }
   } catch (error) {
-    // A failed start leaves no app handle to close, so release the coordinator
-    // and database here instead of leaking both.
+    // A failed start leaves no app handle to close, so release the intake
+    // scanner, the coordinator, and the database here instead of leaking them.
+    await preparationIntake?.stop().catch(() => undefined);
     await coordinator.stop().catch(() => undefined);
     repositories.close();
     throw error;
