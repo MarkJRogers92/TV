@@ -230,6 +230,42 @@ describe("movie acceptance (MV)", () => {
     expect(choice?.mediaId).toBe("b");
   });
 
+  test("MV08 a committed date is not rewritten by a later pass", () => {
+    const { channel, movies } = movieFixture({ movieCount: 6 });
+    const date = "2026-09-26";
+    const rotation = buildMovieRotation({
+      channelId: channel.id,
+      eligibleIds: movies.map((movie) => movie.id),
+      epochDate: "2026-09-21",
+      now: new Date("2026-09-21T00:00:00.000Z"),
+    });
+    const stored: MovieOccurrence = {
+      channelId: channel.id,
+      date,
+      position: "double-feature-1",
+      role: "weekend-opener",
+      anchor: channel.movieProgramming!.weekendAnchor,
+      mediaId: "movie-committed-elsewhere",
+      consumes: true,
+      resolvedAt: "2026-09-20T00:00:00.000Z",
+    };
+    const result = assignMovieOccurrences({
+      channelId: channel.id,
+      date,
+      programming: channel.movieProgramming!,
+      rotation,
+      existing: (d, position) =>
+        d === date && position === "double-feature-1" ? stored : undefined,
+      resolvedAt: "2026-09-24T00:00:00.000Z",
+      // The date is already committed, so nothing may replace it.
+      repairable: (d) => d !== date,
+    });
+    const kept = result.forDate.find(
+      ({ position }) => position === "double-feature-1",
+    );
+    expect(kept).toEqual(stored);
+  });
+
   test("MV06 a failed weekend opener is not encored; the overnight slot takes an ordinary draw", () => {
     const { channel, movies } = movieFixture({ movieCount: 6 });
     const saturday = "2026-09-26";
