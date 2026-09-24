@@ -285,3 +285,72 @@ and `GET /api/v1/channels` returned HTTP 200. The stored 2026-09-24 channel 9 sc
 live regeneration was requested merely to prove persistence. Assignment reuse in the running
 process remains to be observed at a later legitimate rebuild; the automated regression test
 covers it. TiviMate still appeared in Tunarr's session API immediately after the restart.
+
+---
+
+## 12. Independent review of §11 — two findings (2026-09-23, second vendor)
+
+**Provenance, because it decides how much this is worth.** A separate model — Luna, i.e. GPT-6 on
+the `codex-api` backend via this session's broker, not the reviewer that wrote §11 — reviewed
+commit `afba720` as a **static, unanchored** review. The diff was stripped of *this document*
+first (it sat in the same commit, 283 lines, and would have fed it §5 and §11 as premises), and
+only the diff plus the three post-change files were supplied. My own findings were withheld, so
+the finding below is independent detection rather than agreement with me. I then verified both
+findings against the source myself; the calibration notes are mine, and they change the severity.
+
+### Finding 1 — assignment indices can misalign (mechanism verified; LATENT — never yet fired)
+
+Three facts, all read from the code:
+
+- `src/scheduler/generate.ts` increments the counter **unconditionally** on every movie-slot visit:
+  `if (slot.kind === "movie") { ... movieSlotPosition += 1; }`
+- A visit that selects nothing takes a different branch — `if (!chosen?.durationMs)` — which emits
+  only filler via `fillToBoundary`, logs `EXHAUSTED_POOL`, and `continue`s. **No movie entry is
+  produced**, but the counter has already advanced.
+- The write side persists only *emitted* movie entries, in order
+  (`!entry.sourceOffsetMs && slotMovieIds.has(entry.sourceSlotId)`).
+
+So one empty movie-slot visit shifts every later film's index down by one. On the next
+regeneration the assignment for visit N is read as the assignment for visit N-1, and because the
+assignment path assigns `relaxed: false` directly it also **bypasses the cooldown** that would
+otherwise have applied. Net effect: a different start time for that film, and the later airing
+possibly suppressed — which is exactly the guarantee §5 option A's acceptance criterion asserts.
+
+**Calibration (mine, and it matters): across 91 stored generations there are zero `EXHAUSTED_POOL`
+and zero `FALLBACK_POOL` diagnostics.** The precondition has never occurred on this install. This
+is a latent defect, not an active one. The review described it as a live violation; that
+overstates it. It becomes real the first time a movie slot starves its pool.
+
+**Smallest fix.** Persist one entry per movie-slot **visit**, with an explicit placeholder for a
+visit that produced nothing, so the stored list is indexed by visit rather than by emission — or
+align the read on visit index. *Accept when:* a test forces an empty movie-slot visit, regenerates
+the same channel+date, and asserts identical film IDs **and** identical start instants; plus a
+round-trip on a day that never empties.
+
+### Finding 2 — the media snapshot reseeds the day, so "identical start instants" is narrower than §5 claims
+
+`generationFingerprint` hashes the channel, revision, date, **all pools, and the entire media
+snapshot** (plus history, movie programming, continuation and break analyses); the seed is
+`${channel.id}:${date}:${fingerprint}`. Adding any media to the library therefore reseeds that
+date's generation, which can change earlier (non-movie) selections and move a *retained* film's
+start instant. Verified by reading; **practical bite unmeasured** — channel 9's film starts look
+30-minute boundary-aligned, which would blunt it. Note the fix is not simply "drop media from the
+fingerprint": a media change *should* affect selection for days not yet committed. Either state the
+guarantee precisely — film identity is stable per committed date; start instants are stable where
+the surrounding layout does not depend on reseeded selections — or treat it as a larger design
+change with its own handoff.
+
+### Where the review corroborated §2/§11
+
+Continuation entries do not consume an assignment position (matches my own line-trace, so that
+uncertainty is now double-sourced); preserved-archive and movie-programming entries are correctly
+excluded from this mechanism; and the transaction claim is true **at the call site**, with an
+explicit and fair **UNKNOWN** from the review about whether `repositories.transaction` is truly
+atomic (its implementation was out of scope — I verified only that both writes sit inside it).
+
+### What to finalize
+
+Finding 1 is a fix in the same two files and belongs to whoever owns `afba720`; it is small and the
+acceptance test is specified above. Finding 2 is a documentation correction at minimum. Same
+authority as §5: decide, implement, verify, deploy if it changes behaviour, and record the outcome
+here.
