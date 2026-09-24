@@ -11,6 +11,7 @@ import { movieOccurrenceKey } from "../../src/domain/movieProgramming.js";
 import {
   assignMovieOccurrences,
   buildMovieRotation,
+  movieExposureIndex,
   movieNightlyMinSpacingDays,
   spacedNightlyMovie,
 } from "../../src/scheduler/movieProgramming.js";
@@ -144,5 +145,76 @@ describe("movie acceptance (MV)", () => {
     expect(choice).toBeDefined();
     expect(choice!.legal).toBe(false);
     expect(choice!.mediaId).toBe("c");
+  });
+
+  test("MV06 a failed weekend opener is not encored; the overnight slot takes an ordinary draw", () => {
+    const { channel, movies } = movieFixture({ movieCount: 6 });
+    const saturday = "2026-09-26";
+    const sunday = "2026-09-27";
+    const rotation = buildMovieRotation({
+      channelId: channel.id,
+      eligibleIds: movies.map((movie) => movie.id),
+      epochDate: saturday,
+      now: new Date(`${saturday}T12:00:00.000Z`),
+    });
+    const opener: MovieOccurrence = {
+      channelId: channel.id,
+      date: saturday,
+      position: "double-feature-1",
+      role: "weekend-opener",
+      anchor: channel.movieProgramming!.weekendAnchor,
+      mediaId: movies[0]!.id,
+      consumes: true,
+      resolvedAt: `${saturday}T12:00:00.000Z`,
+    };
+    const result = assignMovieOccurrences({
+      channelId: channel.id,
+      date: sunday,
+      programming: channel.movieProgramming!,
+      rotation,
+      existing: (date, position) =>
+        date === saturday && position === "double-feature-1" ? opener : undefined,
+      resolvedAt: `${sunday}T07:00:00.000Z`,
+      actualExposure: [], // the opener failed before airing
+      verifiedCompletedOccurrences: new Set(),
+    });
+    const nightly = result.forDate.find(({ position }) => position === "nightly");
+    expect(nightly?.encoreOf).toBeUndefined();
+    expect(nightly?.mediaId).not.toBe(opener.mediaId);
+    expect(nightly?.consumes).toBe(true);
+  });
+
+  test("MV07 an opener and its encore are two exposures but one rotation draw", () => {
+    const opener = { mediaId: "movie-01", date: "2026-09-26" };
+    const encore = {
+      mediaId: "movie-01",
+      date: "2026-09-27",
+      encoreOf: movieOccurrenceKey("2026-09-26", "double-feature-1"),
+    };
+    const index = movieExposureIndex([opener, encore]);
+    expect(index.cycleConsumption).toBe(1);
+    // The later airing is the one that counts as the movie's last exposure.
+    expect(index.lastExposedOn.get("movie-01")).toBe("2026-09-27");
+    // Two genuinely separate airings DO consume two draws.
+    expect(
+      movieExposureIndex([opener, { mediaId: "movie-01", date: "2026-09-29" }])
+        .cycleConsumption,
+    ).toBe(2);
+  });
+
+  test("MV16 nothing is credited from a plan, and an encore never adds a second draw", () => {
+    const empty = movieExposureIndex([]);
+    expect(empty.cycleConsumption).toBe(0);
+    expect(empty.lastExposedOn.size).toBe(0);
+
+    const pair = movieExposureIndex([
+      { mediaId: "movie-01", date: "2026-09-26" },
+      {
+        mediaId: "movie-01",
+        date: "2026-09-27",
+        encoreOf: movieOccurrenceKey("2026-09-26", "double-feature-1"),
+      },
+    ]);
+    expect(pair.cycleConsumption).toBe(1);
   });
 });
