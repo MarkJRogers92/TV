@@ -14,6 +14,8 @@ Record the deployed Git commits, complete built artifact hashes, active channel 
 4. If an older binary cannot read the additive schema, use a tested compatibility adapter or perform a transactionally reviewed, forward-state-preserving migration on copied databases. Do not copy the September 23 database backup over newer progress or movie history. The new high-water marks, active occurrence/source offset, completed exposure intervals and approved encore links must survive any data conversion.
 5. Verify channel IDs and URLs, stream mode, output/buffer/pacing settings, current programming position, upcoming episode floor and nightly movie history. Then observe a real client transition and record the result.
 
-## What is proven now
+## Isolated compatibility rehearsal, September 23
 
-The baseline backup is readable and internally consistent. No binary rollback or post-activation history reconciliation has yet been exercised; the steps above remain an operational procedure until an isolated restore rehearsal passes.
+The baseline MarkTV SQLite backup was copied to `/Users/markrogers/marktv-ops/rollback-rehearsal-Jl2iqP`, without touching the live database. Opening that copy with the current source added the nine `airing_*` tables. A synthetic newer marker and an active episode occurrence at source offset 600,000 ms were written there. Opening the same copy with the preserved `3efd39f` baseline source returned `PRAGMA integrity_check = ok` and left both the marker and active occurrence, including its offset, intact. This proves that the additive schema is readable by the previous database opener on this copy.
+
+This was a database compatibility rehearsal, not a binary rollback of a live service. It did not exercise a real exposure merge, concurrent Tunarr WAL state, or a post-activation playback transition. Do not replace current live databases with this or the baseline backup.
