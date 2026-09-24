@@ -7,7 +7,10 @@
  * without guessing from logs: preparation backlog and outcomes, which media
  * roots are actually mounted, and how far each channel's schedule reaches.
  */
+import { statfs } from "node:fs/promises";
+import { DateTime } from "luxon";
 import type { Repositories } from "../db/repositories.js";
+import type { Channel, ScheduleEntry } from "../domain/models.js";
 import { assertManagedDirectory, captureManagedDirectory } from "../acquisition/paths.js";
 import { listMediaRoots } from "../media/roots.js";
 import { assessCoverage } from "../scheduler/coverage.js";
@@ -21,7 +24,28 @@ export type PreparationStatus = {
   recent: Array<{ path: string; state: PreparationJobState; classification: PreparationClassification | null }>;
 };
 
-export type MediaRootStatus = { path: string; present: boolean };
+export type MediaRootStatus = {
+  path: string;
+  present: boolean;
+  /** Free bytes on the volume, when it is present. */
+  freeBytes?: number;
+};
+
+export type AirEntry = {
+  title: string;
+  kind: string;
+  mediaId?: string;
+  movieRole?: string;
+  start: string;
+  end: string;
+};
+
+export type ChannelAirState = {
+  /** The schedule entry actually airing right now, or null if none covers now. */
+  onAir: (AirEntry & { elapsedMs: number; remainingMs: number }) | null;
+  /** The next few committed entries, soonest first. */
+  next: AirEntry[];
+};
 
 export type ChannelHorizonStatus = {
   id: string;
@@ -29,7 +53,63 @@ export type ChannelHorizonStatus = {
   hoursCovered: number;
   gaps: number;
   contiguous: boolean;
+  air: ChannelAirState;
 };
+
+function airEntry(entry: ScheduleEntry): AirEntry {
+  return {
+    title: entry.title,
+    kind: entry.kind,
+    ...(entry.mediaId ? { mediaId: entry.mediaId } : {}),
+    ...(entry.movieRole ? { movieRole: entry.movieRole } : {}),
+    start: entry.start,
+    end: entry.end,
+  };
+}
+
+/**
+ * What a channel is airing now and next, read from its committed schedule.
+ *
+ * Purely derived from the stored schedule for the channel's own broadcast date
+ * (and the next day when an entry spans midnight); it never triggers generation.
+ */
+export function channelAirState(
+  repositories: Repositories,
+  channel: Channel,
+  now: Date,
+  nextCount = 3,
+): ChannelAirState {
+  const local = DateTime.fromJSDate(now, { zone: channel.timezone });
+  const today = local.toISODate();
+  if (!today) return { onAir: null, next: [] };
+  const tomorrow = local.plus({ days: 1 }).toISODate();
+  const entries = [
+    ...(repositories.schedules.latestForDate(channel.id, today)?.entries ?? []),
+    ...(tomorrow
+      ? repositories.schedules.latestForDate(channel.id, tomorrow)?.entries ?? []
+      : []),
+  ];
+  const nowMs = now.getTime();
+  const onAir =
+    entries.find(
+      (entry) => Date.parse(entry.start) <= nowMs && nowMs < Date.parse(entry.end),
+    ) ?? null;
+  const next = entries
+    .filter((entry) => Date.parse(entry.start) > nowMs)
+    .sort((left, right) => Date.parse(left.start) - Date.parse(right.start))
+    .slice(0, nextCount)
+    .map(airEntry);
+  return {
+    onAir: onAir
+      ? {
+          ...airEntry(onAir),
+          elapsedMs: nowMs - Date.parse(onAir.start),
+          remainingMs: Date.parse(onAir.end) - nowMs,
+        }
+      : null,
+    next,
+  };
+}
 
 export type AutopilotStatus = {
   at: string;
@@ -69,7 +149,12 @@ export async function mediaRootStatus(repositories: Repositories): Promise<Media
     try {
       const identity = root.directoryIdentity ?? await captureManagedDirectory(root.path);
       await assertManagedDirectory(identity);
-      statuses.push({ path: root.path, present: true });
+      const stats = await statfs(identity.path).catch(() => undefined);
+      statuses.push({
+        path: root.path,
+        present: true,
+        ...(stats ? { freeBytes: Number(stats.bavail) * Number(stats.bsize) } : {}),
+      });
     } catch {
       statuses.push({ path: root.path, present: false });
     }
@@ -93,6 +178,7 @@ export function channelHorizonStatus(
       hoursCovered: Math.round(coverage.coveredMs / 3_600_000),
       gaps: coverage.gaps.length,
       contiguous: coverage.contiguous,
+      air: channelAirState(repositories, channel, now),
     };
   });
 }
