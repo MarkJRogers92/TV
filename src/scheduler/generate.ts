@@ -44,6 +44,11 @@ export type GenerateScheduleInput = {
   items: MediaItem[];
   date: string;
   history?: Played[];
+  /**
+   * Series whose pool is fully aired and may start again. Passed straight through
+   * to selection; see `SelectionInput.wrapAllowed`.
+   */
+  wrapAllowed?: ReadonlySet<string>;
   now?: Date;
   episodeBreakAnalyses?: Record<string, EpisodeBreakAnalysis>;
   /**
@@ -291,10 +296,10 @@ export function generateSchedule(
       : result.error.issues.map((issue) => {
           const path = issue.path.join(".");
           return {
-            code: /(?:movie|episode)Midroll/.test(path)
-              || /breakPolicy/.test(path)
-              ? ("INVALID_BREAK_POLICY" as const)
-              : ("INVALID_CONFIGURATION" as const),
+            code:
+              /(?:movie|episode)Midroll/.test(path) || /breakPolicy/.test(path)
+                ? ("INVALID_BREAK_POLICY" as const)
+                : ("INVALID_CONFIGURATION" as const),
             path,
             message: issue.message,
           };
@@ -449,12 +454,15 @@ export function generateSchedule(
     occurrenceKey: string;
     encore: boolean;
   }):
-    | { entry: ScheduleEntry; end: DateTime; continues: boolean }
-    | undefined => {
+    { entry: ScheduleEntry; end: DateTime; continues: boolean } | undefined => {
     const programming = movieRuntime!.programming;
-    const breakSelection = selectMovieBreak(movieBreakItems, programming.breakPolicy, {
-      seed: `${movieSeed}:${options.occurrenceKey}:break`,
-    });
+    const breakSelection = selectMovieBreak(
+      movieBreakItems,
+      programming.breakPolicy,
+      {
+        seed: `${movieSeed}:${options.occurrenceKey}:break`,
+      },
+    );
     // The film's own timeline is only ever known from the duration: no black,
     // fade, audio or chapter analysis of the movie file is performed here, so the
     // LOCATION of each break is an estimate from percentage targets and says so.
@@ -520,7 +528,8 @@ export function generateSchedule(
         ? `Movie programming: ${options.role} encore of ${options.occurrenceKey}`
         : `Movie programming: ${options.role} from the movie rotation`,
     };
-    if (options.sourceOffsetMs > 0) entry.sourceOffsetMs = options.sourceOffsetMs;
+    if (options.sourceOffsetMs > 0)
+      entry.sourceOffsetMs = options.sourceOffsetMs;
     if (inside.length) {
       entry.contentDurationMs = contentMs;
       entry.midrolls = inside;
@@ -529,8 +538,7 @@ export function generateSchedule(
         message: `${options.item.title} break locations are estimated from percentage targets (first and last ${programming.breakPolicy.protectionMinutes} minutes protected); no black, fade, audio or chapter analysis was used and no credits metadata was available`,
         mediaId: options.item.id,
       });
-      if (podFill)
-        diagnostics.push({ ...podFill, mediaId: options.item.id });
+      if (podFill) diagnostics.push({ ...podFill, mediaId: options.item.id });
     }
     const continues = fullRemainingMs - contentMs > 0;
     if (continues)
@@ -750,7 +758,11 @@ export function generateSchedule(
         bridgeOwed = false;
     }
     const closerItem = itemsById.get(block.pendingCloser.mediaId);
-    if (!closerItem?.durationMs || closerItem.kind !== "movie" || !closerItem.available) {
+    if (
+      !closerItem?.durationMs ||
+      closerItem.kind !== "movie" ||
+      !closerItem.available
+    ) {
       diagnostics.push({
         code: "MOVIE_MEDIA_UNAVAILABLE",
         message: `${block.pendingCloser.occurrenceKey} has no playable movie in the catalog`,
@@ -1011,6 +1023,7 @@ export function generateSchedule(
         items: input.items,
         kind: slot.kind,
         history,
+        wrapAllowed: input.wrapAllowed,
         at: at.toUTC().toISO()!,
         seed: `${seed}:${at.toMillis()}:${poolId}`,
         allowCooldownRelaxation: slot.allowCooldownRelaxation,
@@ -1055,6 +1068,7 @@ export function generateSchedule(
           items: input.items,
           kind: slot.kind,
           history,
+          wrapAllowed: input.wrapAllowed,
           at: at.toUTC().toISO()!,
           seed: `${seed}:${at.toMillis()}:${poolId}`,
           allowCooldownRelaxation: slot.allowCooldownRelaxation,
@@ -1075,8 +1089,17 @@ export function generateSchedule(
         const assigned = itemsById.get(assignedId);
         const assignedPool = [...slot.poolIds, ...slot.fallbackPoolIds]
           .map((id) => input.pools.find((pool) => pool.id === id))
-          .find((pool) => pool?.kinds.includes("movie") && pool.mediaIds.includes(assignedId));
-        if (assigned?.kind === "movie" && assigned.available && assigned.durationMs && assignedPool)
+          .find(
+            (pool) =>
+              pool?.kinds.includes("movie") &&
+              pool.mediaIds.includes(assignedId),
+          );
+        if (
+          assigned?.kind === "movie" &&
+          assigned.available &&
+          assigned.durationMs &&
+          assignedPool
+        )
           selectedPool = { pool: assignedPool, item: assigned, relaxed: false };
       }
       movieSlotPosition += 1;

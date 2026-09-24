@@ -10,6 +10,13 @@ export type SelectionInput = {
   at: string;
   seed: string;
   allowCooldownRelaxation?: boolean;
+  /**
+   * Series whose pool has been fully aired and may therefore start again. Absent
+   * (or missing a series), an exhausted series is held instead of wrapped - which
+   * is what keeps a member it has never played, such as an earlier episode that
+   * appeared later, from being mistaken for a restart.
+   */
+  wrapAllowed?: ReadonlySet<string>;
 };
 export type SelectionResult = { item: MediaItem | undefined; relaxed: boolean };
 
@@ -100,6 +107,7 @@ function chooseEpisodeChronological(
   allItems: MediaItem[],
   pool: Pool,
   history: Played[],
+  wrapAllowed: ReadonlySet<string> | undefined,
 ) {
   const eligibleIds = new Set(candidates.map((item) => item.id));
   const byId = new Map(allItems.map((item) => [item.id, item]));
@@ -170,7 +178,17 @@ function chooseEpisodeChronological(
       (item) =>
         compareEpisodePosition(episodePosition(item), floor.position) > 0,
     );
-    if (!above.length) continue;
+    if (!above.length) {
+      // Nothing above the floor: the series has reached the end of its pool.
+      // Start the next cycle - but only when the pool is demonstrably spent
+      // (`wrapAllowed`, from the durable per-series cycle record). Otherwise the
+      // series is held, exactly as a brand-new one is when its opener is missing,
+      // so an unplayed member cannot be passed over as though it had aired.
+      if (!wrapAllowed?.has(key)) continue;
+      const first = list[0];
+      if (first && eligibleIds.has(first.id)) seriesNext.set(key, first);
+      continue;
+    }
     const next = above[0];
     if (!eligibleIds.has(next.id)) continue;
     if (!isImmediateSuccessor(floor.item, next)) continue;
@@ -231,6 +249,7 @@ export function selectCandidate(input: SelectionInput): SelectionResult {
     input.items,
     input.pool,
     input.history,
+    input.wrapAllowed,
   );
   return { item, relaxed: Boolean(item) && relaxed };
 }

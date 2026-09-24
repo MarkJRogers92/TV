@@ -18,6 +18,7 @@ import {
   floorHistory,
   readSeriesFloors,
   recordSeriesFloors,
+  wrapAllowedSeries,
   type SeriesFloorRecord,
 } from "../scheduler/seriesFloors.js";
 import { seriesOrderKey } from "../scheduler/select.js";
@@ -218,6 +219,34 @@ export class ScheduleService {
       : existing;
   }
 
+  /**
+   * The members of each series' pool, for the channel's episode slots.
+   *
+   * Only pools the channel actually draws episodes from count: a series present
+   * in some unrelated pool is not "spent" on this channel, and treating it as
+   * spent would wrap it early.
+   */
+  private poolMembersBySeries(channel: Channel): Map<string, Set<string>> {
+    const members = new Map<string, Set<string>>();
+    const poolIds = new Set(
+      channel.slots
+        .filter((slot) => slot.kind === "episode")
+        .flatMap((slot) => slot.poolIds),
+    );
+    for (const pool of this.repositories.pools.list()) {
+      if (!poolIds.has(pool.id)) continue;
+      for (const mediaId of pool.mediaIds) {
+        const item = this.repositories.media.get(mediaId);
+        if (item === undefined || item.kind !== "episode") continue;
+        const seriesKey = seriesOrderKey(item);
+        const set = members.get(seriesKey);
+        if (set) set.add(mediaId);
+        else members.set(seriesKey, new Set([mediaId]));
+      }
+    }
+    return members;
+  }
+
   private episodeIdentity(mediaId: string) {
     const item = this.repositories.media.get(mediaId);
     if (
@@ -250,6 +279,14 @@ export class ScheduleService {
         ...this.repositories.schedules.historyBefore(channel.id, date),
         ...floorHistory(this.seriesFloors(channel.id), date),
       ],
+      // A series may start again only when its pool is demonstrably spent. The
+      // licence is computed from the durable cycle record, so a member the series
+      // has never played keeps it held instead of looking like a restart.
+      wrapAllowed: wrapAllowedSeries(
+        this.seriesFloors(channel.id),
+        date,
+        this.poolMembersBySeries(channel),
+      ),
       now: this.now(),
     };
     // A preserved-lineup channel is sliced, not scheduled. The archive decides the
