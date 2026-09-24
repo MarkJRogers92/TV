@@ -52,6 +52,12 @@ const wholeSpotKinds = new Set(["commercial", "filler", "bumper"]);
  * Thirty days is the goal, and a bag of roughly thirty-eight films already
  * spaces its own rotation that far apart, so the correction only has to act when
  * the cadence would break the floor.
+ *
+ * The correction is opt-in and evidence-driven, because a plan is not an airing.
+ * It runs only when the caller passes the verified airing ledger
+ * (`actualExposure`); stored reservations and generated slots are the plan, and
+ * treating either as exposure is exactly the mistake this policy must not make.
+ * Without that evidence the assignment keeps the plain rotation draw.
  */
 export const movieNightlyMinSpacingDays = 21;
 export const movieNightlyTargetSpacingDays = 30;
@@ -376,9 +382,64 @@ function localCalendarDaysBetween(from: string, to: string): number {
   );
 }
 
+/**
+ * One airing that really happened, as opposed to one that was planned.
+ *
+ * The spacing policy is fed these and nothing else. A stored occurrence row is
+ * a reservation and a derived calendar slot is a plan: neither proves a movie
+ * reached a viewer, and a cancelled reservation must not suppress a later pick.
+ */
+export type MovieExposureEvent = {
+  mediaId: string;
+  /** Broadcast date the airing actually started on. */
+  date: string;
+  /**
+   * Occurrence key of the opener this airing replayed, when it was an encore.
+   *
+   * An encore is real exposure - the movie really aired that night - but it is
+   * not a new draw from the bag.
+   */
+  encoreOf?: string;
+};
+
+export type MovieExposureIndex = {
+  /** Latest broadcast date each movie actually aired, as exposure. */
+  lastExposedOn: ReadonlyMap<string, string>;
+  /**
+   * Rotation slots the supplied airings really consumed.
+   *
+   * A linked opener and its encore replay one draw, so the pair counts once: an
+   * encore is counted as exposure without consumption. That is what keeps a
+   * stored reservation or an inferred slot from being mistaken for either.
+   */
+  cycleConsumption: number;
+};
+
+/**
+ * Fold a list of actual airings into the history the spacing policy reads.
+ *
+ * Only the events handed in count. The caller is responsible for having
+ * observed them; nothing here infers an airing from a date, a rotation ordinal,
+ * or a persisted reservation.
+ */
+export function movieExposureIndex(
+  events: readonly MovieExposureEvent[],
+): MovieExposureIndex {
+  const lastExposedOn = new Map<string, string>();
+  let cycleConsumption = 0;
+  for (const event of events) {
+    const previous = lastExposedOn.get(event.mediaId);
+    if (!previous || previous < event.date)
+      lastExposedOn.set(event.mediaId, event.date);
+    // An encore replays its opener's draw rather than taking one of its own.
+    if (!event.encoreOf) cycleConsumption += 1;
+  }
+  return { lastExposedOn, cycleConsumption };
+}
+
 export type MovieNightlySpacingChoice = {
   mediaId: string;
-  /** Local calendar days since that movie's last ordinary nightly feature. */
+  /** Local calendar days since that movie's last actual airing. */
   gapDays: number;
   /** True when the 21-day floor holds. */
   legal: boolean;
@@ -391,20 +452,32 @@ export type MovieNightlySpacingChoice = {
 /**
  * The ordinary nightly feature for one date.
  *
- * The rotation's own pick keeps the night whenever it holds the floor, so a
- * channel whose bag is big enough airs exactly what it aired before: the
- * correction is invisible until a repeat would land inside three weeks. When it
- * would, the most rested legal movie takes the night, scanned from the same
- * rotation ordinal the plain draw used so ties stay deterministic. When no movie
- * is legal, the least recently planned one does and the caller reports the
+ * The rotation's own pick keeps the night whenever it already holds the goal, so
+ * a channel whose bag is big enough airs exactly what it aired before: the
+ * correction is invisible until a repeat would land inside three weeks. When the
+ * pick falls inside the goal, the most rested movie that clears the goal takes
+ * the night; when only the floor is reachable, the pick keeps the night if it
+ * clears the floor and the most rested floor-clearer does otherwise. When no
+ * movie is legal, the least recently aired one does and the caller reports the
  * scarcity instead of pretending the rule held.
+ *
+ * Candidates are scanned from the same rotation ordinal the plain draw used, so
+ * equal rest is broken by the rotation's own order and the result stays
+ * deterministic. A movie with a prospective reservation close ahead is capped
+ * to the days until that reservation: a reservation can only shorten the rest
+ * the policy sees, never invent exposure.
  */
 export function spacedNightlyMovie(input: {
   order: readonly string[];
   ordinal: number;
   date: string;
-  /** Latest ordinary nightly airing of each movie, strictly before `date`. */
-  lastNightlyOn: ReadonlyMap<string, string>;
+  /** Latest actual airing of each movie, strictly before `date`. */
+  lastExposedOn: ReadonlyMap<string, string>;
+  /**
+   * Prospective reservations by movie, mapped to the date they are reserved
+   * for. Optional: absent means the caller has no future-reservation view.
+   */
+  reservedOn?: ReadonlyMap<string, string>;
   /** Movies the rotation may draw right now; empty means "not known yet". */
   eligible?: ReadonlySet<string>;
 }): MovieNightlySpacingChoice | undefined {
@@ -413,41 +486,76 @@ export function spacedNightlyMovie(input: {
   const allowed = (mediaId: string) =>
     !input.eligible?.size || input.eligible.has(mediaId);
   const gapDays = (mediaId: string) => {
-    const last = input.lastNightlyOn.get(mediaId);
-    return last
+    const last = input.lastExposedOn.get(mediaId);
+    const rested = last
       ? localCalendarDaysBetween(last, input.date)
       : Number.POSITIVE_INFINITY;
+    const reserved = input.reservedOn?.get(mediaId);
+    if (reserved === undefined) return rested;
+    return Math.min(rested, localCalendarDaysBetween(input.date, reserved));
   };
   const start = ((input.ordinal % size) + size) % size;
   const plain = input.order[start]!;
+  const plainAllowed = allowed(plain);
   const plainGap = gapDays(plain);
-  if (allowed(plain) && plainGap >= movieNightlyMinSpacingDays)
+  // The rotation's own pick keeps the night whenever it already meets the goal.
+  if (plainAllowed && plainGap >= movieNightlyTargetSpacingDays)
     return {
       mediaId: plain,
       gapDays: plainGap,
       legal: true,
-      target: plainGap >= movieNightlyTargetSpacingDays,
+      target: true,
       substituted: false,
     };
-  let mostRestedLegal: { mediaId: string; gapDays: number } | undefined;
-  let mostRested: { mediaId: string; gapDays: number } | undefined;
+  type Candidate = { mediaId: string; gapDays: number };
+  let restedTarget: Candidate | undefined;
+  let restedFloor: Candidate | undefined;
+  let restedAny: Candidate | undefined;
   for (let step = 0; step < size; step += 1) {
     const mediaId = input.order[(start + step) % size]!;
     if (!allowed(mediaId)) continue;
     const gap = gapDays(mediaId);
-    if (!mostRested || gap > mostRested.gapDays)
-      mostRested = { mediaId, gapDays: gap };
+    if (!restedAny || gap > restedAny.gapDays)
+      restedAny = { mediaId, gapDays: gap };
     if (gap < movieNightlyMinSpacingDays) continue;
-    if (!mostRestedLegal || gap > mostRestedLegal.gapDays)
-      mostRestedLegal = { mediaId, gapDays: gap };
+    if (!restedFloor || gap > restedFloor.gapDays)
+      restedFloor = { mediaId, gapDays: gap };
+    if (gap < movieNightlyTargetSpacingDays) continue;
+    if (!restedTarget || gap > restedTarget.gapDays)
+      restedTarget = { mediaId, gapDays: gap };
   }
-  const chosen = mostRestedLegal ?? mostRested;
-  if (!chosen) return undefined;
+  // The goal is reachable, so take it even when the rotation's own pick was
+  // merely legal: a night inside the goal is the bug this policy exists to fix.
+  if (restedTarget)
+    return {
+      mediaId: restedTarget.mediaId,
+      gapDays: restedTarget.gapDays,
+      legal: true,
+      target: true,
+      substituted: restedTarget.mediaId !== plain,
+    };
+  if (plainAllowed && plainGap >= movieNightlyMinSpacingDays)
+    return {
+      mediaId: plain,
+      gapDays: plainGap,
+      legal: true,
+      target: false,
+      substituted: false,
+    };
+  if (restedFloor)
+    return {
+      mediaId: restedFloor.mediaId,
+      gapDays: restedFloor.gapDays,
+      legal: true,
+      target: false,
+      substituted: true,
+    };
+  if (!restedAny) return undefined;
   return {
-    mediaId: chosen.mediaId,
-    gapDays: chosen.gapDays,
-    legal: Boolean(mostRestedLegal),
-    target: chosen.gapDays >= movieNightlyTargetSpacingDays,
+    mediaId: restedAny.mediaId,
+    gapDays: restedAny.gapDays,
+    legal: false,
+    target: false,
     substituted: true,
   };
 }
@@ -505,6 +613,28 @@ export function assignMovieOccurrences(input: {
   eligibleMediaIds?: ReadonlySet<string>;
   /** Whether a stored assignment for this date may be replaced. */
   repairable?: (date: string) => boolean;
+  /**
+   * Shadow-only opt-in: the verified airing ledger the spacing policy reads.
+   *
+   * Absent - as every production call is today - the ordinary nightly feature
+   * keeps the plain rotation draw, because there is no evidence of what a
+   * viewer actually saw. Present means the caller has observed these airings and
+   * the nightly draw may be corrected so a repeat cannot land inside
+   * `movieNightlyMinSpacingDays`. Scope it to the airings of the nights this
+   * policy governs - the nightly slot, its overnight encores included. Stored
+   * reservations and generated slots are plans, never exposure, so they never
+   * appear here.
+   */
+  actualExposure?: readonly MovieExposureEvent[];
+  /**
+   * Prospective reservation conflicts, kept separate from exposure.
+   *
+   * A movie already reserved shortly after a candidate night cannot also take
+   * that night without repeating itself too soon, so a reservation caps the rest
+   * the policy sees. Optional, and only ever a constraint: it never stands in for
+   * an airing.
+   */
+  prospectiveReservations?: ReadonlyMap<string, string>;
 }): MovieAssignmentResult {
   const diagnostics: MovieAssignmentDiagnostic[] = [];
   const resolved = new Map<string, MovieOccurrence>();
@@ -566,95 +696,21 @@ export function assignMovieOccurrences(input: {
     );
   };
 
-  /** The movie an encore replays, when its opener is on the ledger or derivable. */
-  const encoreSourceMediaId = (
-    sourceDate: string,
-    sourcePosition: MoviePosition,
-  ): string | undefined => {
-    const stored = input.existing(sourceDate, sourcePosition);
-    if (stored) return stored.mediaId;
-    return specFor(sourceDate, sourcePosition)
-      ? rotationMediaId(input.rotation, sourceDate, sourcePosition)
-      : undefined;
-  };
-
   /**
-   * The ordinary nightly features the calendar and ledger already imply.
+   * The verified airing ledger, when the caller supplied one.
    *
-   * Only consuming nightly airings count. The Sunday and Monday overnight
-   * airings are linked encores that were already planned at their opener's date,
-   * the weekend double features are their own approved stream, and the all-day
-   * channels never reach this code at all. Dates the ledger never got are
-   * derived with the same rule, so the history a night sees does not depend on
-   * which day was generated first.
+   * Built only from observed airings. Nothing here walks the calendar or the
+   * occurrence ledger to guess what a night "would have" aired: a reservation
+   * that was cancelled, or a slot that was never generated, produced no exposure
+   * and must not push a later pick around.
    */
-  const nightlyHistory = new Map<string, ReadonlyMap<string, string>>();
-  const lastNightlyOn = (before: string): ReadonlyMap<string, string> => {
-    const cached = nightlyHistory.get(before);
-    if (cached) return cached;
-    const lastPlannedOn = new Map<string, string>();
-    const record = (mediaId: string, onDate: string) => {
-      const previous = lastPlannedOn.get(mediaId);
-      if (!previous || previous < onDate) lastPlannedOn.set(mediaId, onDate);
-    };
-    // The floor is the first broadcast date the feature could have aired: the
-    // rotation's own epoch, or the day it was switched on.
-    const floor =
-      input.activationDate && input.activationDate > input.rotation.epochDate
-        ? input.activationDate
-        : input.rotation.epochDate;
-    for (
-      let cursor = floor;
-      cursor < before;
-      cursor = DateTime.fromISO(cursor, { zone: "UTC" })
-        .plus({ days: 1 })
-        .toISODate()!
-    ) {
-      for (const spec of movieOccurrenceSpecs(cursor, input.programming)) {
-        if (spec.position !== "nightly") continue;
-        const stored = input.existing(spec.date, spec.position);
-        if (stored) {
-          if (stored.consumes) record(stored.mediaId, spec.date);
-          continue;
-        }
-        if (spec.consumes) {
-          const choice = spacedNightlyMovie({
-            order: input.rotation.order,
-            ordinal: rotationOrdinal(
-              input.rotation.epochDate,
-              spec.date,
-              spec.position,
-            ),
-            date: spec.date,
-            lastNightlyOn: lastPlannedOn,
-            eligible: input.eligibleMediaIds,
-          });
-          const mediaId =
-            choice?.mediaId ??
-            rotationMediaId(input.rotation, spec.date, spec.position);
-          if (mediaId) record(mediaId, spec.date);
-          continue;
-        }
-        if (!spec.encoreOf) continue;
-        const [sourceDate, sourcePosition] = spec.encoreOf.split(":") as [
-          string,
-          MoviePosition,
-        ];
-        // An encore replays an opener that is already counted at its own date.
-        // It only becomes an ordinary night of its own when there was no opener
-        // to replay and the slot fell back to a rotation draw.
-        if (
-          openerCovered(specFor(sourceDate, sourcePosition), sourceDate) &&
-          encoreSourceMediaId(sourceDate, sourcePosition)
-        )
-          continue;
-        const fallback = fallbackRotationMediaId(input.rotation, spec.date);
-        if (fallback) record(fallback, spec.date);
-      }
-    }
-    nightlyHistory.set(before, lastPlannedOn);
-    return lastPlannedOn;
-  };
+  // A full verified ledger can contain airings after the date being resolved.
+  // Build each night's view from earlier events only: later exposure must never
+  // rewrite a past decision or hide an older airing of the same movie.
+  const exposureBefore = input.actualExposure
+    ? (date: string) =>
+        movieExposureIndex(input.actualExposure!.filter((event) => event.date < date))
+    : undefined;
 
   const resolveSpec = (spec: MovieOccurrenceSpec): MovieOccurrence | undefined => {
     const key = movieOccurrenceKey(spec.date, spec.position);
@@ -681,10 +737,11 @@ export function assignMovieOccurrences(input: {
     let mediaId: string | undefined;
     let encoreFallback = false;
     if (spec.consumes) {
-      // The ordinary nightly feature is the one draw the spacing rule owns. The
-      // weekend double features stay on the rotation verbatim.
+      // The ordinary nightly feature is the one draw the spacing rule owns, and
+      // only when the caller handed in verified exposure. The weekend double
+      // features stay on the rotation verbatim.
       const choice =
-        spec.position === "nightly"
+        spec.position === "nightly" && exposureBefore
           ? spacedNightlyMovie({
               order: input.rotation.order,
               ordinal: rotationOrdinal(
@@ -693,31 +750,36 @@ export function assignMovieOccurrences(input: {
                 spec.position,
               ),
               date: spec.date,
-              lastNightlyOn: lastNightlyOn(spec.date),
+              lastExposedOn: exposureBefore(spec.date).lastExposedOn,
+              reservedOn: input.prospectiveReservations,
               eligible: input.eligibleMediaIds,
             })
           : undefined;
       mediaId =
         choice?.mediaId ??
         rotationMediaId(input.rotation, spec.date, spec.position);
-      if (choice?.substituted)
-        diagnostics.push(
-          choice.legal
-            ? {
-                code: "MOVIE_NIGHTLY_SPACING_BELOW_TARGET",
-                message: `The rotation's next movie for ${spec.date} had aired too recently; ${choice.mediaId} was the most rested legal choice at ${choice.gapDays} days, short of the ${movieNightlyTargetSpacingDays}-day goal`,
-                mediaId: choice.mediaId,
-                date: spec.date,
-                position: spec.position,
-              }
-            : {
-                code: "MOVIE_NIGHTLY_SPACING_SHORTAGE",
-                message: `No eligible movie has been off the ordinary nightly feature for ${movieNightlyMinSpacingDays} days on ${spec.date}; ${choice.mediaId} is the least recently planned at ${choice.gapDays} days`,
-                mediaId: choice.mediaId,
-                date: spec.date,
-                position: spec.position,
-              },
-        );
+      // The diagnostic reports the night's actual status: a shortage when not
+      // even the floor was reachable, below-target when the floor held but the
+      // goal did not. A substitution that clears the goal is not a problem and
+      // is not reported as one.
+      if (choice && !choice.legal)
+        diagnostics.push({
+          code: "MOVIE_NIGHTLY_SPACING_SHORTAGE",
+          message: `No eligible movie had been off the ordinary nightly feature for ${movieNightlyMinSpacingDays} days on ${spec.date}; ${choice.mediaId} is the most rested at ${choice.gapDays} days`,
+          mediaId: choice.mediaId,
+          date: spec.date,
+          position: spec.position,
+        });
+      else if (choice && !choice.target)
+        diagnostics.push({
+          code: "MOVIE_NIGHTLY_SPACING_BELOW_TARGET",
+          message: choice.substituted
+            ? `The rotation's next movie for ${spec.date} had aired too recently; ${choice.mediaId} was the most rested at ${choice.gapDays} days, short of the ${movieNightlyTargetSpacingDays}-day goal`
+            : `${choice.mediaId} last aired ${choice.gapDays} days before ${spec.date} and no eligible movie reached the ${movieNightlyTargetSpacingDays}-day goal, so the rotation's own pick held`,
+          mediaId: choice.mediaId,
+          date: spec.date,
+          position: spec.position,
+        });
     } else if (spec.encoreOf) {
       const [sourceDate, sourcePosition] = spec.encoreOf.split(":") as [
         string,

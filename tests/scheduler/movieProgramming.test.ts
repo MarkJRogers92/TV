@@ -5,13 +5,18 @@ import {
   assignMovieOccurrences,
   buildMovieRotation,
   continuationMidrolls,
+  movieExposureIndex,
   movieMidrollLayout,
   movieProgrammingPlan,
   selectMovieBreak,
   selectMovieBridge,
+  spacedNightlyMovie,
   wholeSpotCombination,
 } from "../../src/scheduler/movieProgramming.js";
-import type { MovieAssignmentDiagnostic } from "../../src/scheduler/movieProgramming.js";
+import type {
+  MovieAssignmentDiagnostic,
+  MovieExposureEvent,
+} from "../../src/scheduler/movieProgramming.js";
 import {
   movieOccurrenceKey,
   rotationMediaId,
@@ -46,16 +51,21 @@ const calendarDaysBetween = (from: string, to: string) =>
   );
 
 /**
- * Resolve a run of broadcast dates into one ledger, in the order given.
+ * Simulate a run of broadcast dates and feed back what actually aired.
  *
- * The spacing rule reads planned reservations, so a test has to keep them: what
- * a night sees is whatever the ledger already held for the nights before it,
- * whether that arrived through generation, a preview, or a repair.
+ * The spacing rule reads verified exposure and nothing else, so a simulation is
+ * the honest way to exercise it: each date is resolved with the airings observed
+ * so far, then the airings that date really produced are appended to the
+ * ledger. Only the nightly feature's own stream is observed - the ordinary
+ * nights and their overnight encores - because that is the stream this policy
+ * governs. A stored reservation or a generated slot is never fed in as history.
  */
-function resolveSpacedRun(options: {
+function simulateAirings(options: {
   movieCount: number;
   dates: string[];
   settled?: Map<string, MovieOccurrence>;
+  /** Airings observed before the run starts, in broadcast order. */
+  exposure?: MovieExposureEvent[];
   resolvedAt?: string;
 }) {
   const { channel, movies } = movieFixture({ movieCount: options.movieCount });
@@ -66,6 +76,7 @@ function resolveSpacedRun(options: {
     now: NOW,
   });
   const ledger = new Map(options.settled ?? []);
+  const exposure: MovieExposureEvent[] = [...(options.exposure ?? [])];
   const forDate = new Map<string, MovieOccurrence[]>();
   const diagnostics: MovieAssignmentDiagnostic[] = [];
   for (const date of options.dates) {
@@ -77,6 +88,7 @@ function resolveSpacedRun(options: {
       existing: (sourceDate, position) =>
         ledger.get(movieOccurrenceKey(sourceDate, position)),
       resolvedAt: options.resolvedAt ?? NOW.toISOString(),
+      actualExposure: exposure,
     });
     // Dependencies count too: resolving a Sunday encore also writes the opener
     // it replays, exactly as the persisting path does.
@@ -85,6 +97,20 @@ function resolveSpacedRun(options: {
         movieOccurrenceKey(occurrence.date, occurrence.position),
         occurrence,
       );
+    // Only what the nightly feature really put on air becomes exposure; the
+    // weekend double features are their own stream.
+    for (const occurrence of result.forDate) {
+      if (occurrence.position !== "nightly") continue;
+      exposure.push(
+        occurrence.encoreOf
+          ? {
+              mediaId: occurrence.mediaId,
+              date: occurrence.date,
+              encoreOf: occurrence.encoreOf,
+            }
+          : { mediaId: occurrence.mediaId, date: occurrence.date },
+      );
+    }
     forDate.set(date, result.forDate);
     diagnostics.push(...result.diagnostics);
   }
@@ -93,6 +119,7 @@ function resolveSpacedRun(options: {
     channel,
     rotation,
     ledger,
+    exposure,
     forDate,
     diagnostics,
     occurrences,
@@ -104,7 +131,7 @@ function resolveSpacedRun(options: {
 }
 
 /** The ordinary nights keyed by date, for comparing two runs. */
-const nightsByDate = (run: ReturnType<typeof resolveSpacedRun>) =>
+const nightsByDate = (run: ReturnType<typeof simulateAirings>) =>
   [...run.nights]
     .sort((left, right) => left.date.localeCompare(right.date))
     .map(({ date, mediaId, role, consumes }) => ({
@@ -242,7 +269,7 @@ test("an empty rotation yields no occurrences and a diagnostic", () => {
  */
 test("twenty films keep every ordinary nightly feature at least 21 days apart", () => {
   const dates = dateRange("2026-09-06", 28);
-  const run = resolveSpacedRun({ movieCount: 20, dates });
+  const run = simulateAirings({ movieCount: 20, dates });
 
   // Tuesday through Saturday, four weeks running.
   expect(run.nights).toHaveLength(20);
@@ -291,7 +318,7 @@ test("twenty films keep every ordinary nightly feature at least 21 days apart", 
 });
 
 test("a bag large enough spaces ordinary nights a month apart on its own", () => {
-  const run = resolveSpacedRun({
+  const run = simulateAirings({
     movieCount: 38,
     dates: dateRange("2026-09-06", 84),
   });
@@ -311,39 +338,36 @@ test("a bag large enough spaces ordinary nights a month apart on its own", () =>
 });
 
 test("a bag too small for the floor still never replays last night's movie", () => {
-  const run = resolveSpacedRun({
+  const run = simulateAirings({
     movieCount: 3,
     dates: dateRange("2026-09-06", 21),
   });
-  // Every night takes the least recently planned movie, so a title only returns
-  // after every other title has had the night - never yesterday's while an older
-  // candidate is waiting.
-  const lastSeen = new Map<string, string>();
+  // Every night takes the most rested film in the verified history, so a title
+  // only returns after every other title has had the night - never yesterday's
+  // while an older candidate is waiting.
+  const shortages = run.diagnostics.filter(
+    (diagnostic) => diagnostic.code === "MOVIE_NIGHTLY_SPACING_SHORTAGE",
+  );
+  expect(shortages.length).toBeGreaterThan(0);
   for (const night of run.nights) {
-    const gaps: Array<{ mediaId: string; gap: number }> = run.rotation.order.map(
-      (mediaId: string) => {
-        const previous = lastSeen.get(mediaId);
-        return {
-          mediaId,
-          gap: previous
-            ? calendarDaysBetween(previous, night.date)
-            : Number.POSITIVE_INFINITY,
-        };
-      },
-    );
-    const chosen = gaps.find((candidate) => candidate.mediaId === night.mediaId)!;
-    expect(chosen.gap).toBe(Math.max(...gaps.map((candidate) => candidate.gap)));
-    lastSeen.set(night.mediaId, night.date);
+    if (!shortages.some((shortage) => shortage.date === night.date)) continue;
+    const observed = movieExposureIndex(
+      run.exposure.filter((event) => event.date < night.date),
+    ).lastExposedOn;
+    const gaps = run.rotation.order.map((mediaId: string) => {
+      const previous = observed.get(mediaId);
+      return previous
+        ? calendarDaysBetween(previous, night.date)
+        : Number.POSITIVE_INFINITY;
+    });
+    const chosen = run.rotation.order.indexOf(night.mediaId);
+    expect(gaps[chosen]).toBe(Math.max(...gaps));
   }
   for (let index = 1; index < run.nights.length; index += 1)
     expect(run.nights[index].mediaId).not.toBe(run.nights[index - 1].mediaId);
 
   // The scarcity is named rather than hidden: the diagnostic carries the night,
   // the movie that took it, and how long that movie had actually been off.
-  const shortages = run.diagnostics.filter(
-    (diagnostic) => diagnostic.code === "MOVIE_NIGHTLY_SPACING_SHORTAGE",
-  );
-  expect(shortages.length).toBeGreaterThan(0);
   expect(shortages[0]).toMatchObject({
     position: "nightly",
     date: shortages[0].date,
@@ -352,29 +376,393 @@ test("a bag too small for the floor still never replays last night's movie", () 
   expect(shortages[0].message).toContain("21");
 });
 
-test("the spaced night is a pure function of the calendar and the ledger", () => {
-  const dates = dateRange("2026-09-06", 21);
-  const inOrder = resolveSpacedRun({ movieCount: 20, dates });
-  // The same window generated out of order lands on the same ordinary nights:
-  // the history a night reads is derived from the calendar and the ledger, not
-  // remembered from whichever day happened to be generated first.
-  const outOfOrder = resolveSpacedRun({
-    movieCount: 20,
-    dates: [...dates].reverse(),
+test("the spacing rule runs only on verified exposure, never on a plan", () => {
+  const { channel } = movieFixture({ movieCount: 20 });
+  const rotation = rotationFor(20);
+  const date = "2026-10-03";
+  // The ledger holds every earlier ordinary night as a reservation, all of them
+  // the same film. The old implementation read that as history and would have
+  // substituted it away; none of it aired, and the caller verified nothing, so
+  // the plain rotation draw has to stand.
+  const planned = new Map<string, MovieOccurrence>();
+  for (const settled of dateRange("2026-09-06", 27)) {
+    const occurrence: MovieOccurrence = {
+      channelId: channel.id,
+      date: settled,
+      position: "nightly",
+      role: "nightly",
+      anchor: "02:00",
+      mediaId: rotation.order[0]!,
+      consumes: true,
+      resolvedAt: NOW.toISOString(),
+    };
+    planned.set(movieOccurrenceKey(settled, "nightly"), occurrence);
+  }
+  const result = assignMovieOccurrences({
+    channelId: channel.id,
+    date,
+    programming: channel.movieProgramming!,
+    rotation,
+    existing: (sourceDate, position) =>
+      planned.get(movieOccurrenceKey(sourceDate, position)),
+    resolvedAt: NOW.toISOString(),
   });
-  expect(outOfOrder.rotation.order).toEqual(inOrder.rotation.order);
-  expect(nightsByDate(outOfOrder)).toEqual(nightsByDate(inOrder));
+  const nightly = result.forDate.find(
+    (occurrence) => occurrence.position === "nightly",
+  )!;
+  expect(nightly.mediaId).toBe(rotationMediaId(rotation, date, "nightly"));
+  const codes = result.diagnostics.map((diagnostic) => diagnostic.code);
+  expect(codes).not.toContain("MOVIE_NIGHTLY_SPACING_BELOW_TARGET");
+  expect(codes).not.toContain("MOVIE_NIGHTLY_SPACING_SHORTAGE");
+});
+
+test("a reservation that never aired does not suppress a later night", () => {
+  const { channel } = movieFixture({ movieCount: 4 });
+  const rotation = rotationFor(4);
+  const date = "2026-09-22";
+  const plain = rotationMediaId(rotation, date, "nightly")!;
+  const others = rotation.order.filter((mediaId) => mediaId !== plain);
+  // The other three films aired 25, 26 and 27 days earlier: legal, none of them
+  // reaching the thirty-day goal, so only observed exposure can move the night.
+  const daysBefore = (days: number) =>
+    DateTime.fromISO(date, { zone: "UTC" }).minus({ days }).toISODate()!;
+  const exposure: MovieExposureEvent[] = others.map((mediaId, index) => ({
+    mediaId,
+    date: daysBefore(25 + index),
+  }));
+  const resolve = (
+    events: MovieExposureEvent[],
+    ledger = new Map<string, MovieOccurrence>(),
+  ) =>
+    assignMovieOccurrences({
+      channelId: channel.id,
+      date,
+      programming: channel.movieProgramming!,
+      rotation,
+      existing: (sourceDate, position) =>
+        ledger.get(movieOccurrenceKey(sourceDate, position)),
+      resolvedAt: NOW.toISOString(),
+      actualExposure: events,
+    }).forDate.find((occurrence) => occurrence.position === "nightly")!;
+  // The ledger reserves this film three nights earlier, and the reservation was
+  // cancelled: it never aired, so it is not exposure and cannot suppress it.
+  const cancelled = new Map<string, MovieOccurrence>([
+    [
+      movieOccurrenceKey("2026-09-19", "nightly"),
+      {
+        channelId: channel.id,
+        date: "2026-09-19",
+        position: "nightly",
+        role: "nightly",
+        anchor: "02:00",
+        mediaId: plain,
+        consumes: true,
+        resolvedAt: NOW.toISOString(),
+      },
+    ],
+  ]);
+  expect(resolve(exposure, cancelled).mediaId).toBe(plain);
+  // Had that night actually aired, the same film would be three days from a
+  // repeat and the night would move to a rested film.
+  expect(resolve([...exposure, { mediaId: plain, date: "2026-09-19" }]).mediaId)
+    .not.toBe(plain);
+});
+
+test("later verified airings do not alter an earlier nightly assignment", () => {
+  const { channel } = movieFixture({ movieCount: 4 });
+  const rotation = rotationFor(4);
+  const date = "2026-09-22";
+  const plain = rotationMediaId(rotation, date, "nightly")!;
+  const resolve = (actualExposure: MovieExposureEvent[]) =>
+    assignMovieOccurrences({
+      channelId: channel.id,
+      date,
+      programming: channel.movieProgramming!,
+      rotation,
+      existing: () => undefined,
+      resolvedAt: NOW.toISOString(),
+      actualExposure,
+    }).forDate.find((occurrence) => occurrence.position === "nightly")!.mediaId;
+
+  expect(resolve([])).toBe(plain);
+  expect(resolve([{ mediaId: plain, date: "2026-09-23" }])).toBe(plain);
+});
+
+test("an aired overnight encore pushes a later ordinary night off that film", () => {
+  const { channel } = movieFixture({ movieCount: 4 });
+  const rotation = rotationFor(4);
+  const date = "2026-10-03";
+  const plain = rotationMediaId(rotation, date, "nightly")!;
+  const others = rotation.order.filter((mediaId) => mediaId !== plain);
+  const openerDate = "2026-09-12";
+  const encoreDate = "2026-09-13";
+  // The opener alone is twenty-one days clear; its 02:00 encore is only twenty,
+  // so the encore is the whole difference between keeping and moving the night.
+  expect(calendarDaysBetween(openerDate, date)).toBe(21);
+  expect(calendarDaysBetween(encoreDate, date)).toBe(20);
+  const exposure: MovieExposureEvent[] = others.map((mediaId, index) => ({
+    mediaId,
+    date: DateTime.fromISO(date, { zone: "UTC" })
+      .minus({ days: 25 + index })
+      .toISODate()!,
+  }));
+  const resolve = (events: MovieExposureEvent[]) =>
+    assignMovieOccurrences({
+      channelId: channel.id,
+      date,
+      programming: channel.movieProgramming!,
+      rotation,
+      existing: () => undefined,
+      resolvedAt: NOW.toISOString(),
+      actualExposure: events,
+    }).forDate.find((occurrence) => occurrence.position === "nightly")!;
+  const opener = { mediaId: plain, date: openerDate };
+  expect(resolve([...exposure, opener]).mediaId).toBe(plain);
+  const withEncore = resolve([
+    ...exposure,
+    opener,
+    {
+      mediaId: plain,
+      date: encoreDate,
+      encoreOf: movieOccurrenceKey(openerDate, "double-feature-1"),
+    },
+  ]);
+  expect(withEncore.mediaId).not.toBe(plain);
+  // The replacement is a legal choice, measured from the encore.
+  const observed = movieExposureIndex([
+    ...exposure,
+    opener,
+    { mediaId: plain, date: encoreDate, encoreOf: "x" },
+  ]).lastExposedOn;
+  const chosenGap = calendarDaysBetween(observed.get(withEncore.mediaId)!, date);
+  expect(chosenGap).toBeGreaterThanOrEqual(21);
+});
+
+test("a goal-clearing alternative beats a merely-legal rotation pick", () => {
+  const { channel } = movieFixture({ movieCount: 4 });
+  const rotation = rotationFor(4);
+  const date = "2026-10-03";
+  const plain = rotationMediaId(rotation, date, "nightly")!;
+  const rest = rotation.order.filter((mediaId) => mediaId !== plain);
+  // The rotation's own pick is twenty-five days rested: legal, but short of the
+  // goal. One film is forty days rested; the other two stay legal-but-short so
+  // the goal has exactly one candidate.
+  const daysBefore = (days: number) =>
+    DateTime.fromISO(date, { zone: "UTC" }).minus({ days }).toISODate()!;
+  const exposure: MovieExposureEvent[] = [
+    { mediaId: plain, date: daysBefore(25) },
+    { mediaId: rest[0]!, date: daysBefore(40) },
+    { mediaId: rest[1]!, date: daysBefore(26) },
+    { mediaId: rest[2]!, date: daysBefore(27) },
+  ];
+  const result = assignMovieOccurrences({
+    channelId: channel.id,
+    date,
+    programming: channel.movieProgramming!,
+    rotation,
+    existing: () => undefined,
+    resolvedAt: NOW.toISOString(),
+    actualExposure: exposure,
+  });
+  const nightly = result.forDate.find(
+    (occurrence) => occurrence.position === "nightly",
+  )!;
+  expect(nightly.mediaId).not.toBe(plain);
+  expect(nightly.mediaId).toBe(rest[0]);
+  // The substitution clears the goal, so the night is not reported as short.
+  expect(result.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain(
+    "MOVIE_NIGHTLY_SPACING_BELOW_TARGET",
+  );
+});
+
+test("spacing is a deterministic function of the verified exposure", () => {
+  const dates = dateRange("2026-09-06", 21);
+  const first = simulateAirings({ movieCount: 20, dates });
+  const replay = simulateAirings({ movieCount: 20, dates });
+  expect(nightsByDate(replay)).toEqual(nightsByDate(first));
+
+  // The same observations in a different order name the same night: the history
+  // is a set of airings, not the sequence a scanner happened to emit them in.
+  const date = "2026-09-30";
+  const observed = first.exposure.filter((event) => event.date < date);
+  const choose = (actualExposure: MovieExposureEvent[]) =>
+    assignMovieOccurrences({
+      channelId: first.channel.id,
+      date,
+      programming: first.channel.movieProgramming!,
+      rotation: first.rotation,
+      existing: () => undefined,
+      resolvedAt: NOW.toISOString(),
+      actualExposure,
+    }).forDate.find((occurrence) => occurrence.position === "nightly")!.mediaId;
+  expect(choose([...observed].reverse())).toBe(choose(observed));
 
   // Re-running a window the ledger already holds keeps every stored reservation
-  // verbatim, timestamp included: nothing already planned is reshuffled.
-  const again = resolveSpacedRun({
+  // verbatim, timestamp included: nothing already planned is reshuffled, and
+  // nothing is re-derived against history it already obeyed.
+  const again = simulateAirings({
     movieCount: 20,
     dates,
-    settled: inOrder.ledger,
+    settled: first.ledger,
+    exposure: first.exposure,
     resolvedAt: "2027-01-01T00:00:00.000Z",
   });
-  expect(nightsByDate(again)).toEqual(nightsByDate(inOrder));
+  expect(nightsByDate(again)).toEqual(nightsByDate(first));
   expect(again.diagnostics).toEqual([]);
+});
+
+test("a linked opener and encore are one exposure and one bag draw", () => {
+  const index = movieExposureIndex([
+    { mediaId: "movie-01", date: "2026-09-12" },
+    { mediaId: "movie-02", date: "2026-09-12" },
+    {
+      mediaId: "movie-01",
+      date: "2026-09-13",
+      encoreOf: "2026-09-12:double-feature-1",
+    },
+  ]);
+  // The encore is real exposure: the film really aired on the later night.
+  expect(index.lastExposedOn.get("movie-01")).toBe("2026-09-13");
+  // It replayed the opener's draw rather than consuming a second one.
+  expect(index.cycleConsumption).toBe(2);
+});
+
+test("the ordinary night prefers a goal-clearing film over a merely-legal pick", () => {
+  const choice = spacedNightlyMovie({
+    order: ["movie-a", "movie-b"],
+    ordinal: 0,
+    date: "2026-10-03",
+    lastExposedOn: new Map([
+      ["movie-a", "2026-09-08"],
+      ["movie-b", "2026-08-24"],
+    ]),
+  });
+  expect(choice).toMatchObject({
+    mediaId: "movie-b",
+    gapDays: 40,
+    legal: true,
+    target: true,
+    substituted: true,
+  });
+});
+
+test("the rotation's own pick keeps the night when it already clears the goal", () => {
+  const choice = spacedNightlyMovie({
+    order: ["movie-a", "movie-b"],
+    ordinal: 0,
+    date: "2026-10-03",
+    lastExposedOn: new Map([
+      ["movie-a", "2026-09-01"],
+      ["movie-b", "2026-09-30"],
+    ]),
+  });
+  expect(choice).toMatchObject({
+    mediaId: "movie-a",
+    gapDays: 32,
+    legal: true,
+    target: true,
+    substituted: false,
+  });
+});
+
+test("equal rest is broken by the rotation's own order", () => {
+  const choice = spacedNightlyMovie({
+    order: ["movie-a", "movie-b", "movie-c"],
+    ordinal: 0,
+    date: "2026-10-03",
+    lastExposedOn: new Map([
+      ["movie-a", "2026-10-01"],
+      ["movie-b", "2026-09-08"],
+      ["movie-c", "2026-09-08"],
+    ]),
+  });
+  expect(choice).toMatchObject({
+    mediaId: "movie-b",
+    gapDays: 25,
+    legal: true,
+    target: false,
+    substituted: true,
+  });
+});
+
+test("scarcity names the most rested film when nothing clears the floor", () => {
+  const choice = spacedNightlyMovie({
+    order: ["movie-a", "movie-b", "movie-c"],
+    ordinal: 0,
+    date: "2026-10-03",
+    lastExposedOn: new Map([
+      ["movie-a", "2026-10-01"],
+      ["movie-b", "2026-09-29"],
+      ["movie-c", "2026-09-30"],
+    ]),
+  });
+  expect(choice).toMatchObject({
+    mediaId: "movie-b",
+    gapDays: 4,
+    legal: false,
+    target: false,
+    substituted: true,
+  });
+});
+
+test("a prospective reservation caps the rest and is never mistaken for exposure", () => {
+  const order = ["movie-a", "movie-b"];
+  // movie-a really aired forty days ago, but it is already reserved ten days
+  // ahead: airing it tonight would repeat it inside the floor.
+  const capped = spacedNightlyMovie({
+    order,
+    ordinal: 0,
+    date: "2026-10-03",
+    lastExposedOn: new Map([["movie-a", "2026-08-24"]]),
+    reservedOn: new Map([["movie-a", "2026-10-13"]]),
+  });
+  expect(capped).toMatchObject({
+    mediaId: "movie-b",
+    legal: true,
+    target: true,
+    substituted: true,
+  });
+  // With no reservation the same verified exposure keeps the rotation's pick.
+  const uncapped = spacedNightlyMovie({
+    order,
+    ordinal: 0,
+    date: "2026-10-03",
+    lastExposedOn: new Map([["movie-a", "2026-08-24"]]),
+  });
+  expect(uncapped).toMatchObject({
+    mediaId: "movie-a",
+    target: true,
+    substituted: false,
+  });
+  // A reservation is a conflict, not a memory: it never lengthens a gap.
+  const reservedOnly = spacedNightlyMovie({
+    order: ["movie-a"],
+    ordinal: 0,
+    date: "2026-10-03",
+    lastExposedOn: new Map(),
+    reservedOn: new Map([["movie-a", "2026-10-08"]]),
+  });
+  expect(reservedOnly).toMatchObject({
+    gapDays: 5,
+    legal: false,
+    target: false,
+  });
+});
+
+test("an ineligible rotation pick is replaced even when it is well rested", () => {
+  const choice = spacedNightlyMovie({
+    order: ["movie-a", "movie-b"],
+    ordinal: 0,
+    date: "2026-10-03",
+    lastExposedOn: new Map([["movie-b", "2026-08-24"]]),
+    eligible: new Set(["movie-b"]),
+  });
+  expect(choice).toMatchObject({
+    mediaId: "movie-b",
+    legal: true,
+    target: true,
+    substituted: true,
+  });
 });
 
 test("weekend encores replay the adjacent opener and consume nothing new", () => {
