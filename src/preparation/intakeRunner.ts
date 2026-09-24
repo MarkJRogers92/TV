@@ -171,9 +171,20 @@ export function createPreparationIntakeRunner(
             // pending intake, start a duplicate one for the same bytes, or (with
             // a plain catalog check first) never settle at all.
             const prior = intakes.find((item) => sourceVersionsEqual(item.source, source));
-            if (prior) {
-              // Already tracked: not yet due, or ready to probe. Either way this
-              // costs no NEW-observation budget, so the walk advances past it.
+            const pending = prior !== undefined && prior.settledAt === null;
+            const catalogued = existing !== undefined && mediaVersionMatches(existing, source);
+
+            // A settled intake or an exact catalog match is DONE. Skipping it here,
+            // before the probe branch, is what lets the walk advance: otherwise a
+            // single settled-but-uncatalogued file is re-probed and breaks the pass
+            // every time, and the runner never reaches the rest of the tree. Neither
+            // case consumes the new-observation budget.
+            if (!pending && (prior !== undefined || catalogued)) continue;
+
+            if (pending && prior) {
+              // Observed before, not yet settled. Not due -> skip cheaply; due ->
+              // probe it to settle. This runs even when the file was catalogued
+              // mid-window, so a pending intake still completes.
               if (Date.parse(now().toISOString()) - Date.parse(prior.firstObservedAt) < 60_000) continue;
 
               // At most one ffprobe operation per pass and one across this driver.
@@ -192,12 +203,6 @@ export function createPreparationIntakeRunner(
               probedOne = true;
               break;
             }
-
-            // Already catalogued at this exact version and never witnessed by us:
-            // out of this runner's remit. Preparing every existing catalog entry
-            // would be a whole-library scan, so only files we observe as new are
-            // enqueued. This also costs no budget, so the walk keeps advancing.
-            if (existing && mediaVersionMatches(existing, source)) continue;
 
             // A genuinely new candidate: the only thing the per-pass budget caps.
             if (observationsThisPass >= entryBudget) continue;

@@ -188,3 +188,26 @@ test("the walk advances past already-settled files to reach a new candidate beyo
   expect(intakes).toHaveLength(1);
   expect(intakes[0].source.path).toBe(fresh);
 });
+
+test("an already-settled intake does not stall the walk", async () => {
+  const { rootPath, repositories, runner } = await fixture({ entryBudget: 1 });
+  const settled = join(rootPath, "A-settled.mkv");
+  await writeFile(settled, "settled bytes");
+  const stats = await lstat(settled);
+  const source = {
+    path: settled, sizeBytes: String(stats.size), modifiedMs: String(stats.mtimeMs),
+    deviceId: String(stats.dev), inode: String(stats.ino),
+  };
+  // Already settled, and observed long enough ago that a stale walk would pick
+  // it up as "due to probe" and break the pass on it every time.
+  repositories.preparation.observe({ sourceMediaId: "media-a", source, observedAt: "2026-09-24T11:00:00.000Z" });
+  repositories.preparation.observe({ sourceMediaId: "media-a", source, observedAt: "2026-09-24T11:01:00.000Z" });
+
+  const fresh = join(rootPath, "Z-fresh.mkv");
+  await writeFile(fresh, "new bytes");
+
+  await runner.runOnce();
+
+  const paths = repositories.preparation.intakes.list().map((item) => item.source.path);
+  expect(paths).toContain(fresh);
+});
