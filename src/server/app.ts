@@ -34,6 +34,7 @@ import {
 import { describePreparationEvent } from "../preparation/events.js";
 import { createHealthShadow, type HealthShadow } from "../autopilot/healthShadow.js";
 import { createChannelRecovery } from "../autopilot/recovery.js";
+import { createAlwaysOnSupervisor, type AlwaysOnSupervisor } from "../autopilot/alwaysOn.js";
 import { DateTime } from "luxon";
 import { KeychainCredentialStore } from "../security/keychain.js";
 import type { CredentialStore } from "../security/credentialStore.js";
@@ -112,6 +113,13 @@ export type BuildAppOptions = {
    * apply regardless.
    */
   healthRecovery?: boolean;
+  /**
+   * Always-on supervisor (R01). Off by default. When on, it requests each
+   * enabled channel's master playlist on a slow cadence so its producer starts
+   * and keeps producing with no viewers; Tunarr's get-or-create makes the
+   * repeat idempotent, so it can never create a second producer.
+   */
+  alwaysOn?: boolean;
 };
 
 const IPV4_LOOPBACK = /^127(?:\.\d{1,3}){3}$/;
@@ -313,6 +321,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   let preparationIntake: PreparationIntakeRunner | null = null;
   let preparationExecutor: PreparationExecutor | null = null;
   let healthShadow: HealthShadow | null = null;
+  let alwaysOn: AlwaysOnSupervisor | null = null;
   app.addHook("onClose", async () => {
     scheduleRefresh?.stop();
     // Stop the intake scanner before the database handle closes: its poll timer
@@ -324,6 +333,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     // Stop the observe-only watchdog; it only logs, but its timer must not
     // outlive the process either.
     await healthShadow?.stop();
+    await alwaysOn?.stop();
     // The coordinator owns every durable acquisition write, so stop it
     // (clearing its timer, aborting local transfers, and persisting resumable
     // state) before the database handle is closed.
@@ -439,6 +449,21 @@ export async function buildApp(options: BuildAppOptions = {}) {
       });
       void healthShadow.start().catch((error) => logError("health-shadow", error));
     }
+    if (options.alwaysOn) {
+      // Start each enabled channel's producer so it keeps running with no viewers.
+      alwaysOn = createAlwaysOnSupervisor(repositories, {
+        resolveStreamUrl: (channelId) => {
+          const mapping = readTunarrMappingForChannel(repositories, channelId);
+          if (!mapping?.url || !mapping.channelId) return null;
+          return `${mapping.url.replace(/\/+$/, "")}/stream/channels/${mapping.channelId}.m3u8`;
+        },
+        onResult: (channelId, ok, status) =>
+          logInfo("always-on", "Channel session ensured", { channelId, ok, status }),
+        onError: (error, channelId) =>
+          logError("always-on", error, channelId ? { channelId } : {}),
+      });
+      void alwaysOn.start().catch((error) => logError("always-on", error));
+    }
     if (options.scheduleRefresh) {
       // Not awaited: a refresh that has to generate takes minutes, and serving must
       // not wait on it.
@@ -460,6 +485,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     await preparationIntake?.stop().catch(() => undefined);
     await preparationExecutor?.stop().catch(() => undefined);
     await healthShadow?.stop().catch(() => undefined);
+    await alwaysOn?.stop().catch(() => undefined);
     await coordinator.stop().catch(() => undefined);
     repositories.close();
     throw error;

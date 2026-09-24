@@ -51,6 +51,8 @@ const app = await buildApp({
   healthRecovery:
     Boolean(process.env.MARKTV_HEALTH_SHADOW_ROOT) &&
     process.env.MARKTV_HEALTH_RECOVERY === "1",
+  // R01 always-on: start each channel's producer so it runs with no viewers.
+  alwaysOn: process.env.MARKTV_ALWAYS_ON === "1",
 });
 if (process.env.MARKTV_DEV !== "1") {
   await registerStaticUi(app, join(process.cwd(), "dist"));
