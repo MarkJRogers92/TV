@@ -1,0 +1,521 @@
+{
+  "artifact_kind": "portable_acceptance_scenarios_not_executed_product_tests",
+  "instructions": "Implement adapters in the existing test harness. Synthetic identifiers only. Expected outcomes express the handoff contract, not results already observed.",
+  "scenarios": [
+    {
+      "id": "F01",
+      "title": "Restart keeps active occurrence and ordered reservations",
+      "requirements": [
+        "R02",
+        "R03",
+        "R09"
+      ],
+      "given": {
+        "track": "series_a",
+        "completed_through": 9,
+        "active": {
+          "occurrence": "a10",
+          "episode": 10,
+          "source_offset_seconds": 600
+        },
+        "reserved": [
+          11,
+          12,
+          13
+        ]
+      },
+      "events": [
+        "restart_scheduler",
+        "reconcile_library",
+        "reconnect_viewer"
+      ],
+      "expected": {
+        "same_active_occurrence": "a10",
+        "do_not_restart_source_at": 0,
+        "next_episode": 11,
+        "completed_through_before_more_airing": 9,
+        "viewer_joins": "current_channel_position"
+      }
+    },
+    {
+      "id": "F02",
+      "title": "Missing successor blocks just that series",
+      "requirements": [
+        "R01",
+        "R02"
+      ],
+      "given": {
+        "series_a_completed": 10,
+        "series_a_next": 11,
+        "series_a_available_episodes": [
+          1,
+          2,
+          10,
+          12,
+          13
+        ],
+        "series_b_next": 5,
+        "series_b_episode_5_ready": true
+      },
+      "events": [
+        "select_program"
+      ],
+      "expected": {
+        "select": "series_b_episode_5",
+        "series_a_state": "blocked_missing_episode_11",
+        "must_not_select": [
+          "series_a_episode_1",
+          "series_a_episode_10",
+          "series_a_episode_12"
+        ]
+      }
+    },
+    {
+      "id": "F03",
+      "title": "Render-ahead does not claim an airing",
+      "requirements": [
+        "R02",
+        "R04",
+        "R07"
+      ],
+      "given": {
+        "planned_movie": "movie_a",
+        "planned_start": "2026-09-24T02:00:00-05:00",
+        "now": "2026-09-24T01:55:00-05:00"
+      },
+      "events": [
+        "reserve_movie",
+        "render_complete",
+        "publish_future_segments"
+      ],
+      "expected": {
+        "movie_actual_air_count": 0,
+        "movie_reservation_exists": true,
+        "episode_cursor_advance": false
+      }
+    },
+    {
+      "id": "F04",
+      "title": "Saturday opener gets exactly one approved overnight encore",
+      "requirements": [
+        "R04",
+        "R05"
+      ],
+      "given": {
+        "evening_opener_occurrence": "sat_open",
+        "content_id": "movie_a",
+        "evening_start": "2026-09-26T19:00:00-05:00",
+        "evening_completed_successfully": true
+      },
+      "events": [
+        "reserve_encore",
+        "refresh_schedule_twice",
+        "restart_scheduler"
+      ],
+      "expected": {
+        "encore_start_target": "2026-09-27T02:00:00-05:00",
+        "encore_parent": "sat_open",
+        "encore_occurrence_count": 1,
+        "exception_reason": "weekend_opener_encore",
+        "permanent_cooldown_exemption": false
+      }
+    },
+    {
+      "id": "F05",
+      "title": "Unplayed opener cannot authorize an encore",
+      "requirements": [
+        "R04",
+        "R05",
+        "R12"
+      ],
+      "given": {
+        "opener": "movie_bad",
+        "opener_state": "failed_before_air",
+        "ordinary_alternative": "movie_b",
+        "alternative_ready": true
+      },
+      "events": [
+        "resolve_following_nightly_slot"
+      ],
+      "expected": {
+        "select": "movie_b",
+        "must_not_select": "movie_bad",
+        "ordinary_spacing_checks_required": true
+      }
+    },
+    {
+      "id": "F06",
+      "title": "Title renaming and normalization do not bypass repeats",
+      "requirements": [
+        "R03",
+        "R04",
+        "R07"
+      ],
+      "given": {
+        "content_id": "movie_a",
+        "last_nightly_air": "2026-09-23T02:00:00-05:00",
+        "now": "2026-09-24T01:00:00-05:00",
+        "ordinary_alternative": "movie_b"
+      },
+      "events": [
+        "rename_original",
+        "create_normalized_rendition",
+        "refresh_catalog"
+      ],
+      "expected": {
+        "logical_movie_count_for_a": 1,
+        "next_ordinary_nightly_pick": "movie_b",
+        "movie_a_still_recent": true
+      }
+    },
+    {
+      "id": "F07",
+      "title": "Producer may be idle while published runway is healthy",
+      "requirements": [
+        "R01",
+        "R12",
+        "R13"
+      ],
+      "given": {
+        "ffmpeg_process_count": 0,
+        "contiguous_published_runway_seconds": 240,
+        "producer_state": "buffered_idle",
+        "scheduled_wake_before_depletion": true
+      },
+      "events": [
+        "watchdog_tick",
+        "watchdog_tick"
+      ],
+      "expected": {
+        "restart_count": 0,
+        "channel_state": "buffered_idle",
+        "incident": false
+      }
+    },
+    {
+      "id": "F08",
+      "title": "A live process is not enough when continuation is stuck",
+      "requirements": [
+        "R01",
+        "R12",
+        "R13"
+      ],
+      "given": {
+        "ffmpeg_process_count": 1,
+        "contiguous_published_runway_seconds": 2,
+        "next_required_interval_unavailable": true,
+        "progress_deadline_exceeded": true,
+        "healthy_other_channel": true
+      },
+      "events": [
+        "watchdog_confirms_failure"
+      ],
+      "expected": {
+        "action": "affected_channel_recovery_or_ready_fallback",
+        "other_channel_restart": false,
+        "wait_until_next_program_slot": false
+      }
+    },
+    {
+      "id": "F09",
+      "title": "Chunk completion continues the same film",
+      "requirements": [
+        "R01",
+        "R04",
+        "R13"
+      ],
+      "given": {
+        "occurrence": "film_1",
+        "film_source_duration_seconds": 5400,
+        "last_contiguous_published_source_end_seconds": 180,
+        "chunk_source_begin_seconds": 120,
+        "chunk_source_end_seconds": 180,
+        "worker_exit_code": 0
+      },
+      "events": [
+        "worker_exit",
+        "runway_low_water"
+      ],
+      "expected": {
+        "next_requested_source_begin_seconds": 180,
+        "same_occurrence": "film_1",
+        "film_completed": false,
+        "restart_at_source_zero": false
+      }
+    },
+    {
+      "id": "F10",
+      "title": "Ad time never adds to episode seek position",
+      "requirements": [
+        "R02",
+        "R13"
+      ],
+      "given": {
+        "episode_source_aired_seconds": 600,
+        "inserted_ads_aired_seconds": 120,
+        "next_source_boundary_seconds": 600
+      },
+      "events": [
+        "recover_after_break"
+      ],
+      "expected": {
+        "resume_source_seconds": 600,
+        "not_resume_source_seconds": 720,
+        "replay_ad_break": false
+      }
+    },
+    {
+      "id": "F11",
+      "title": "Internal fallback survives absent external volume",
+      "requirements": [
+        "R01",
+        "R15",
+        "R16"
+      ],
+      "given": {
+        "media_volume_present": false,
+        "internal_emergency_pool_ready": true,
+        "trusted_history_present": true
+      },
+      "events": [
+        "start_enabled_channels"
+      ],
+      "expected": {
+        "playout": "internal_emergency",
+        "create_empty_external_mount_path": false,
+        "reset_histories": false,
+        "delete_missing_catalog_items": false
+      }
+    },
+    {
+      "id": "F12",
+      "title": "Discontinuous B-frame PTS order is not automatically file corruption",
+      "requirements": [
+        "R08",
+        "R13"
+      ],
+      "given": {
+        "packet_dts": [
+          -2,
+          -1,
+          0,
+          1
+        ],
+        "packet_pts": [
+          0,
+          3,
+          1,
+          2
+        ],
+        "codec_uses_reordering": true,
+        "decode_successful": true
+      },
+      "events": [
+        "validate_packet_timestamps"
+      ],
+      "expected": {
+        "quarantine_for_unsorted_pts_alone": false
+      }
+    },
+    {
+      "id": "F13",
+      "title": "New asset version invalidates prepared cache but not logical progress",
+      "requirements": [
+        "R03",
+        "R06",
+        "R07"
+      ],
+      "given": {
+        "content_id": "episode_a10",
+        "asset_fingerprint": "v1",
+        "completed": true,
+        "cached_rendition_fingerprint": "v1"
+      },
+      "events": [
+        "replace_source_bytes_with_v2"
+      ],
+      "expected": {
+        "cached_v1_used_for_v2": false,
+        "new_logical_episode": false,
+        "completed_episode_reenters_rotation": false
+      }
+    },
+    {
+      "id": "F14",
+      "title": "Spring 2 AM occurs at first valid time once",
+      "requirements": [
+        "R05",
+        "R09"
+      ],
+      "given": {
+        "timezone": "America/Chicago",
+        "nightly_slot_local_date": "2026-03-08",
+        "target": "02:00"
+      },
+      "events": [
+        "compile_slot",
+        "restart_scheduler",
+        "compile_slot_again"
+      ],
+      "expected": {
+        "resolved_target": "2026-03-08T03:00:00-05:00",
+        "slot_count": 1
+      }
+    },
+    {
+      "id": "F15",
+      "title": "Fall transition does not create duplicate overnight movies",
+      "requirements": [
+        "R05",
+        "R09"
+      ],
+      "given": {
+        "timezone": "America/Chicago",
+        "nightly_slot_local_date": "2026-11-01",
+        "target": "02:00"
+      },
+      "events": [
+        "compile_slot",
+        "wall_clock_falls_back",
+        "restart_scheduler",
+        "compile_slot_again"
+      ],
+      "expected": {
+        "resolved_target": "2026-11-01T02:00:00-06:00",
+        "slot_count": 1
+      }
+    },
+    {
+      "id": "F16",
+      "title": "Partial composite pod logs only aired creative intervals",
+      "requirements": [
+        "R07",
+        "R10"
+      ],
+      "given": {
+        "pod": [
+          {
+            "creative": "ad_a",
+            "start": 0,
+            "end": 30
+          },
+          {
+            "creative": "ad_b",
+            "start": 30,
+            "end": 60
+          },
+          {
+            "creative": "ad_c",
+            "start": 60,
+            "end": 90
+          }
+        ],
+        "actual_aired_pod_interval": [
+          0,
+          45
+        ]
+      },
+      "events": [
+        "record_partial_exposure"
+      ],
+      "expected": {
+        "ad_a_aired_seconds": 30,
+        "ad_b_aired_seconds": 15,
+        "ad_c_aired_seconds": 0,
+        "ad_c_completed": false
+      }
+    },
+    {
+      "id": "F17",
+      "title": "Series end selects other programming rather than wraps",
+      "requirements": [
+        "R01",
+        "R02",
+        "R03"
+      ],
+      "given": {
+        "series_a_final_episode": 24,
+        "series_a_completed_through": 24,
+        "series_b_next": 5,
+        "series_b_ready": true
+      },
+      "events": [
+        "select_next_program"
+      ],
+      "expected": {
+        "select": "series_b_episode_5",
+        "series_a_state": "exhausted",
+        "series_a_episode_one_replay": false
+      }
+    },
+    {
+      "id": "F18",
+      "title": "Future worker can safely build runway without premature airing credit",
+      "requirements": [
+        "R02",
+        "R09",
+        "R13"
+      ],
+      "given": {
+        "episode_10_source_fully_produced_and_contiguously_committed": true,
+        "episode_10_wall_clock_air_end_in_seconds": 60,
+        "episode_11_reserved_successor": true
+      },
+      "events": [
+        "prepare_next_worker"
+      ],
+      "expected": {
+        "may_produce_episode_11_after_committed_episode_10": true,
+        "episode_10_actual_completed_before_due": false,
+        "episode_11_actual_completed": false
+      }
+    },
+    {
+      "id": "F19",
+      "title": "Healthy rendering queue pauses for serving pressure",
+      "requirements": [
+        "R06",
+        "R14",
+        "R16"
+      ],
+      "given": {
+        "background_preparation_workers": 1,
+        "channel_runway_trend": "degrading",
+        "next_asset_ready": true
+      },
+      "events": [
+        "resource_controller_tick"
+      ],
+      "expected": {
+        "pause_background_work": true,
+        "stop_live_channels": false,
+        "spawn_more_preparation_workers": false
+      }
+    },
+    {
+      "id": "F20",
+      "title": "All-day rotation does not inherit nightly multi-week lock",
+      "requirements": [
+        "R01",
+        "R04",
+        "R14"
+      ],
+      "given": {
+        "channel_kind": "all_day_movies",
+        "approved_ready_movie_count": 12,
+        "all_titles_used_in_prior_72_hours": true,
+        "oldest_title_last_channel_air_hours_ago": 30,
+        "same_title_simultaneously_on_other_channel": false
+      },
+      "events": [
+        "select_next_movie"
+      ],
+      "expected": {
+        "select": "oldest_eligible_movie",
+        "apply_21_day_exclusion": false,
+        "dead_air": false,
+        "record_preferred_spacing_shortfall": true
+      }
+    }
+  ]
+}

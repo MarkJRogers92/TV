@@ -128,6 +128,185 @@ function migrate(database: MarkTvDatabase) {
       ON movie_occurrences(channel_id, broadcast_date);
   `);
 
+  /*
+   * Durable airing ledger (Stage 1, additive).
+   *
+   * These tables are the only durable record of what MarkTV actually published
+   * and aired. They are deliberately separate from `schedule_generations` and
+   * from Tunarr's play history, both of which record planning/calculation rather
+   * than a completed airing, and they are created with IF NOT EXISTS only so an
+   * existing database keeps every row it already holds.
+   *
+   * `airing_series_tracks` and `airing_episode_identities` give a series and its
+   * episodes a stable identity that survives a respelled filename. A series is
+   * one logical track shared by every channel that airs it, so two channels
+   * contend for one completion floor; `track_scope` carries an explicit
+   * discriminator only when a caller intentionally wants a separate track.
+   * `airing_occurrence_reservations` reserves one airing of one episode;
+   * `airing_occurrence_attempts` records playout attempts;
+   * `airing_published_source_intervals` and `airing_aired_source_intervals`
+   * record, in source coordinates, the contiguous spans the publisher emitted
+   * and the spans an explicit aired observation saw. `airing_active_occurrences`
+   * keeps the in-progress occurrence and its source offset so a restart resumes
+   * the same position. `airing_completion_floors` holds the monotonic per-track
+   * high-water mark. `airing_track_holds` records a track whose position is
+   * missing or ambiguous so it is held rather than reset.
+   */
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS airing_series_tracks (
+      track_key TEXT PRIMARY KEY,
+      channel_id TEXT NOT NULL,
+      series_key TEXT NOT NULL,
+      track_scope TEXT NOT NULL DEFAULT '',
+      title TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS airing_episode_identities (
+      episode_key TEXT PRIMARY KEY,
+      track_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      season INTEGER,
+      episode INTEGER,
+      ordinal INTEGER,
+      position_key TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS airing_episode_identities_track
+      ON airing_episode_identities(track_key);
+    CREATE UNIQUE INDEX IF NOT EXISTS airing_episode_identities_position
+      ON airing_episode_identities(track_key, position_key);
+    CREATE TABLE IF NOT EXISTS airing_track_holds (
+      track_key TEXT PRIMARY KEY,
+      reason TEXT NOT NULL,
+      detail TEXT,
+      occurrence_key TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS airing_occurrence_reservations (
+      occurrence_key TEXT PRIMARY KEY,
+      track_key TEXT NOT NULL,
+      episode_key TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      broadcast_date TEXT,
+      planned_start TEXT NOT NULL,
+      planned_end TEXT NOT NULL,
+      source_media_id TEXT NOT NULL,
+      source_start_ms INTEGER NOT NULL,
+      source_end_ms INTEGER NOT NULL,
+      state TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS airing_occurrence_reservations_track
+      ON airing_occurrence_reservations(track_key, state);
+    CREATE TABLE IF NOT EXISTS airing_occurrence_attempts (
+      attempt_id TEXT PRIMARY KEY,
+      occurrence_key TEXT NOT NULL,
+      attempt_index INTEGER NOT NULL,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      outcome TEXT NOT NULL,
+      source_offset_ms INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS airing_occurrence_attempts_index
+      ON airing_occurrence_attempts(occurrence_key, attempt_index);
+    CREATE TABLE IF NOT EXISTS airing_published_source_intervals (
+      interval_id TEXT PRIMARY KEY,
+      occurrence_key TEXT NOT NULL,
+      attempt_id TEXT,
+      source_media_id TEXT NOT NULL,
+      source_start_ms INTEGER NOT NULL,
+      source_end_ms INTEGER NOT NULL,
+      published_at TEXT NOT NULL,
+      evidence TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS airing_published_source_intervals_occurrence
+      ON airing_published_source_intervals(occurrence_key, source_start_ms);
+    CREATE TABLE IF NOT EXISTS airing_aired_source_intervals (
+      interval_id TEXT PRIMARY KEY,
+      occurrence_key TEXT NOT NULL,
+      attempt_id TEXT,
+      source_media_id TEXT NOT NULL,
+      source_start_ms INTEGER NOT NULL,
+      source_end_ms INTEGER NOT NULL,
+      aired_at TEXT NOT NULL,
+      evidence TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS airing_aired_source_intervals_occurrence
+      ON airing_aired_source_intervals(occurrence_key, source_start_ms);
+    CREATE TABLE IF NOT EXISTS airing_active_occurrences (
+      track_key TEXT PRIMARY KEY,
+      occurrence_key TEXT NOT NULL,
+      attempt_id TEXT,
+      source_media_id TEXT NOT NULL,
+      source_offset_ms INTEGER NOT NULL,
+      state TEXT NOT NULL,
+      interrupted_at TEXT,
+      resumed_at TEXT,
+      updated_at TEXT NOT NULL,
+      json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS airing_completion_floors (
+      track_key TEXT PRIMARY KEY,
+      season INTEGER,
+      episode INTEGER,
+      ordinal INTEGER,
+      position_key TEXT NOT NULL,
+      completed_episode_key TEXT NOT NULL,
+      completed_occurrence_key TEXT NOT NULL,
+      completed_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      json TEXT NOT NULL
+    );
+  `);
+
+  /*
+   * One logical series track now serves every channel, so uniqueness moved from
+   * `(channel_id, series_key)` to `(series_key, track_scope)`, where an empty
+   * scope is the shared default track. `track_scope` is added in place for a
+   * database that already created the earlier Stage 1 shape; no rows are moved
+   * or rewritten, so existing progress (including any channel-scoped rows)
+   * stays exactly as recorded. The superseded channel-scoped index is dropped
+   * only because it would otherwise reject a legitimate second channel sharing
+   * the same series.
+   */
+  const seriesTrackColumns = database.pragma("table_info(airing_series_tracks)") as Array<{
+    name: string;
+  }>;
+  if (!seriesTrackColumns.some((column) => column.name === "track_scope")) {
+    database.exec(
+      "ALTER TABLE airing_series_tracks ADD COLUMN track_scope TEXT NOT NULL DEFAULT ''",
+    );
+  }
+  database.transaction(() => {
+    database.exec("DROP INDEX IF EXISTS airing_series_tracks_identity;");
+    const duplicates = database
+      .prepare(
+        "SELECT COUNT(*) AS count FROM (SELECT 1 FROM airing_series_tracks GROUP BY series_key, track_scope HAVING COUNT(*) > 1)",
+      )
+      .get() as { count: number };
+    if (duplicates.count > 0) {
+      throw new Error("airing series tracks have duplicate logical identities; reconcile copied state before migration");
+    }
+    database.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS airing_series_tracks_logical ON airing_series_tracks(series_key, track_scope);",
+    );
+  })();
+
   const jobColumns = database.pragma("table_info(acquisition_jobs)") as Array<{
     name: string;
   }>;
