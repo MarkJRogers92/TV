@@ -32,6 +32,10 @@ function startServer() {
       // script asserts that a generated schedule survives a restart, so a refresh
       // running underneath it would replace the schedule under test.
       MARKTV_SCHEDULE_REFRESH: "0",
+      // Preparation background workers would scan/probe during the run; keep the
+      // restart assertion deterministic.
+      MARKTV_PREPARATION_INTAKE: "0",
+      MARKTV_PREPARATION_EXECUTOR: "0",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

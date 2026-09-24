@@ -7,7 +7,14 @@ const dataDir = await mkdtemp(join(tmpdir(), "marktv-playwright-"));
 const port = process.env.MARKTV_PLAYWRIGHT_PORT ?? "4177";
 const server = spawn(process.execPath, ["dist-server/src/server/index.js"], {
   cwd: process.cwd(),
-  env: { ...process.env, MARKTV_DATA_DIR: dataDir, MARKTV_PORT: port },
+  env: {
+    ...process.env,
+    MARKTV_DATA_DIR: dataDir,
+    MARKTV_PORT: port,
+    // Keep the e2e run deterministic: no background scan/probe.
+    MARKTV_PREPARATION_INTAKE: "0",
+    MARKTV_PREPARATION_EXECUTOR: "0",
+  },
   stdio: "inherit",
 });
 let stopping = false;

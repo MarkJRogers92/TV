@@ -38,6 +38,11 @@ const app = await buildApp({
   // point with MARKTV_SCHEDULE_REFRESH=0, because a background generation would
   // otherwise replace the very schedule that script is asserting survives.
   scheduleRefresh: process.env.MARKTV_SCHEDULE_REFRESH !== "0",
+  // Stage 3 preparation, on for the real service like the schedule refresh. The
+  // restart-verification and e2e scripts set these to "0" so a background
+  // scan/probe cannot perturb what they assert.
+  preparationIntake: process.env.MARKTV_PREPARATION_INTAKE !== "0",
+  preparationExecutor: process.env.MARKTV_PREPARATION_EXECUTOR !== "0",
 });
 if (process.env.MARKTV_DEV !== "1") {
   await registerStaticUi(app, join(process.cwd(), "dist"));
