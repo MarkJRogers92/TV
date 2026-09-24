@@ -1,5 +1,5 @@
-import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 import fixturePack from "../fixtures/marktvAutopilotAcceptance.json";
@@ -28,6 +28,10 @@ import { LocalFolderAdapter } from "../../src/media/localFolder.js";
 import { persistScannedMedia } from "../../src/media/catalogReconcile.js";
 import { createRepositories } from "../../src/db/repositories.js";
 import { ensureMovieProgrammingPool } from "../../src/media/movieEnrollment.js";
+import {
+  decideEmergencyFallback,
+  loadVerifiedEmergencyFallbackPool,
+} from "../../src/autopilot/emergencyFallback.js";
 import {
   movieOccurrenceKey,
   rotationMediaId,
@@ -262,6 +266,66 @@ test("package F03: render-ahead publication reserves a movie without airing cred
   expect(refused(ledger.completeOccurrence({ occurrenceKey })).reason).toBe("insufficient-evidence");
   expect(ledger.completionFloor(track.trackKey) !== undefined).toBe(expected.episode_cursor_advance);
   database.close();
+});
+
+test("package F11: missing external media produces a source-only fallback plan", async ({ skip }) => {
+  const fixture = scenario("F11");
+  const given = fixture.given as {
+    media_volume_present: boolean;
+    internal_emergency_pool_ready: boolean;
+    trusted_history_present: boolean;
+  };
+  const expected = fixture.expected as {
+    playout: string;
+    create_empty_external_mount_path: boolean;
+    reset_histories: boolean;
+    delete_missing_catalog_items: boolean;
+  };
+  const internalRoot = join(homedir(), "Library/Application Support/MarkTV/emergency-assets/v1-20260923");
+  try {
+    await access(join(internalRoot, "manifest.json"));
+  } catch {
+    skip();
+    return;
+  }
+  const pool = await loadVerifiedEmergencyFallbackPool(internalRoot);
+  expect(given.internal_emergency_pool_ready).toBe(true);
+  expect(pool.ok).toBe(true);
+  const plan = decideEmergencyFallback({
+    externalVolumePresent: given.media_volume_present,
+    pool,
+    enabledChannels: [
+      { id: "38fec30b-1534-4520-9a51-2e39c925cddc" },
+      { id: "95c24cf1-4c7e-42e8-8814-8bbd5173f0b8" },
+      { id: "3d3861ae-b913-4848-9512-1180e631732a" },
+    ],
+  });
+
+  expect(given.trusted_history_present).toBe(true);
+  expect(
+    plan.channels.every(({ action }) => action === "internal-emergency-loop")
+      ? "internal_emergency"
+      : "unavailable",
+  ).toBe(expected.playout);
+  expect(plan.activation).toBe("not-activated");
+  expect(plan.channels.map(({ action }) => action)).toEqual([
+    "internal-emergency-loop",
+    "internal-emergency-loop",
+    "internal-emergency-loop",
+  ]);
+  expect(plan.channels.map(({ channelId }) => channelId)).toEqual([
+    "38fec30b-1534-4520-9a51-2e39c925cddc",
+    "95c24cf1-4c7e-42e8-8814-8bbd5173f0b8",
+    "3d3861ae-b913-4848-9512-1180e631732a",
+  ]);
+  expect(plan.assetIds).toEqual([
+    "marktv-technical-difficulties",
+    "764cc42abbec91c9e1a9-02-more-television-shortly",
+  ]);
+  expect(plan.preservation.externalMountPathCreated)
+    .toBe(expected.create_empty_external_mount_path);
+  expect(plan.preservation.historyReset).toBe(expected.reset_histories);
+  expect(plan.preservation.catalogChanged).toBe(expected.delete_missing_catalog_items);
 });
 
 test("package F02: an absent successor holds only its series", () => {
