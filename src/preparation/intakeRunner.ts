@@ -18,9 +18,8 @@ export type PreparationIntakeRunnerOptions = {
   intervalMs?: number;
   /**
    * Bounds how many NEW candidates are observed per pass. Already-settled and
-   * already-tracked files do not consume it, and the walk still visits every
-   * directory, so the runner covers the whole tree across passes. A probe ends
-   * the pass immediately.
+   * already-tracked files do not consume it, and the walk visits every directory
+   * even after a probe, so one root's backlog cannot starve the others.
    */
   entryBudget?: number;
   now?: () => Date;
@@ -133,13 +132,12 @@ export function createPreparationIntakeRunner(
     const intakes = repositories.preparation.intakes.list();
 
     for (const identity of reachable) {
-      if (probedOne) break;
       // One directory watcher per root. Deep-tree changes are caught by the poll;
       // a watcher per subdirectory would grow without bound on a large library.
       ensureWatch(identity.path);
       const outputDirectories = DERIVED_DIRECTORY_NAMES.map((name) => join(identity.path, name));
       const directories = [identity.path];
-      while (directories.length && !probedOne) {
+      while (directories.length) {
         const directory = directories.shift()!;
         let entries;
         try {
@@ -149,7 +147,6 @@ export function createPreparationIntakeRunner(
           continue;
         }
         for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-          if (probedOne) break;
           if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
           if (entry.isDirectory()) {
             if (!isDerivedDirectory(entry.name)) directories.push(join(directory, entry.name));
@@ -188,6 +185,10 @@ export function createPreparationIntakeRunner(
               // Observed before, not yet settled. Not due -> skip cheaply; due ->
               // probe it to settle. This runs even when the file was catalogued
               // mid-window, so a pending intake still completes.
+              // At most one probe per pass, but the walk does NOT stop here: a
+              // root whose backlog is always due first would otherwise starve
+              // every later root, so probes are capped, not the walk.
+              if (probedOne) continue;
               if (Date.parse(now().toISOString()) - Date.parse(prior.firstObservedAt) < 60_000) continue;
 
               // At most one ffprobe operation per pass and one across this driver.
@@ -205,7 +206,7 @@ export function createPreparationIntakeRunner(
               existingByPath.set(path, item);
               onEvent({ event: "intake.settled", path, sourceMediaId: prior.sourceMediaId });
               probedOne = true;
-              break;
+              continue;
             }
 
             // A genuinely new candidate: the only thing the per-pass budget caps.

@@ -228,3 +228,24 @@ test("an already-settled intake does not stall the walk", async () => {
   const paths = repositories.preparation.intakes.list().map((item) => item.source.path);
   expect(paths).toContain(fresh);
 });
+
+test("a probe does not stop the walk before later new candidates are observed", async () => {
+  const { rootPath, repositories, runner } = await fixture();
+  const due = join(rootPath, "A-due.mkv");
+  await writeFile(due, "old bytes");
+  const stats = await lstat(due);
+  const source = {
+    path: due, sizeBytes: String(stats.size), modifiedMs: String(stats.mtimeMs),
+    deviceId: String(stats.dev), inode: String(stats.ino),
+  };
+  // Pending and long overdue: the walk reaches it first and probes it. A walk
+  // that stopped on the probe would never observe the new file behind it.
+  repositories.preparation.observe({ sourceMediaId: "media-due", source, observedAt: "2026-09-24T11:00:00.000Z" });
+  const fresh = join(rootPath, "Z-fresh.mkv");
+  await writeFile(fresh, "new bytes");
+
+  await runner.runOnce();
+
+  const paths = repositories.preparation.intakes.list().map((item) => item.source.path);
+  expect(paths).toContain(fresh);
+});
