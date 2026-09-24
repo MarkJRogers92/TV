@@ -156,9 +156,19 @@ export function observedPodInterval(
 
   const first = covering[0];
   if (first === undefined) return null;
-  // The pod's start must be inside the first segment, within tolerance: a run
-  // that begins mid-pod says nothing about the part we did not see.
-  if (pod.startMs - first.startMs > toleranceMs) return null;
+  // The pod's start must be INSIDE the earliest overlapping segment - that is what
+  // makes this run able to vouch for the pod's beginning. A run that starts
+  // mid-pod says nothing about the part that came before it, so it is refused
+  // rather than anchored later.
+  //
+  // Written as "the segment begins at or before the pod" and NOT as a symmetric
+  // tolerance. A symmetric window was the first attempt and it was wrong in the
+  // common case: segments are ~4s long, so the segment straddling a pod's start
+  // usually begins several seconds BEFORE it, and a symmetric check rejected
+  // exactly the segments that should have been accepted. The sub-second allowance
+  // here only absorbs rounding between the schedule's boundary and the segment
+  // grid.
+  if (first.startMs > pod.startMs + toleranceMs) return null;
 
   let cursor = Math.max(pod.startMs, first.startMs + first.durationMs);
   for (const segment of covering.slice(1)) {

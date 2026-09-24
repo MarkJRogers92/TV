@@ -447,3 +447,36 @@ test("[SC06] a pass with nothing observable SAYS so, rather than staying silent"
     ),
   ).toEqual([]);
 });
+
+test("[SC06] a pod straddled by a segment grid offset from its start IS observed", () => {
+  // The realistic shape, and the bug this pins: segments are ~4s long, so the
+  // segment covering a pod's start normally begins SEVERAL SECONDS BEFORE it.
+  // The first version of the anchor check used a symmetric 1s tolerance and so
+  // rejected exactly the segments it should have accepted - every real pod would
+  // have come back "not observed" while the tidy fixtures passed.
+  const gridOffset = 3_000;
+  const advertised = parseAdvertisedSegments(
+    playlist(
+      Array.from({ length: 8 }, (_, index) => ({
+        startMs: POD_START - 4_000 + index * 4_000,
+        durationMs: 4_000,
+      })),
+    ),
+  );
+
+  // The pod's first 12 seconds are covered by the grid above.
+  const observed = observedPodInterval(
+    { startMs: POD_START, endMs: POD_START + 12_000 },
+    advertised,
+  );
+  expect(observed).toEqual({ startMs: POD_START, endMs: POD_START + 12_000 });
+  expect(gridOffset).toBe(3_000); // documents the fixture's offset, not asserted on
+
+  // And a run that genuinely starts mid-pod is still refused.
+  const late = parseAdvertisedSegments(
+    playlist([{ startMs: POD_START + 10_000, durationMs: 4_000 }]),
+  );
+  expect(
+    observedPodInterval({ startMs: POD_START, endMs: POD_END }, late),
+  ).toBeNull();
+});
