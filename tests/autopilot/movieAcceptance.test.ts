@@ -9,12 +9,14 @@ import { describe, expect, test } from "vitest";
 import type { MovieOccurrence } from "../../src/domain/movieProgramming.js";
 import { movieOccurrenceKey } from "../../src/domain/movieProgramming.js";
 import {
+  anchorInstant,
   assignMovieOccurrences,
   buildMovieRotation,
   movieExposureIndex,
   movieNightlyMinSpacingDays,
   spacedNightlyMovie,
 } from "../../src/scheduler/movieProgramming.js";
+import { eligibleMovieMediaIds } from "../../src/media/movieEnrollment.js";
 import { movieFixture } from "../support/movieFixture.js";
 
 describe("movie acceptance (MV)", () => {
@@ -145,6 +147,56 @@ describe("movie acceptance (MV)", () => {
     expect(choice).toBeDefined();
     expect(choice!.legal).toBe(false);
     expect(choice!.mediaId).toBe("c");
+  });
+
+  test("MV03 a prepared rendition is not a second movie; only the original is eligible", () => {
+    const { movies } = movieFixture({ movieCount: 3 });
+    const rendition = {
+      ...movies[0]!,
+      id: `${movies[0]!.id}-normalized`,
+      sourceMediaId: movies[0]!.id,
+      path: movies[0]!.path!.replace(/\.mkv$/, ".normalized.mkv"),
+    };
+    const ids = eligibleMovieMediaIds(
+      [...movies, rendition],
+      "/Volumes/SSK Drive /MarkTV/Movies",
+    );
+    expect(ids).toEqual(movies.map((movie) => movie.id).sort());
+  });
+
+  test("MV12 a new title joins and a quarantined cycle member is dropped, not deadlocked", () => {
+    const { channel, movies } = movieFixture({ movieCount: 3 });
+    const first = buildMovieRotation({
+      channelId: channel.id,
+      eligibleIds: movies.map((movie) => movie.id),
+      epochDate: "2026-09-21",
+      now: new Date("2026-09-21T00:00:00.000Z"),
+    });
+    const next = buildMovieRotation({
+      channelId: channel.id,
+      eligibleIds: [movies[0]!.id, movies[2]!.id, "movie-new"],
+      existing: first,
+      epochDate: "2026-09-21",
+      now: new Date("2026-09-22T00:00:00.000Z"),
+    });
+    expect(next.order).not.toContain(movies[1]!.id);
+    expect(next.order).toContain("movie-new");
+    // Survivors keep their relative order; the new title is appended.
+    expect(next.order.slice(0, 2)).toEqual([movies[0]!.id, movies[2]!.id]);
+  });
+
+  test("MV14 the nonexistent spring-forward 2 AM resolves once, forward", () => {
+    // 2027-03-14: US DST begins; local 02:00 does not exist that morning.
+    const instant = anchorInstant("2027-03-14", "02:00", "America/Chicago");
+    expect(instant.hour).toBe(3);
+    expect(instant.toUTC().hour).toBe(8); // 03:00 CDT == 08:00Z
+  });
+
+  test("MV15 the fall-back overnight target is one token for the local date", () => {
+    // 2027-11-07: US DST ends; 02:00 occurs once, as 02:00 CST.
+    const instant = anchorInstant("2027-11-07", "02:00", "America/Chicago");
+    expect(instant.hour).toBe(2);
+    expect(instant.toUTC().hour).toBe(8); // 02:00 CST == 08:00Z
   });
 
   test("MV06 a failed weekend opener is not encored; the overnight slot takes an ordinary draw", () => {
