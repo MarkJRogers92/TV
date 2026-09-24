@@ -1,5 +1,7 @@
+import { createReadStream } from "node:fs";
+import { createHash } from "node:crypto";
 import { lstat, readdir, realpath, stat } from "node:fs/promises";
-import { basename, extname, isAbsolute, join } from "node:path";
+import { basename, extname, isAbsolute, join, relative, sep } from "node:path";
 import type { MediaAdapter, MediaScanResult, ProbeResult } from "./adapter.js";
 import type { MediaItem } from "../domain/models.js";
 import { probeDuration } from "./ffprobe.js";
@@ -229,4 +231,59 @@ export class LocalFolderAdapter implements MediaAdapter {
     if (this.expectedRoot) await assertManagedDirectory(this.expectedRoot);
     return { items, diagnostics };
   }
+
+  /** Inspects one settled candidate without probing every other file in its root. */
+  async scanFile(root: string, candidatePath: string): Promise<MediaItem> {
+    const scanRoot = await validateMediaRoot(root);
+    if (this.expectedRoot) await assertManagedDirectory(this.expectedRoot);
+    const rel = relative(scanRoot, candidatePath);
+    if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel))
+      throw new MediaScanError("INVALID_SCAN_ROOT", "Media candidate must be inside its registered root");
+
+    const before = await lstat(candidatePath);
+    if (!before.isFile() || before.isSymbolicLink() || !(await realpath(candidatePath)).startsWith(`${scanRoot}${sep}`))
+      throw new MediaScanError("INVALID_SCAN_ROOT", "Media candidate is not a regular file inside its registered root");
+    if (!isVideoExtension(extname(candidatePath)))
+      throw new MediaScanError("INVALID_SCAN_ROOT", "Media candidate has an unsupported video extension");
+    const beforeHash = await hashFile(candidatePath);
+    let probed: ProbeResult;
+    try {
+      probed = normalizeProbe(await this.probe(candidatePath));
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : "Media probe failed");
+    }
+    const after = await lstat(candidatePath);
+    if (!after.isFile() || after.isSymbolicLink() ||
+        before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs ||
+        beforeHash !== await hashFile(candidatePath))
+      throw new Error("Media source changed while it was being probed");
+    if (this.expectedRoot) await assertManagedDirectory(this.expectedRoot);
+
+    const metadata = metadataFromPath(candidatePath);
+    return {
+      id: `local-${Buffer.from(candidatePath).toString("base64url")}`,
+      source: "local-folder",
+      path: candidatePath,
+      deviceId: String(after.dev),
+      inode: String(after.ino),
+      fileSizeBytes: String(after.size),
+      fileModifiedMs: String(after.mtimeMs),
+      fileBirthMs: String(after.birthtimeMs),
+      kind: metadata.kind,
+      title: metadata.title,
+      durationMs: probed.durationMs,
+      durationStatus: probed.durationMs ? "ok" : "missing",
+      showTitle: metadata.showTitle,
+      season: metadata.season,
+      episode: metadata.episode,
+      available: Boolean(probed.durationMs) && probed.hasVideoStream !== false,
+      tags: [],
+    };
+  }
+}
+
+async function hashFile(path: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
 }
