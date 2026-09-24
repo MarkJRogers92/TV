@@ -116,6 +116,22 @@ export function recordObservedPod(input: {
   };
 }
 
+/**
+ * What one pass saw, per channel. An observer that reports nothing when it finds
+ * nothing is indistinguishable from one that is not running, and "no pods were
+ * observable" is the likely outcome on a playlist that only spans the current
+ * session - so every pass says what it looked at.
+ */
+export type PodExposurePassSummary = {
+  channelId: string;
+  podsConsidered: number;
+  recorded: number;
+  alreadyRecorded: number;
+  notObserved: number;
+  refused: number;
+  noPlaylist: number;
+};
+
 export type PodExposureObserverOptions = {
   /** Root of the per-channel HLS stream directories. */
   streamsRoot: string;
@@ -137,6 +153,8 @@ export type PodExposureObserverOptions = {
   lookbackMs?: number;
   now?: () => Date;
   onDecision?: (decision: PodExposureDecision) => void;
+  /** Called once per channel per pass, whatever the outcome, for auditability. */
+  onPass?: (summary: PodExposurePassSummary) => void;
   onError?: (error: unknown, channelId?: string) => void;
 };
 
@@ -156,6 +174,7 @@ export function createPodExposureObserver(
   const playlistName = options.playlistName ?? "stream.m3u8";
   const now = options.now ?? (() => new Date());
   const onDecision = options.onDecision ?? (() => undefined);
+  const onPass = options.onPass ?? (() => undefined);
   const onError = options.onError ?? (() => undefined);
   let timer: NodeJS.Timeout | undefined;
   let inFlight: Promise<void> | undefined;
@@ -200,6 +219,25 @@ export function createPodExposureObserver(
           : `stream_${channel.id}`;
         if (directory === null) continue;
 
+        const counts: PodExposurePassSummary = {
+          channelId: channel.id,
+          podsConsidered: pods.length,
+          recorded: 0,
+          alreadyRecorded: 0,
+          notObserved: 0,
+          refused: 0,
+          noPlaylist: 0,
+        };
+        const tally = (decision: PodExposureDecision) => {
+          if (decision.outcome === "recorded") counts.recorded += 1;
+          else if (decision.outcome === "already-recorded")
+            counts.alreadyRecorded += 1;
+          else if (decision.outcome === "not-observed") counts.notObserved += 1;
+          else if (decision.outcome === "refused") counts.refused += 1;
+          else counts.noPlaylist += 1;
+          onDecision(decision);
+        };
+
         let advertised: AdvertisedSegment[] | undefined;
         for (const pod of pods) {
           if (advertised === undefined) {
@@ -210,16 +248,18 @@ export function createPodExposureObserver(
               );
               advertised = parseAdvertisedSegments(text);
             } catch {
-              onDecision({
+              tally({
                 podId: pod.podId,
                 channelId: channel.id,
                 outcome: "no-playlist",
                 detail: `${directory}/${playlistName} could not be read`,
               });
+              // One unreadable playlist is the whole channel's answer for this pass.
+              counts.podsConsidered = 1;
               break;
             }
           }
-          onDecision(
+          tally(
             recordObservedPod({
               ledger,
               pod,
@@ -228,6 +268,7 @@ export function createPodExposureObserver(
             }),
           );
         }
+        onPass(counts);
       } catch (error) {
         onError(error, channel.id);
       }

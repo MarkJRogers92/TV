@@ -7,6 +7,7 @@ import {
   createPodExposureObserver,
   recordObservedPod,
   type PodExposureDecision,
+  type PodExposurePassSummary,
 } from "../../src/autopilot/podExposureObserver.js";
 import {
   observedPodInterval,
@@ -387,4 +388,62 @@ test("[SC06] a pod still in progress is not recorded by the observer", async () 
 
   await observer.runOnce();
   expect(decisions).toHaveLength(0);
+});
+
+test("[SC06] a pass with nothing observable SAYS so, rather than staying silent", async () => {
+  // The auditability half: an observer that finds nothing and reports nothing
+  // cannot be told apart from one that is not running, which is exactly how this
+  // looked on the live install before the summary existed.
+  const dataDir = await tempDir("marktv-pod-db-");
+  const streamsRoot = await tempDir("marktv-pod-streams-");
+  const streamDir = `stream_${CHANNEL}`;
+  await mkdir(join(streamsRoot, streamDir), { recursive: true });
+  // The channel is advertising a part of its hour that this pod does not occupy.
+  await writeFile(
+    join(streamsRoot, streamDir, "stream.m3u8"),
+    playlist([{ startMs: POD_START + 3_600_000, durationMs: 30_000 }]),
+  );
+
+  const schedule = {
+    channelId: CHANNEL,
+    date: "2026-09-24",
+    generatedAt: "2026-09-24T11:00:00.000Z",
+    durationMs: 86_400_000,
+    entries: [
+      {
+        id: "ad-a",
+        kind: "commercial",
+        start: new Date(POD_START).toISOString(),
+        end: new Date(POD_END).toISOString(),
+        durationMs: 90_000,
+      },
+    ],
+  } as unknown as Schedule;
+  const repositories = {
+    channels: { list: () => [{ id: CHANNEL, enabled: true }] },
+    schedules: { list: () => [schedule], latestForDate: () => schedule },
+  } as unknown as Repositories;
+  const ledger = createAiringLedger(openDatabase(dataDir));
+
+  const summaries: PodExposurePassSummary[] = [];
+  const observer = createPodExposureObserver(repositories, ledger, {
+    streamsRoot,
+    streamsDirectoryFor: () => streamDir,
+    now: () => new Date(POD_END + 60_000),
+    onPass: (summary) => summaries.push(summary),
+  });
+
+  await observer.runOnce();
+  expect(summaries).toHaveLength(1);
+  expect(summaries[0]).toMatchObject({
+    podsConsidered: 1,
+    recorded: 0,
+    notObserved: 1,
+  });
+  // And, critically, a pass that observed nothing wrote nothing.
+  expect(
+    ledger.podExposuresForPod(
+      `${CHANNEL}:${new Date(POD_START).toISOString()}@2026-09-24`,
+    ),
+  ).toEqual([]);
 });

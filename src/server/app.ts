@@ -560,6 +560,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
             });
           }
         },
+        // Every pass reports what it looked at, including when it found nothing
+        // observable - otherwise a silent observer cannot be told apart from one
+        // that is not running.
+        onPass: (summary) =>
+          logInfo("pod-exposure", "pass", {
+            channelId: summary.channelId,
+            podsConsidered: summary.podsConsidered,
+            recorded: summary.recorded,
+            alreadyRecorded: summary.alreadyRecorded,
+            notObserved: summary.notObserved,
+            refused: summary.refused,
+            noPlaylist: summary.noPlaylist,
+          }),
         onError: (error, channelId) =>
           logError("pod-exposure", error, channelId ? { channelId } : {}),
       });
