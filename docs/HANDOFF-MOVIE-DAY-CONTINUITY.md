@@ -348,6 +348,35 @@ excluded from this mechanism; and the transaction claim is true **at the call si
 explicit and fair **UNKNOWN** from the review about whether `repositories.transaction` is truly
 atomic (its implementation was out of scope — I verified only that both writes sit inside it).
 
+### Independent verification of `afba720` (root session) — my own checks, so a regression cannot pass silently
+
+Not a second opinion on the design — a check that the change does what §11 says and that its test
+actually constrains the behaviour. Run by the session that wrote the §5 acceptance criterion, so
+it is disinterested about the *method*, not about the *outcome*; the cross-vendor opinion is the
+review above.
+
+1. **The test pins the behaviour (the load-bearing one).** Reverted the two source files to the
+   pre-fix version and ran the new test on its own:
+   `git checkout 8e64216 -- src/scheduler/generate.ts src/server/scheduleService.ts`
+   `npx vitest run tests/server/scheduleServiceMidroll.test.ts -t "keeps ordinary movie-slot picks"`
+   → **1 failed**, at exactly `expect(filmEntries(rebuilt.schedule)).toEqual(expected)` — that is,
+   without the fix, adding a film to the catalog reshuffles the day. With the fix it passes. Then
+   `git checkout HEAD -- <those files>` restored a clean tree.
+   A green test says the suite passes; this says the test *fails when the fix is absent*, which is
+   the property that stops the bug returning unnoticed.
+2. **Full suite:** `npx vitest run` → 91 files / **1,015 tests passed**, matching §11's claim.
+3. **Transaction claim:** verified at the call site — `repositories.transaction(() => …)` opens at
+   `scheduleService.ts:362` and wraps both `replaceSuccessful` (395) and `settings.put` (409).
+   Whether that helper is genuinely atomic remains unverified, as the review also says.
+4. **Deployed state:** `slotMovieAssignments` is present in the built bundle
+   (`dist-server/.../scheduleService.js` ×2, `generate.js` ×1); the running process started
+   19:04:37, after the 18:58 build, so the live process is running the new code. API 200, pid 92223.
+5. **The §2 fix survived the change:** 09-24 channel 9 remains `a0a0be22`, 86,400,000 ms, with one
+   continuation entry at `sourceOffsetMs` 2,400,000 airing 3,089,025 ms.
+
+Reproduce 1 and 2 with the commands above; they are read-only apart from the temporary checkout,
+which must be reverted.
+
 ### What to finalize
 
 Finding 1 is a fix in the same two files and belongs to whoever owns `afba720`; it is small and the
