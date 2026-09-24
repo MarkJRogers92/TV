@@ -236,7 +236,11 @@ test("analyzes selected local episodes but skips eligible episodes from inactive
     analyzer,
   );
 
-  await service.generate(seeded.channel, "2026-09-14");
+  // Before adding a local episode: generation succeeds but nothing to analyze.
+  // Use the SAME date as the assertion below. Generating the day before would
+  // put the demo episodes into this date's history, and no-repeat would then
+  // exclude the very episode under test.
+  await service.generate(seeded.channel, "2026-09-15");
   expect(analyzer.analyze).not.toHaveBeenCalled();
 
   const local = {

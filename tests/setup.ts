@@ -1,13 +1,14 @@
+// The type-only import registers the jest-dom matcher TYPES (toBeVisible, ...).
+import '@testing-library/jest-dom/vitest';
 import * as jestDomMatchers from '@testing-library/jest-dom/matchers';
 import { expect } from 'vitest';
 import { logSink } from '../src/server/logging.js';
 
 /*
- * Register the jest-dom matchers explicitly rather than importing
- * `@testing-library/jest-dom/vitest`. Under the installed vitest the package's
- * own entry does not take effect (every `toBeVisible`/`toHaveTextContent` throws
- * "Invalid Chai property"), while calling `expect.extend` with the matchers
- * directly does. This keeps the whole web suite green.
+ * ...but under the installed vitest that entry does NOT register them at runtime
+ * (every toBeVisible/toHaveTextContent throws "Invalid Chai property"), while
+ * calling `expect.extend` with the matchers directly does. Do both: the import
+ * for the types, this for the behaviour.
  */
 expect.extend(jestDomMatchers as never);
 

@@ -100,10 +100,13 @@ test("reports what is on the air from today's schedule, not tomorrow's", async (
   expect(onAirNow).toBeDefined();
 
   const air = (await app.inject("/api/v1/channels/marktv-laughs/air")).json();
-  expect(air.nowPlaying?.title).toBe(onAirNow.title);
+  // Compare the entry's START, not its title: both days can open with the same
+  // generic flex block, so a title check cannot tell which day was answered.
+  expect(air.nowPlaying?.start).toBe(onAirNow.start);
   // The newest row is tomorrow's, so an insertion-ordered read would have
-  // answered with its first entry instead.
-  expect(tomorrow.entries[0]?.title).not.toBe(onAirNow.title);
+  // answered with its first entry instead - a different date, hence a different
+  // start.
+  expect(tomorrow.entries[0]?.start).not.toBe(onAirNow.start);
   await app.close();
 });
 
