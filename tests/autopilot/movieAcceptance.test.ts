@@ -199,6 +199,37 @@ describe("movie acceptance (MV)", () => {
     expect(instant.toUTC().hour).toBe(8); // 02:00 CST == 08:00Z
   });
 
+  test("MV09 a small library still plays a diverse cycle and is not starved by the floor", () => {
+    const order = ["m1", "m2", "m3", "m4", "m5"];
+    const lastExposedOn = new Map<string, string>();
+    let date = DateTime.fromISO("2026-09-21", { zone: "America/Chicago" });
+    const picks: string[] = [];
+    for (let night = 0; night < 10; night += 1) {
+      const iso = date.toISODate()!;
+      const choice = spacedNightlyMovie({ order, ordinal: night, date: iso, lastExposedOn });
+      expect(choice).toBeDefined(); // never leaves a dead night
+      picks.push(choice!.mediaId);
+      lastExposedOn.set(choice!.mediaId, iso);
+      date = date.plus({ days: 1 });
+    }
+    // Every title is used inside the first cycle rather than deadlocking.
+    expect(new Set(picks.slice(0, 5)).size).toBe(5);
+  });
+
+  test("MV10 a prospective reservation caps a title's rest so it cannot be double-booked nearby", () => {
+    const choice = spacedNightlyMovie({
+      order: ["a", "b"],
+      ordinal: 0,
+      date: "2026-09-25",
+      // 'a' aired long ago and would otherwise be the obvious pick...
+      lastExposedOn: new Map([["a", "2026-08-01"]]),
+      // ...but it is already reserved for tomorrow, so its effective rest is
+      // one day and it must not take tonight as well.
+      reservedOn: new Map([["a", "2026-09-26"]]),
+    });
+    expect(choice?.mediaId).toBe("b");
+  });
+
   test("MV06 a failed weekend opener is not encored; the overnight slot takes an ordinary draw", () => {
     const { channel, movies } = movieFixture({ movieCount: 6 });
     const saturday = "2026-09-26";
