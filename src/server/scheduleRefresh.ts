@@ -6,6 +6,8 @@ import type { PersistedGeneration } from "./scheduleService.js";
 
 /** R09's rolling metadata horizon: how far ahead schedules should reach. */
 const HORIZON_HOURS = 72;
+/** Whole broadcast days to keep planned ahead (72h spans 4 calendar days). */
+const HORIZON_DAYS = 3;
 
 /**
  * Keeps today's schedule existent and current, without anyone asking.
@@ -348,6 +350,41 @@ export function startScheduleRefresh(
                   "code" in issue ? issue.code : "unknown",
                 ),
               });
+            }
+          }
+
+          // R09: keep a rolling 72-hour metadata horizon, not just today +
+          // tomorrow. The pass previously only pre-generated tomorrow, so a
+          // channel without its own lookahead (the all-day movie channels) held
+          // ~40h of metadata. Fill the FIRST missing future date, one per pass, so
+          // the horizon catches up without a generation storm and never leaves a
+          // hole behind an earlier gap. Gated to the quiet hours like the
+          // pre-generation above: future schedules are not broadcast, but building
+          // them must not compete with an active day.
+          if (
+            local.hour >= scheduleRefreshLimits.quietStartHour &&
+            local.hour < scheduleRefreshLimits.quietEndHour
+          ) {
+            for (let offset = 1; offset <= HORIZON_DAYS; offset += 1) {
+              const date = local.plus({ days: offset }).toISODate();
+              if (!date) continue;
+              if (context.repositories.schedules.latestForDate(channel.id, date))
+                continue;
+              logInfo("schedule.refresh", "Filling the metadata horizon", {
+                channelId: channel.id,
+                date,
+              });
+              const filled = await context.schedules.generate(channel, date);
+              if (filled.ok === false) {
+                logWarn("schedule.refresh", "Horizon generation was refused", {
+                  channelId: channel.id,
+                  date,
+                  issues: filled.issues.map((issue) =>
+                    "code" in issue ? issue.code : "unknown",
+                  ),
+                });
+              }
+              break; // one generation per pass
             }
           }
 

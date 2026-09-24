@@ -52,11 +52,13 @@ function setup(options: {
   const stored = new Map<string, Schedule>([[today, scheduleStub(channel, today)]]);
   const generate = vi.fn<
     (channel: Channel, date: string) => Promise<PersistedGeneration>
-  >(async (channel, date) => ({
-    ok: true,
-    schedule: scheduleStub(channel, date),
-    exportPath: "",
-  }));
+  >(async (channel, date) => {
+    const schedule = scheduleStub(channel, date);
+    // Persist like the real service: the pass reads latestForDate between
+    // generations, so a stub that forgets would regenerate the same date.
+    stored.set(date, schedule);
+    return { ok: true, schedule, exportPath: "" };
+  });
   const syncToTunarr = vi.fn(async () => ({ status: "synced" }));
   const ensureCoverage = vi.fn<
     (
@@ -125,9 +127,11 @@ test("movie coverage rolls forward in the quiet hours without touching the live 
   expect(ensureCoverage).toHaveBeenCalledTimes(1);
   expect(ensureCoverage.mock.calls[0][0]).toMatchObject({ id: "marktv-laughs" });
   // Today's schedule already exists and is synced, so nothing is regenerated for
-  // today and nothing is pushed again. The quiet-hours pass still builds tomorrow,
-  // which is a generation, not a broadcast.
-  expect(generate.mock.calls.map((call) => call[1])).toEqual(["2026-09-09"]);
+  // today and nothing is pushed again. The quiet-hours pass still builds tomorrow
+  // (a generation, not a broadcast) and then the first missing horizon day.
+  const generated = generate.mock.calls.map((call) => call[1]);
+  expect(generated[0]).toBe("2026-09-09");
+  expect(generated).not.toContain("2026-09-08");
   expect(syncToTunarr).not.toHaveBeenCalled();
   refresh.stop();
 });

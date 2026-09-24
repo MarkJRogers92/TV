@@ -186,6 +186,23 @@ test("does nothing when today's schedule already exists and is live", async () =
   refresh.stop();
 });
 
+test("fills the first missing future date to hold the 72-hour horizon", async () => {
+  // Quiet hours (4am America/Chicago), when horizon planning is allowed.
+  const { refresh, generate } = setup({
+    now: () => new Date("2026-09-17T09:00:00Z"),
+    stored: [scheduleStub(TODAY), scheduleStub("2026-09-18")],
+    lastSync: () => ({ scheduleId: scheduleStub(TODAY).id, status: "synced" }),
+  });
+
+  // Today and tomorrow exist; the first missing day in the horizon is +2. The
+  // pass must plan it - and only one per pass.
+  await vi.waitFor(() =>
+    expect(generate).toHaveBeenCalledWith(expect.anything(), "2026-09-19"),
+  );
+  expect(generate).toHaveBeenCalledTimes(1);
+  refresh.stop();
+});
+
 test("retries the sync when the previous attempt did not succeed", async () => {
   // Generating is not broadcasting. The sync's plan-then-apply guard refuses when
   // the channel state moves between its snapshots, which an active viewer causes,
@@ -342,8 +359,11 @@ test("does not rebuild today after pre-generating tomorrow", async () => {
   await refresh.refreshOnce();
   await refresh.refreshOnce();
 
-  // Once, for tomorrow. Any entry for today means the loop is back.
-  expect(generate.mock.calls.map((call) => call[1])).toEqual(["2026-09-18"]);
+  // Tomorrow first, then the first missing horizon day. Any entry for today means
+  // the loop is back.
+  const dates = generate.mock.calls.map((call) => call[1]);
+  expect(dates).not.toContain(TODAY);
+  expect(dates[0]).toBe("2026-09-18");
   refresh.stop();
 });
 
