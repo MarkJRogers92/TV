@@ -926,6 +926,40 @@ test("[EP11] a reservation alone is never counted as viewed or complete", async 
   expect(ledger.completionFloor(track.trackKey)).toBeUndefined();
 });
 
+test("[EP10] a shared-track reservation is atomic and idempotent, never doubled", async () => {
+  const ledger = createAiringLedger(openDatabase(await dataDir()));
+  const track = trackWithEpisodes(ledger, [["S01E01", 1]]);
+  const first = ok(reserve(ledger, track.trackKey, "occ-1", "S01E01", "channel-a"));
+  // A second request for the same occurrence returns the same record.
+  const again = ok(reserve(ledger, track.trackKey, "occ-1", "S01E01", "channel-a"));
+  expect(again.occurrenceKey).toBe(first.occurrenceKey);
+  expect(ledger.occurrencesForTrack(track.trackKey)).toHaveLength(1);
+  // A conflicting write to the same key is refused, not silently overwritten.
+  expect(
+    refused(reserve(ledger, track.trackKey, "occ-1", "S01E01", "channel-b")).reason,
+  ).toBe("id-conflict");
+});
+
+test("[EP16] committed output is not completion until the interval actually airs", async () => {
+  const ledger = createAiringLedger(openDatabase(await dataDir()));
+  const track = trackWithEpisodes(ledger, [["S01E01", 1]]);
+  ok(reserve(ledger, track.trackKey, "occ-1", "S01E01"));
+  // The output is produced and published, but no aired interval yet.
+  ok(ledger.recordPublishedInterval({
+    intervalId: "occ-1-pub",
+    occurrenceKey: "occ-1",
+    sourceStartMs: SOURCE_START,
+    sourceEndMs: SOURCE_END,
+    publishedAt: AT,
+    evidence: "hls-publisher-ack",
+  }));
+  const evaluation = ledger.evaluateOccurrence("occ-1")!;
+  expect(evaluation.contiguousPublished).toBe(true);
+  expect(evaluation.explicitAiredInterval).toBe(false);
+  expect(evaluation.complete).toBe(false);
+  expect(ledger.completionFloor(track.trackKey)).toBeUndefined();
+});
+
 test("[EP15] a track with no credible position is held rather than reset to episode one", async () => {
   const ledger = createAiringLedger(openDatabase(await dataDir()));
   const track = ok(
