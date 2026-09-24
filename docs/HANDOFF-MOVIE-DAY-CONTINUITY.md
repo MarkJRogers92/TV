@@ -277,7 +277,11 @@ unavailable assigned film. `npx vitest run` passed 91 files / 1,015 tests, `npm 
 passed, `npm run build` passed, and `git diff --check` passed. Full lint reported one unrelated
 existing unused `basename` import in `scripts/prepare-shared-voiced-channels.ts`.
 
-**Activation hold:** the build is prepared, but the service has not been restarted while Tunarr
-reports one active TiviMate HLS session. Restart `com.marktv.server` only after that session has
-ended, then confirm the process/API and regenerate a future channel 9 date for a live persistence
-check. No current-day schedule or Tunarr lineup was changed by this implementation.
+**Activated 2026-09-23 19:04 local, at the owner's request.** `launchctl kickstart -k
+gui/501/com.marktv.server` restarted the built server; launchd reports it running as PID 92223,
+and `GET /api/v1/channels` returned HTTP 200. The stored 2026-09-24 channel 9 schedule remains
+`marktv-cult-movies-2026-09-24-a0a0be22`, with a 2,400,000 ms opening source offset and an exact
+86,400,000 ms duration. The manual schedule-generation API also attempts a Tunarr sync, so no
+live regeneration was requested merely to prove persistence. Assignment reuse in the running
+process remains to be observed at a later legitimate rebuild; the automated regression test
+covers it. TiviMate still appeared in Tunarr's session API immediately after the restart.
