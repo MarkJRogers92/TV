@@ -61,6 +61,8 @@ export type GenerateScheduleInput = {
   slotMovieContinuation?: NonNullable<MovieCarry["continuation"]> & {
     slotId: string;
   };
+  /** Film starts previously committed for this date, in slot order. */
+  slotMovieAssignments?: string[];
 };
 
 export type MovieProgrammingRuntime = {
@@ -319,6 +321,7 @@ export function generateSchedule(
   // The pool that filled the previous episode or movie slot, so the same series
   // is not scheduled twice running when something else could have taken it.
   let previousPoolId: string | undefined;
+  let movieSlotPosition = 0;
   // Interstitials already placed today. Held for the whole day rather than per
   // break, so the ad pool is consumed like a bag: an item used at 09:00 is not
   // offered again at 21:00 while unused items remain. The per-break cooldown
@@ -1065,6 +1068,18 @@ export function generateSchedule(
           break;
         }
       }
+    }
+    if (slot.kind === "movie") {
+      const assignedId = input.slotMovieAssignments?.[movieSlotPosition];
+      if (assignedId) {
+        const assigned = itemsById.get(assignedId);
+        const assignedPool = [...slot.poolIds, ...slot.fallbackPoolIds]
+          .map((id) => input.pools.find((pool) => pool.id === id))
+          .find((pool) => pool?.kinds.includes("movie") && pool.mediaIds.includes(assignedId));
+        if (assigned?.kind === "movie" && assigned.available && assigned.durationMs && assignedPool)
+          selectedPool = { pool: assignedPool, item: assigned, relaxed: false };
+      }
+      movieSlotPosition += 1;
     }
     const chosen = selectedPool?.item;
     const chosenPoolId = selectedPool?.pool.id;

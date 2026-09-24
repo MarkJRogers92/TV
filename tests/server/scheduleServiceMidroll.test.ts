@@ -89,6 +89,49 @@ async function fixture() {
   return { dataDir, repositories, seeded };
 }
 
+test("keeps ordinary movie-slot picks and starts stable when the movie catalog grows", async () => {
+  const { dataDir, repositories, seeded } = await fixture();
+  const movie = seeded.media.find((item) => item.kind === "movie")!;
+  const channel = {
+    ...seeded.channel,
+    id: "stable-movie-day",
+    dayparts: [{ id: "all-day", name: "All Day", days: [0, 1, 2, 3, 4, 5, 6], start: "00:00", end: "00:00", priority: 1 }],
+    slots: [{ id: "movie-slot", daypartId: "all-day", days: [], poolIds: ["movies"], fallbackPoolIds: [], kind: "movie" as const }],
+    breakPolicy: { boundaryMinutes: 30, poolIds: [], stationIdPoolIds: [], cooldownMinutes: 0 },
+  };
+  const pool = seeded.pools.find((item) => item.id === "movies")!;
+  const movies = Array.from({ length: 5 }, (_, index) => ({
+    ...movie, id: `film-${index}`, title: `Film ${index}`, durationMs: 120 * 60_000,
+  }));
+  repositories.channels.put(channel);
+  repositories.pools.put({ ...pool, mediaIds: movies.map((item) => item.id), noRepeatMinutes: 0 });
+  movies.forEach((item) => repositories.media.put(item));
+  const service = new ScheduleService(repositories, dataDir, () => new Date("2026-09-22T12:00:00Z"), async () => "/tmp/schedule.json", undefined, async (input) => ({ media: input.media, prepared: [], diagnostics: [], rasterSupported: false }));
+  const first = await service.generate(channel, "2026-09-24");
+  expect(first.ok).toBe(true);
+  if (!first.ok) return;
+  const filmEntries = (schedule: typeof first.schedule) => schedule.entries.filter((entry) => entry.kind === "movie" && !entry.sourceOffsetMs).map((entry) => [entry.mediaId, entry.start]);
+  const expected = filmEntries(first.schedule);
+  expect(expected.length).toBeGreaterThan(5);
+
+  const added = { ...movie, id: "new-film", title: "New Film", durationMs: 120 * 60_000 };
+  repositories.media.put(added);
+  repositories.pools.put({ ...pool, mediaIds: [...movies.map((item) => item.id), added.id], noRepeatMinutes: 0 });
+  const rebuilt = await service.generate(channel, "2026-09-24");
+  expect(rebuilt.ok).toBe(true);
+  if (!rebuilt.ok) return;
+  expect(filmEntries(rebuilt.schedule)).toEqual(expected);
+
+  const unavailableId = expected[0][0]!;
+  const unavailable = repositories.media.get(unavailableId)!;
+  repositories.media.put({ ...unavailable, available: false });
+  const repaired = await service.generate(channel, "2026-09-24");
+  expect(repaired.ok).toBe(true);
+  if (!repaired.ok) return;
+  expect(filmEntries(repaired.schedule)[0][0]).not.toBe(unavailableId);
+  expect(repaired.schedule.entries.some((entry) => entry.kind === "movie" && entry.mediaId === unavailableId)).toBe(false);
+});
+
 test("persists and resumes an ordinary movie-slot continuation on the next date", async () => {
   const { dataDir, repositories, seeded } = await fixture();
   const movie = seeded.media.find((item) => item.kind === "movie")!;

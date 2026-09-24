@@ -210,10 +210,30 @@ export class ScheduleService {
       result = preserved;
     } else {
       const movieProgramming = this.movieRuntime(channel, date);
+      const slotMovieIds = new Set(
+        channel.slots.filter((slot) => slot.kind === "movie").map((slot) => slot.id),
+      );
+      const assignmentKey = `slot-movie-assignments:${channel.id}:${date}`;
+      const storedAssignments = this.repositories.settings.get(assignmentKey)?.value;
+      const priorSchedule = this.repositories.schedules.latestForDate(channel.id, date);
+      const priorAssignments = priorSchedule?.entries
+        .filter((entry) =>
+          entry.kind === "movie" &&
+          entry.mediaId &&
+          !entry.sourceOffsetMs &&
+          entry.sourceSlotId &&
+          slotMovieIds.has(entry.sourceSlotId),
+        )
+        .map((entry) => entry.mediaId!);
+      const slotMovieAssignments = Array.isArray(storedAssignments) &&
+        storedAssignments.every((id) => typeof id === "string")
+        ? storedAssignments as string[]
+        : priorAssignments;
       const ordinary = {
         ...input,
         movieProgramming: movieProgramming?.runtime,
         slotMovieContinuation: this.slotMovieContinuation(channel, date),
+        slotMovieAssignments,
       };
       // The fallback layout has the same duration as a detected layout, so it is
       // a cheap, deterministic way to find the day's actual episode selections
@@ -373,6 +393,21 @@ export class ScheduleService {
         });
       }
       this.repositories.schedules.replaceSuccessful(channel.id, schedule);
+      if (!preserved && channel.slots.some((slot) => slot.kind === "movie")) {
+        const slotMovieIds = new Set(
+          channel.slots.filter((slot) => slot.kind === "movie").map((slot) => slot.id),
+        );
+        const assignments = schedule.entries
+          .filter((entry) =>
+            entry.kind === "movie" &&
+            entry.mediaId &&
+            !entry.sourceOffsetMs &&
+            entry.sourceSlotId &&
+            slotMovieIds.has(entry.sourceSlotId),
+          )
+          .map((entry) => entry.mediaId!);
+        this.repositories.settings.put(`slot-movie-assignments:${channel.id}:${date}`, assignments);
+      }
     });
     return { ok: true, schedule, exportPath };
   }
