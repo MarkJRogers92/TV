@@ -23,4 +23,18 @@ describe("schedule acceptance (SC)", () => {
     // ...and the fill reaches the boundary rather than stopping short.
     expect(result.entries.at(-1)!.end).toBe(boundary.toISOString());
   });
+
+  test("SC12 a recently aired item is not reused while ready alternatives exist", () => {
+    const { media } = movieFixture();
+    const result = fillToBoundary({
+      start: new Date("2026-09-24T10:00:00.000Z"),
+      boundary: new Date("2026-09-24T10:01:00.000Z"),
+      items: media,
+      history: [{ mediaId: "ad-1", at: "2026-09-24T09:59:00.000Z" }],
+      cooldownMinutes: 30,
+      seed: "sc12",
+    });
+    expect(result.entries.length).toBeGreaterThan(0);
+    expect(result.entries.some((entry) => entry.mediaId === "ad-1")).toBe(false);
+  });
 });
