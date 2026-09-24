@@ -19,11 +19,16 @@ export type DiagnosticBundle = {
   generatedAt: string;
   runtime: { platform: string; arch: string; node: string };
   status: Awaited<ReturnType<typeof autopilotStatus>>;
+  /** Latest playout readings, when the observer is running. */
+  playout?: unknown;
+  /** The recent alert tail - what you were told, and when. */
+  alerts?: unknown;
 };
 
 export async function diagnosticBundle(
   repositories: Repositories,
   now: Date,
+  extras: { playout?: unknown; alerts?: unknown } = {},
 ): Promise<DiagnosticBundle> {
   const status = await autopilotStatus(repositories, now);
   const bundle: DiagnosticBundle = {
@@ -34,6 +39,10 @@ export async function diagnosticBundle(
       node: process.version,
     },
     status,
+    // Added BEFORE redaction on purpose: these are assembled from observations
+    // and alert text, and the bundle's one guarantee is that whatever it holds
+    // has been through `redactSensitive`.
+    ...extras,
   };
   // Defence in depth: redact anything credential-shaped before it leaves the host.
   return redactSensitive(bundle) as DiagnosticBundle;

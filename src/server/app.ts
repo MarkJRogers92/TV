@@ -49,6 +49,15 @@ import {
   type PodExposureObserver,
 } from "../autopilot/podExposureObserver.js";
 import { createAiringLedger } from "../autopilot/airingLedger.js";
+import {
+  alertFilePath,
+  createAlertSink,
+  type AlertSink,
+} from "../autopilot/alerts.js";
+import {
+  createPlayoutWatch,
+  type PlayoutWatch,
+} from "../autopilot/playoutWatch.js";
 import { recordIncident } from "../autopilot/incidents.js";
 import { DateTime } from "luxon";
 import { KeychainCredentialStore } from "../security/keychain.js";
@@ -141,6 +150,10 @@ export type BuildAppOptions = {
    * writes ledger rows.
    */
   podExposure?: boolean;
+  /** Where alerts go. Defaults to `alerts.log` in the app's data directory. */
+  alertFile?: string;
+  /** Best-effort desktop notifications. Off unless asked for. */
+  alertsNotify?: boolean;
   /** Root of the per-channel HLS stream directories, shared with the watchdog. */
   podExposureStreamsRoot?: string;
 };
@@ -308,6 +321,15 @@ export async function buildApp(options: BuildAppOptions = {}) {
   const database = openDatabase(dataDir);
   const repositories = createRepositories(database);
   const now = options.now ?? (() => new Date());
+  // The human channel. Created here so every observer below can alert through
+  // it, and so a startup line records the configuration that is actually in use.
+  const alertSink: AlertSink = createAlertSink({
+    file: options.alertFile ?? alertFilePath(),
+    notify: options.alertsNotify ?? false,
+    now,
+  });
+  /** The watchdog's latest verdict per channel, for the playout watch to report. */
+  const latestHealth = new Map<string, string | null>();
   const credentials = options.credentials ?? new KeychainCredentialStore();
   // Create/verify the managed inbox and library, then register the resolved
   // library root exactly once so acquisition writes and the media scanner share
@@ -338,6 +360,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
     now: options.coordinator?.now ?? now,
   });
   const context: ServerContext = {
+    alertSink,
+    playoutSnapshot: () => playoutWatch?.snapshot() ?? [],
     dataDir,
     repositories,
     now,
@@ -365,6 +389,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   let healthShadow: HealthShadow | null = null;
   let alwaysOn: AlwaysOnSupervisor | null = null;
   let podExposureObserver: PodExposureObserver | null = null;
+  let playoutWatch: PlayoutWatch | null = null;
   app.addHook("onClose", async () => {
     scheduleRefresh?.stop();
     // Stop the intake scanner before the database handle closes: its poll timer
@@ -380,6 +405,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     // Stop the pod-exposure observer before the repositories close: it writes
     // ledger rows through them.
     await podExposureObserver?.stop();
+    await playoutWatch?.stop();
     // The coordinator owns every durable acquisition write, so stop it
     // (clearing its timer, aborting local transfers, and persisting resumable
     // state) before the database handle is closed.
@@ -470,13 +496,23 @@ export async function buildApp(options: BuildAppOptions = {}) {
                 reason,
               });
               // Record real decisions durably (not the routine no-action ones).
-              if (outcome !== "no-action")
+              if (outcome !== "no-action") {
                 recordIncident(repositories, {
                   at: context.now().toISOString(),
                   channelId,
                   kind: outcome,
                   reason,
                 });
+                alertSink.raise({
+                  kind: outcome,
+                  channelId,
+                  reason,
+                  action:
+                    outcome === "suppressed"
+                      ? "the circuit breaker is open for this channel; it will not act again until it clears"
+                      : "a channel-scoped repair was dispatched; if this repeats, it is not fixing the cause",
+                });
+              }
             },
           })
         : null;
@@ -510,13 +546,24 @@ export async function buildApp(options: BuildAppOptions = {}) {
               recommendation: result.recommendation,
             },
           );
-          if (result.incident)
+          latestHealth.set(result.channelId, result.health);
+          if (result.incident) {
             recordIncident(repositories, {
               at: context.now().toISOString(),
               channelId: result.channelId,
               kind: "incident",
               reason: result.health,
             });
+            // The one alert a person most needs: a channel is confirmed faulty.
+            alertSink.raise({
+              kind: "incident",
+              channelId: result.channelId,
+              reason: result.health,
+              detail: result.recommendation,
+              action:
+                "the watchdog has confirmed a fault on this channel; see /api/v1/diagnostics",
+            });
+          }
         },
         onError: (error, channelId) =>
           logError("health-shadow", error, channelId ? { channelId } : {}),
@@ -579,6 +626,66 @@ export async function buildApp(options: BuildAppOptions = {}) {
       void podExposureObserver
         .start()
         .catch((error) => logError("pod-exposure", error));
+    }
+    if (options.healthShadow && options.healthShadowRoot) {
+      // The checks that only time produces, inside the app rather than in a script:
+      // producer advance, the served head against the producer's, and the
+      // classifier's latest verdict. This is the half that would have caught the
+      // original rewind, and it alerts on ENTERING a bad condition only.
+      playoutWatch = createPlayoutWatch(repositories, {
+        streamsRoot: options.healthShadowRoot,
+        streamsDirectoryFor: (channel) => {
+          const tunarrChannelId = readTunarrMappingForChannel(
+            repositories,
+            channel.id,
+          )?.channelId;
+          return tunarrChannelId
+            ? join(options.healthShadowRoot!, `stream_${tunarrChannelId}`)
+            : null;
+        },
+        // The SERVED playlist is what a viewer is offered - the thing the
+        // producer's own file cannot tell you.
+        servedUrlFor: (channelId) => {
+          const mapping = readTunarrMappingForChannel(repositories, channelId);
+          if (!mapping?.url || !mapping.channelId) return null;
+          const base = mapping.url.replace(/\/+$/, "");
+          return `${base}/stream/channels/${mapping.channelId}/hls/stream.m3u8`;
+        },
+        healthFor: (channelId) => latestHealth.get(channelId) ?? null,
+        onAlert: (alert) => {
+          logInfo("playout-watch", alert.condition, {
+            channelId: alert.channelId,
+            detail: alert.detail,
+          });
+          const recovered = alert.condition === "recovered";
+          alertSink.raise({
+            kind: recovered ? "recovered" : "incident",
+            channelId: alert.channelId,
+            reason: alert.condition,
+            detail: alert.detail,
+            ...(recovered
+              ? {}
+              : {
+                  action:
+                    "compare the served head against the producer's; see /api/v1/diagnostics",
+                }),
+          });
+        },
+        onError: (error, channelId) =>
+          logError("playout-watch", error, channelId ? { channelId } : {}),
+      });
+      void playoutWatch
+        .start()
+        .catch((error) => logError("playout-watch", error));
+      // Announced at startup so the file itself says whether alerts can be
+      // delivered, rather than that being something you hope is true.
+      alertSink.raise({
+        kind: "startup",
+        reason: "alerts active",
+        detail: `file=${options.alertFile ?? alertFilePath()} notifications=${
+          options.alertsNotify ? "enabled" : "disabled"
+        }`,
+      });
     }
     if (options.alwaysOn) {
       // Start each enabled channel's producer so it keeps running with no viewers.

@@ -61,6 +61,12 @@ const app = await buildApp({
     Boolean(process.env.MARKTV_HEALTH_SHADOW_ROOT) &&
     process.env.MARKTV_POD_EXPOSURE !== "0",
   podExposureStreamsRoot: process.env.MARKTV_HEALTH_SHADOW_ROOT,
+  // Alerts: the human channel. The default is the app's data directory; the
+  // deployed service points MARKTV_ALERT_FILE at the logs directory a person
+  // already knows to look in. Notifications are best-effort and on by default,
+  // and each alert records whether one was actually delivered.
+  alertFile: process.env.MARKTV_ALERT_FILE,
+  alertsNotify: process.env.MARKTV_ALERTS_NOTIFY !== "0",
 });
 if (process.env.MARKTV_DEV !== "1") {
   await registerStaticUi(app, join(process.cwd(), "dist"));

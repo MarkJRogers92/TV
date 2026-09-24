@@ -24,9 +24,16 @@ export type IntegrationProjection = {
   error: IntegrationErrorState | null;
 };
 
+import type { AlertSink } from "../autopilot/alerts.js";
+import type { PlayoutSample } from "../autopilot/playoutWatch.js";
+
 export type ServerContext = {
   repositories: Repositories;
   dataDir: string;
+  /** The human channel: alerts a person can be told to go and read. */
+  alertSink?: AlertSink;
+  /** The latest playout readings, for the status and diagnostic views. */
+  playoutSnapshot?: () => PlayoutSample[];
   now: () => Date;
   schedules: ScheduleService;
   credentials: CredentialStore;
