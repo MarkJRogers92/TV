@@ -32,7 +32,7 @@ function tick(
   }, state);
 }
 
-test("classifies a resting producer as buffered idle when published runway covers its scheduled wake", () => {
+test("[PL01] classifies a resting producer as buffered idle when published runway covers its scheduled wake", () => {
   const observation = {
     ...baseObservation,
     workerProcessCount: 0,
@@ -50,6 +50,26 @@ test("classifies a resting producer as buffered idle when published runway cover
   expect(second.sharedServiceRestart).toBe(false);
 });
 
+test("[PL15] the classifier consumes no image, silence or viewer-count signal", () => {
+  // PL15 forbids a false restart based on image motion, silence, or one client
+  // alone. The guarantee here is structural, not heuristic: recovery can only be
+  // recommended from continuity evidence, and nothing about the picture, the
+  // audio, or how many viewers are connected is an input. Pinning the input
+  // contract keeps a future field (frame motion, audio level, connected viewers)
+  // from silently becoming a restart trigger.
+  expect(Object.keys(baseObservation).sort()).toEqual([
+    "channelId",
+    "contiguousPublishedRunwaySeconds",
+    "nextRequiredIntervalAvailable",
+    "observedAtMs",
+    "progressDeadlineExceeded",
+    "sampleId",
+    "scheduledWakeBeforeDepletion",
+    "watchdogSessionId",
+    "workerProcessCount",
+  ]);
+});
+
 test("marks a resting producer at risk when its known wake is after runway depletion", () => {
   const result = tick({
     ...baseObservation,
@@ -63,7 +83,7 @@ test("marks a resting producer at risk when its known wake is after runway deple
   expect(result.sharedServiceRestart).toBe(false);
 });
 
-test("requires repeated deadline-expired evidence before recommending channel-scoped recovery", () => {
+test("[PL15] requires repeated deadline-expired evidence before recommending channel-scoped recovery", () => {
   const observation: ContinuityHealthObservation = {
     ...baseObservation,
     contiguousPublishedRunwaySeconds: 2,

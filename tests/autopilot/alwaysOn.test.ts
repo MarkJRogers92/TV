@@ -31,6 +31,29 @@ test("[R01] starts only enabled channels that have a stream URL", async () => {
   expect(calls).toEqual(["http://t/a.m3u8"]);
 });
 
+test("[PL04] a lost producer is re-requested on the very next pass, not at a schedule boundary", async () => {
+  // PL04: continue/fill immediately rather than waiting for a larger schedule
+  // boundary. The supervisor holds no state and consults no clock, so a channel
+  // whose producer was lost is re-requested by the next pass - the cadence is a
+  // plain interval, never a programming boundary. Memoising a successful start
+  // (or gating on the schedule) would break this, and the second request is safe
+  // because Tunarr's get-or-create is idempotent.
+  const calls: string[] = [];
+  const supervisor = createAlwaysOnSupervisor(repositories, {
+    resolveStreamUrl: (channelId) => (channelId === "a" ? "http://t/a.m3u8" : null),
+    fetchImpl: okFetch(calls),
+    // A long cadence on purpose: the re-request must not depend on it elapsing.
+    intervalMs: 3_600_000,
+  });
+
+  await supervisor.runOnce();
+  expect(calls).toEqual(["http://t/a.m3u8"]);
+
+  // No timers are advanced between these passes.
+  await supervisor.runOnce();
+  expect(calls).toEqual(["http://t/a.m3u8", "http://t/a.m3u8"]);
+});
+
 test("[R01] a failing request is reported and never thrown", async () => {
   const failed: string[] = [];
   const supervisor = createAlwaysOnSupervisor(repositories, {

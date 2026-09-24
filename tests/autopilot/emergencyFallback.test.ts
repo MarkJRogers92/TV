@@ -175,7 +175,7 @@ describe("source-only emergency fallback decision", () => {
     expect((await planFor(root)).status).toBe("blocked");
   });
 
-  test("does not treat an external-volume root as internal storage", async () => {
+  test("[PL18] does not treat an external-volume root as internal storage", async () => {
     const result = await loadVerifiedEmergencyFallbackPool("/Volumes/SSK Drive /MarkTV/emergency-assets");
     expect(result).toEqual({ ok: false, reason: "root-not-internal" });
   });

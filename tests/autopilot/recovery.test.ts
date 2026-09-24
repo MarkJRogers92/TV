@@ -22,7 +22,7 @@ function confirmedIncident() {
   return evaluateContinuityHealth(stalled("2", 2_000), first.state);
 }
 
-test("[PL06] a confirmed incident dispatches once and is then acknowledged", async () => {
+test("[PL05][PL07] a confirmed incident dispatches to the affected channel only, once, then acknowledges", async () => {
   const incident = confirmedIncident();
   expect(incident.incident).toBe(true);
   expect(incident.recommendation).not.toBe("none");

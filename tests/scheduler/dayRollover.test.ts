@@ -26,7 +26,7 @@ const generate = (date: string) => {
 
 const DAY_MS = 86_400_000;
 
-test("a generated day fills exactly 24 hours with no gaps or overlaps", () => {
+test("[PL16] a generated day fills exactly 24 hours with no gaps or overlaps", () => {
   const schedule = generate("2026-09-14");
   const entries = [...schedule.entries].sort(
     (a, b) => Date.parse(a.start) - Date.parse(b.start),
