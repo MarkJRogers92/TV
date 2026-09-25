@@ -39,6 +39,20 @@ type SyncClient = Pick<
 };
 
 /**
+ * User agents that are this deployment's own automation, not a person watching.
+ *
+ * MarkTV's monitoring reads the mapped channel over HTTP, and Tunarr registers
+ * every read as a session. Counting those as viewers made this guard refuse the
+ * sync permanently: measured 2026-09-24, the only "viewer" on all three channels
+ * was `127.0.0.1 / node`, and no lineup had been accepted since 2026-09-21 -
+ * so the watchdog was holding the channel on a four-day-old lineup. Anything
+ * unrecognised still counts as a viewer (see below); only a named script client
+ * is discounted.
+ */
+const AUTOMATION_USER_AGENT =
+  /^(node|undici|curl|wget|python|python-requests|axios|got|marktv)\b/i;
+
+/**
  * Live connections watching one mapped channel, read from Tunarr's session
  * list.
  *
@@ -46,7 +60,10 @@ type SyncClient = Pick<
  * caller and it must fail closed: an unreadable or unrecognized session list
  * throws, and the sync refuses to mutate anything. A session whose channel
  * cannot be identified is counted rather than ignored - refusing a safe sync is
- * recoverable, interrupting a viewer is not.
+ * recoverable, interrupting a viewer is not. Where a session does carry
+ * attribution, a connection that names itself as a script is not a viewer; a
+ * session with no attribution at all is still counted, so the fail-closed
+ * direction is preserved.
  */
 async function activeSessionCount(
   client: SyncClient,
@@ -97,7 +114,16 @@ async function activeSessionCount(
         : session.channel?.id) ??
       mapKey;
     if (sessionChannel !== undefined && sessionChannel !== channelId) continue;
-    active += session.numConnections ?? 1;
+    const connections = session.connections;
+    if (connections === undefined || connections.length === 0) {
+      // No attribution to judge: count it, the direction that cannot interrupt
+      // a viewer.
+      active += session.numConnections ?? 1;
+      continue;
+    }
+    active += connections.filter(
+      (connection) => !AUTOMATION_USER_AGENT.test(connection.userAgent ?? ""),
+    ).length;
   }
   return active;
 }

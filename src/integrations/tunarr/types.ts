@@ -198,6 +198,14 @@ export const createdFillerSchema = z.object({ id: z.string() }).passthrough();
 export const mediaSessionSchema = z
   .object({
     numConnections: z.number().nonnegative().optional(),
+    /**
+     * Who is holding this session. Read so the sync guard can tell a person
+     * watching from this deployment's own automation, which reads the same
+     * channel over HTTP and is registered by Tunarr as a session just the same.
+     */
+    connections: z
+      .array(z.object({ userAgent: z.string().optional() }).passthrough())
+      .optional(),
     channelId: z.string().optional(),
     channel_id: z.string().optional(),
     channel: z
