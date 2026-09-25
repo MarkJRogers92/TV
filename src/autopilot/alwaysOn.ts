@@ -37,7 +37,10 @@ export function createAlwaysOnSupervisor(
   repositories: Repositories,
   options: AlwaysOnOptions,
 ): AlwaysOnSupervisor {
-  const intervalMs = options.intervalMs ?? 120_000;
+  // A restarted Tunarr drops every producer session. Check often enough to
+  // restore them promptly without polling anywhere near the 4-second segment
+  // cadence. The request is idempotent for sessions that are already running.
+  const intervalMs = options.intervalMs ?? 30_000;
   const requestTimeoutMs = options.requestTimeoutMs ?? 15_000;
   const fetchImpl = options.fetchImpl ?? fetch;
   const onResult = options.onResult ?? (() => undefined);
