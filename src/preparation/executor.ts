@@ -4,7 +4,7 @@ import { collectPreflightEvidence, type PreflightEvidence, type PreflightLevel }
 import type { PreparationObserver } from "./events.js";
 import type { PreparationClassification } from "./models.js";
 import { readSourceVersionSync } from "./sourceVersion.js";
-import { renderPreparedRendition, requestedPreparation } from "./render.js";
+import { renderPreparedRendition, remuxEligible, requestedPreparation } from "./render.js";
 
 /** A finalising preflight depth. `metadata` alone is not enough to classify a source. */
 export type ExecutorLevel = Exclude<PreflightLevel, "metadata">;
@@ -39,8 +39,9 @@ function safeRead(read: (path: string) => PreparationSourceVersion | null, path:
 }
 
 /**
- * Runs one preparation job at a time. Only a specific catalog request opts a
- * sampled-playable source into derived preparation. Originals are never moved.
+ * Runs one preparation job at a time. A specific catalog request or a measured
+ * container defect opts a sampled-playable source into derived preparation.
+ * Originals are never moved.
  */
 export function createPreparationExecutor(
   repositories: Repositories,
@@ -136,10 +137,12 @@ export function createPreparationExecutor(
       return;
     }
     const requested = repositories.media.get(claimed.sourceMediaId);
-    const mode = requested?.path === claimed.source.path ? requestedPreparation(requested.tags) : null;
-    if (mode && (evidence.result === "sampled" || evidence.result === "fully_decoded")) {
+    const isCurrentCataloguedSource = requested?.path === claimed.source.path;
+    if (isCurrentCataloguedSource &&
+        (requestedPreparation(requested.tags) === "remux" || remuxEligible(evidence.metadata)) &&
+        (evidence.result === "sampled" || evidence.result === "fully_decoded")) {
       try {
-        const prepared = await render({ job: claimed, evidence, mode,
+        const prepared = await render({ job: claimed, evidence, mode: "remux",
           cacheDirectory: repositories.preparation.cacheDirectory, now });
         const current = safeRead(readSource, claimed.source.path);
         const result = repositories.preparation.complete(lease, {

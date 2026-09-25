@@ -5,7 +5,7 @@ import { setPriority } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { PreparationJob } from "./models.js";
-import { collectPreflightEvidence, type PreflightEvidence } from "./preflight.js";
+import { collectPreflightEvidence, type PreflightEvidence, type PreflightMetadata } from "./preflight.js";
 import { readSourceVersion, sourceVersionsEqual } from "./sourceVersion.js";
 
 const run = promisify(execFile);
@@ -15,12 +15,23 @@ const MIN_FREE = 15 * 1024 ** 3;
 
 export type PreparedRendition = NonNullable<PreparationJob["rendition"]>;
 
-/** Explicit, catalog-owned requests are the only conversion trigger. Sampled decode alone proves no incompatibility. */
+/** Keep the existing explicit request available while automatic detection grows. */
 export function requestedPreparation(tags: readonly string[]): "remux" | null {
-  // Normalization requires a verified channel output contract. A catalog tag
-  // alone cannot authorize a new resolution, frame rate, or audio policy.
-  if (tags.includes("preparation:needs-remux")) return "remux";
-  return null;
+  return tags.includes("preparation:needs-remux") ? "remux" : null;
+}
+
+/** Remux only a measured MP4 seek-index defect when stream-copy is lossless. */
+export function remuxEligible(metadata: PreflightMetadata): boolean {
+  if (metadata.status !== "passed" || metadata.mp4MoovBeforeMdat !== false) return false;
+  if (!metadata.containerFormatNames.some((name) => name === "mov" || name === "mp4")) return false;
+  const video = metadata.tracks.find((track) => track.type === "video" && track.selected);
+  const audioTracks = metadata.tracks.filter((track) => track.type === "audio");
+  const subtitles = metadata.tracks.filter((track) => track.type === "subtitle");
+  // Keep this profile deliberately narrow: it preserves one H.264 video track
+  // and at most one AAC audio track. Other layouts require a track-preserving
+  // profile rather than silently dropping content.
+  return video?.codec === "h264" && subtitles.length === 0 && audioTracks.length <= 1 &&
+    (audioTracks.length === 0 || audioTracks[0]?.codec === "aac");
 }
 
 async function occupiedBytes(directory: string): Promise<number> {
@@ -77,6 +88,7 @@ export async function renderPreparedRendition(input: {
     if (!file.isFile() || file.isSymbolicLink() || file.size === 0) throw new Error("rendition_not_regular_file");
     const validation = await collectPreflightEvidence(candidate, { level: "full", timeoutMs: 4 * 60 * 60 * 1000 });
     if (validation.result !== "fully_decoded") throw new Error(`rendition_${validation.result}`);
+    if (validation.metadata.mp4MoovBeforeMdat !== true) throw new Error("rendition_faststart_unverified");
     const duration = evidence.metadata.durationSeconds;
     const actual = validation.metadata.durationSeconds;
     if (duration === null || actual === null || Math.abs(duration - actual) > 1) throw new Error("rendition_duration_mismatch");

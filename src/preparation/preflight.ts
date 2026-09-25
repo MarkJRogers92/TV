@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { open } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { PreparationSourceVersion } from "./models.js";
 import { readSourceVersion, sourceVersionsEqual } from "./sourceVersion.js";
@@ -35,6 +36,9 @@ export type PreflightTrack = {
 export type PreflightMetadata = {
   status: EvidenceStatus;
   durationSeconds: number | null;
+  containerFormatNames: string[];
+  /** `false` means the MP4 index follows media data; `null` means not established. */
+  mp4MoovBeforeMdat: boolean | null;
   tracks: PreflightTrack[];
   selectedVideoTrackIndex: number | null;
   selectedAudioTrackIndex: number | null;
@@ -67,7 +71,7 @@ export type PreflightOptions = {
 };
 
 type ProbePayload = {
-  format?: { duration?: unknown };
+  format?: { duration?: unknown; format_name?: unknown };
   streams?: Array<{
     index?: unknown;
     codec_type?: unknown;
@@ -81,6 +85,45 @@ type ProbePayload = {
     disposition?: { default?: unknown; attached_pic?: unknown };
   }>;
 };
+
+/** Read top-level ISO BMFF boxes without scanning media payload bytes. */
+async function mp4MoovBeforeMdat(path: string, fileSize: number): Promise<boolean | null> {
+  let handle;
+  try {
+    handle = await open(path, "r");
+    let position = 0;
+    let moovPosition: number | undefined;
+    let mdatPosition: number | undefined;
+    const header = Buffer.alloc(16);
+    for (let count = 0; position + 8 <= fileSize && count < 10_000; count++) {
+      const { bytesRead } = await handle.read(header, 0, 8, position);
+      if (bytesRead !== 8) return null;
+      let boxSize = BigInt(header.readUInt32BE(0));
+      const boxType = header.toString("ascii", 4, 8);
+      let headerSize = 8n;
+      if (boxSize === 1n) {
+        const extended = await handle.read(header, 8, 8, position + 8);
+        if (extended.bytesRead !== 8) return null;
+        boxSize = header.readBigUInt64BE(8);
+        headerSize = 16n;
+      } else if (boxSize === 0n) {
+        boxSize = BigInt(fileSize) - BigInt(position);
+      }
+      if (boxType === "uuid") headerSize += 16n;
+      if (boxSize < headerSize || BigInt(position) + boxSize > BigInt(fileSize)) return null;
+      if (boxType === "moov") moovPosition ??= position;
+      if (boxType === "mdat") mdatPosition ??= position;
+      position += Number(boxSize);
+      if (moovPosition !== undefined && mdatPosition !== undefined)
+        return moovPosition < mdatPosition;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
 
 const runInstalled = (file: string, args: readonly string[], options: PreflightRunnerOptions) =>
   execFileAsync(file, [...args], options);
@@ -162,7 +205,8 @@ export async function collectPreflightEvidence(path: string, options: PreflightO
   let sourceUnchanged: boolean | null = null;
   let sourceRecheckFailed = false;
   const metadata: PreflightMetadata = {
-    status: "unavailable", durationSeconds: null, tracks: [],
+    status: "unavailable", durationSeconds: null, containerFormatNames: [],
+    mp4MoovBeforeMdat: null, tracks: [],
     selectedVideoTrackIndex: null, selectedAudioTrackIndex: null, reason: "source_unavailable",
   };
   let sampledDecode = deferredDecode();
@@ -173,11 +217,15 @@ export async function collectPreflightEvidence(path: string, options: PreflightO
     sourceBefore = await (options.statFile ?? readSourceVersion)(path);
     const { stdout } = await runner("ffprobe", [
       "-v", "error", "-show_entries",
-      "format=duration:stream=index,codec_type,codec_name,width,height,sample_rate,channels,start_time,duration:stream_disposition=default:stream_disposition=attached_pic",
+      "format=duration,format_name:stream=index,codec_type,codec_name,width,height,sample_rate,channels,start_time,duration:stream_disposition=default:stream_disposition=attached_pic",
       "-of", "json", "--", path,
     ], runOptions);
     const payload = JSON.parse(stdout) as ProbePayload;
     const tracks = buildTracks(payload);
+    metadata.containerFormatNames = typeof payload.format?.format_name === "string"
+      ? payload.format.format_name.split(",").map((name) => name.trim()).filter(Boolean) : [];
+    if (metadata.containerFormatNames.includes("mov") || metadata.containerFormatNames.includes("mp4"))
+      metadata.mp4MoovBeforeMdat = await mp4MoovBeforeMdat(path, Number(sourceBefore.sizeBytes));
     // Container duration is preferred, but fragmented/MPEG-TS sources can omit
     // it while still reporting per-stream durations, so fall back to the longest
     // known stream rather than declaring the file unusable.
