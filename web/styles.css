@@ -194,6 +194,46 @@ th {
 .success {
   color: #a9efb5;
 }
+.health-updated,
+.health-note {
+  color: #bdcbd4;
+}
+.health-channel {
+  padding: 10px 0;
+  border-top: 1px solid #40515f;
+}
+.health-channel h3 {
+  margin-bottom: 8px;
+}
+.health-channel p {
+  margin: 6px 0;
+}
+.health-list {
+  display: grid;
+  gap: 12px;
+  padding-left: 20px;
+}
+.health-list li,
+.health-channel li {
+  overflow-wrap: anywhere;
+}
+.health-list li > * {
+  display: block;
+  margin: 4px 0;
+}
+.health-path {
+  display: block;
+  margin: 4px 0;
+  color: #bdcbd4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+details {
+  margin: 10px 0;
+}
+summary {
+  cursor: pointer;
+}
 @media (max-width: 760px) {
   main {
     padding: 16px;

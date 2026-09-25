@@ -4,6 +4,7 @@ import { Nav, type PageName } from "./components/Nav";
 import { ChannelEditor } from "./pages/ChannelEditor";
 import { Continuity } from "./pages/Continuity";
 import { Dashboard } from "./pages/Dashboard";
+import { Health } from "./pages/Health";
 import { Integrations } from "./pages/Integrations";
 import { Library } from "./pages/Library";
 import { Schedule } from "./pages/Schedule";
@@ -22,6 +23,7 @@ const routePages: Record<string, PageName> = {
   tunarr: "Tunarr",
   wanted: "Wanted",
   integrations: "Integrations",
+  health: "Health",
 };
 const pageFromHash = (): PageName =>
   routePages[window.location.hash.replace(/^#\//, "")] ?? "Dashboard";
@@ -73,6 +75,8 @@ export function App() {
       <Wanted />
     ) : page === "Integrations" ? (
       <Integrations />
+    ) : page === "Health" ? (
+      <Health />
     ) : (
       <Tunarr />
     );

@@ -49,6 +49,55 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export type AutopilotStatus = {
+  at: string;
+  preparation: {
+    intakes: number;
+    jobs: Record<"queued" | "running" | "completed" | "failed" | "stale", number>;
+    classifications: Record<"ready_original" | "needs_remux" | "needs_normalize" | "quarantined" | "unavailable", number>;
+    recent: Array<{ path: string; state: string; classification: string | null }>;
+  };
+  mediaRoots: Array<{ path: string; present: boolean; freeBytes?: number }>;
+  channels: Array<{
+    id: string;
+    name: string;
+    hoursCovered: number;
+    gaps: number;
+    contiguous: boolean;
+    air: {
+      onAir: null | {
+        title: string;
+        kind: string;
+        start: string;
+        end: string;
+        elapsedMs: number;
+        remainingMs: number;
+      };
+      next: Array<{ title: string; kind: string; start: string; end: string }>;
+    };
+    incidents: { incidents: number; dispatched: number; suppressed: number; recovered: number };
+  }>;
+  playout: Array<{
+    channelId: string;
+    checkedAt: string;
+    newestSegment: number | null;
+    advancedAt: string | null;
+    advancing: boolean;
+    servedSegment: number | null;
+    servedDeltaMs: number | null;
+    health: string | null;
+  }>;
+  alerts: Array<{
+    kind: string;
+    channelId?: string;
+    reason: string;
+    detail?: string;
+    action?: string;
+    at: string;
+    notified: boolean;
+  }>;
+};
+
 const body = (value: unknown): RequestInit => ({
   method: "POST",
   body: JSON.stringify(value),
@@ -59,6 +108,7 @@ const update = (value: unknown): RequestInit => ({
 });
 
 export const markTvApi = {
+  autopilotStatus: () => api<AutopilotStatus>("/autopilot/status"),
   listChannels: () => api<Channel[]>("/channels"),
   getChannel: (id: string) => api<Channel>(`/channels/${id}`),
   createChannel: (channel: Channel) => api<Channel>("/channels", body(channel)),

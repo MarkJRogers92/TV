@@ -8,6 +8,7 @@ export const pageNames = [
   "Tunarr",
   "Wanted",
   "Integrations",
+  "Health",
 ] as const;
 export type PageName = (typeof pageNames)[number];
 
