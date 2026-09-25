@@ -116,6 +116,41 @@ test("shuffle selection is stable for the same seed regardless of input item ord
   expect(forward.item?.id).toBe(reversed.item?.id);
 });
 
+test("all-day movie shuffle finishes available titles before repeating an older one", () => {
+  const movies = ["chopping-mall", "unused", "older"].map((id) =>
+    item(id, "movie"),
+  );
+  const pool: Pool = {
+    id: "cult-movies",
+    name: "Cult Movies",
+    kinds: ["movie"],
+    mediaIds: movies.map((movie) => movie.id),
+    mode: "shuffle",
+    noRepeatMinutes: 0,
+    weight: 1,
+  };
+  const selectMovie = (history: Array<{ mediaId: string; at: string }>) =>
+    selectCandidate({
+      pool,
+      items: movies,
+      kind: "movie",
+      history,
+      at: "2026-09-25T00:00:00.000Z",
+      seed: "same-seed",
+    }).item?.id;
+  const history = [
+    { mediaId: "older", at: "2026-09-21T00:00:00.000Z" },
+    { mediaId: "chopping-mall", at: "2026-09-23T22:20:00.000Z" },
+  ];
+  expect(selectMovie(history)).toBe("unused");
+  expect(
+    selectMovie([
+      ...history,
+      { mediaId: "unused", at: "2026-09-24T00:00:00.000Z" },
+    ]),
+  ).toBe("older");
+});
+
 test("orders season 1 before season 2 when a show title only differs by case, spacing, and a trailing year", () => {
   // The same series is spelled three ways by the files it arrived from: season 2
   // sorts before season 1 under a raw title comparison, because "show" and

@@ -64,6 +64,7 @@ export function createAlwaysOnSupervisor(
       try {
         const response = await fetchImpl(url, {
           signal: AbortSignal.timeout(requestTimeoutMs),
+          headers: { "user-agent": "marktv-always-on/1.0" },
         });
         // Drain and discard; we only need the request to have reached Tunarr.
         await response.arrayBuffer().catch(() => undefined);

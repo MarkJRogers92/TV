@@ -285,6 +285,28 @@ export function selectCandidate(input: SelectionInput): SelectionResult {
   }
   if (!candidates.length) return { item: undefined, relaxed: false };
   if (input.pool.mode !== "chronological") {
+    if (input.kind === "movie") {
+      // An all-day movie pool can play through its inventory in roughly a day.
+      // A fixed cooldown alone then releases earlier titles while others have
+      // never aired. Prefer the least recently scheduled eligible title; ties
+      // remain seeded and deterministic. The caller's history includes prior
+      // stored dates and selections already made in this schedule.
+      const lastAt = new Map<string, number>();
+      for (const play of input.history) {
+        const at = Date.parse(play.at);
+        if (Number.isFinite(at))
+          lastAt.set(
+            play.mediaId,
+            Math.max(lastAt.get(play.mediaId) ?? -Infinity, at),
+          );
+      }
+      const oldest = Math.min(
+        ...candidates.map((item) => lastAt.get(item.id) ?? -Infinity),
+      );
+      candidates = candidates.filter(
+        (item) => (lastAt.get(item.id) ?? -Infinity) === oldest,
+      );
+    }
     return { item: chooseShuffle(candidates, input.seed), relaxed };
   }
   if (input.kind !== "episode") {

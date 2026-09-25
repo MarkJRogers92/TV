@@ -2,6 +2,7 @@ import { Readable } from "node:stream";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ServerContext } from "../context.js";
 import { readTunarrMappingForChannel } from "../tunarrAutoSync.js";
+import { noteProxiedViewer } from "../../integrations/tunarr/sync.js";
 
 type WatchMapping = {
   url?: string;
@@ -106,7 +107,8 @@ function isLoopbackTunarrUrl(value: string) {
   try {
     const url = new URL(value);
     const hostname = url.hostname.toLowerCase();
-    const ipv4Loopback = /^127(?:\.\d{1,3}){3}$/.test(hostname) &&
+    const ipv4Loopback =
+      /^127(?:\.\d{1,3}){3}$/.test(hostname) &&
       hostname.split(".").every((octet) => Number(octet) <= 255);
     return (
       (url.protocol === "http:" || url.protocol === "https:") &&
@@ -195,13 +197,18 @@ function isPlaylist(contentType: string, pathname: string) {
 async function retuneUpstream(
   mapping: Required<WatchMapping>,
   signal: AbortSignal,
+  userAgent: string,
 ) {
   const master = new URL(
     `/stream/channels/${encodeURIComponent(mapping.channelId)}.m3u8`,
     mapping.url,
   );
   try {
-    await fetch(master, { redirect: "error", signal });
+    await fetch(master, {
+      redirect: "error",
+      signal,
+      headers: { "user-agent": userAgent },
+    });
   } catch {
     // Intentionally ignored: the retry reports the upstream's own failure.
   }
@@ -239,11 +246,20 @@ async function proxyResponse(
 
   try {
     const range = request.headers.range;
+    const userAgent =
+      request.headers["user-agent"] ?? "marktv-watch-viewer/1.0";
+    // Record the viewer before contacting Tunarr so a simultaneous lineup
+    // refresh cannot pass its guard during the upstream request.
+    // The inbound User-Agent is controlled by the caller. Even a request that
+    // claims to be one of our probes may be a real viewer on this route.
+    noteProxiedViewer(mapping.channelId);
     const fetchUpstream = () =>
       fetch(target, {
         redirect: "error",
         signal: controller.signal,
-        headers: range ? { range } : undefined,
+        headers: range
+          ? { range, "user-agent": userAgent }
+          : { "user-agent": userAgent },
       });
 
     let response = await fetchUpstream();
@@ -259,7 +275,7 @@ async function proxyResponse(
       status !== 206 &&
       status !== 416
     ) {
-      await retuneUpstream(mapping, controller.signal);
+      await retuneUpstream(mapping, controller.signal, userAgent);
       response = await fetchUpstream();
       status = response.status;
     }

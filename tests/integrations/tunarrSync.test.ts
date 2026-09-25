@@ -1,7 +1,11 @@
 import { expect, test, vi } from "vitest";
 import type { MediaItem, Schedule } from "../../src/domain/models.js";
 import { buildTunarrSyncPlan } from "../../src/integrations/tunarr/plan.js";
-import { syncTunarrPlan } from "../../src/integrations/tunarr/sync.js";
+import {
+  hasRecentProxiedViewer,
+  noteProxiedViewer,
+  syncTunarrPlan,
+} from "../../src/integrations/tunarr/sync.js";
 import type {
   TunarrCapabilities,
   TunarrSnapshots,
@@ -106,22 +110,24 @@ test("revalidates every snapshot before the first mutation", async () => {
 });
 
 test("invalidates a dry run when the catalog changes before fresh sync", async () => {
-  const catalog: MediaItem[] = [{
-    id: "voice",
-    source: "local-folder",
-    path: "/media/voice.mp4",
-    kind: "bumper",
-    title: "Voice",
-    durationMs: 10_000,
-    durationStatus: "ok",
-    available: true,
-    tags: [
-      "voiced-continuity",
-      "continuity-role=break",
-      "continuity-scope=evergreen",
-      "continuity-map=MARKTV_MAIN",
-    ],
-  }];
+  const catalog: MediaItem[] = [
+    {
+      id: "voice",
+      source: "local-folder",
+      path: "/media/voice.mp4",
+      kind: "bumper",
+      title: "Voice",
+      durationMs: 10_000,
+      durationStatus: "ok",
+      available: true,
+      tags: [
+        "voiced-continuity",
+        "continuity-role=break",
+        "continuity-scope=evergreen",
+        "continuity-map=MARKTV_MAIN",
+      ],
+    },
+  ];
   const catalogPlan = buildTunarrSyncPlan(
     schedule,
     [],
@@ -140,7 +146,9 @@ test("invalidates a dry run when the catalog changes before fresh sync", async (
     putFillerList: mutate,
     postProgramming: mutate,
   } as never;
-  await expect(syncTunarrPlan(client, catalogPlan, schedule, [])).rejects.toMatchObject({
+  await expect(
+    syncTunarrPlan(client, catalogPlan, schedule, []),
+  ).rejects.toMatchObject({
     code: "STALE_DRY_RUN",
   });
   expect(mutate).not.toHaveBeenCalled();
@@ -430,11 +438,9 @@ test("reads the channel-keyed session arrays current Tunarr builds serve", async
       putFillerList: mutate,
       postProgramming: mutate,
     } as never;
-    await expect(syncTunarrPlan(client, plan, schedule)).rejects.toMatchObject(
-      {
-        code: "ACTIVE_VIEWERS",
-      },
-    );
+    await expect(syncTunarrPlan(client, plan, schedule)).rejects.toMatchObject({
+      code: "ACTIVE_VIEWERS",
+    });
     expect(mutate).not.toHaveBeenCalled();
   } finally {
     vi.unstubAllGlobals();
@@ -475,3 +481,87 @@ test("ignores channel-keyed sessions for other channels", async () => {
     vi.unstubAllGlobals();
   }
 });
+
+test("recent proxy traffic blocks sync after a localhost monitor overwrites Tunarr attribution", async () => {
+  const channelId = "proxy-viewer-guard";
+  noteProxiedViewer(channelId);
+  const fetchMock = vi.fn(async () => ({
+    ok: true,
+    json: async () => ({
+      [channelId]: [
+        {
+          numConnections: 1,
+          connections: [{ userAgent: "marktv-playout-watch/1.0" }],
+        },
+      ],
+    }),
+  }));
+  vi.stubGlobal("fetch", fetchMock);
+  try {
+    const mutate = vi.fn();
+    const client = {
+      url: "http://fake",
+      snapshot: async () => ({ capabilities, inventory: [], snapshots }),
+      putChannel: mutate,
+      createChannel: mutate,
+      createFillerList: mutate,
+      putFillerList: mutate,
+      postProgramming: mutate,
+    } as never;
+    await expect(
+      syncTunarrPlan(
+        client,
+        {
+          ...plan,
+          mapping: { ...plan.mapping, channelId },
+        },
+        schedule,
+      ),
+    ).rejects.toMatchObject({ code: "ACTIVE_VIEWERS" });
+    expect(mutate).not.toHaveBeenCalled();
+    expect(hasRecentProxiedViewer(channelId, Date.now() + 136_000)).toBe(false);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+test.each([
+  ["marktv-playout-watch/1.0", false],
+  ["marktv-always-on/1.0", false],
+  ["node", true],
+  ["curl/8.0", true],
+])(
+  "treats %s as a real viewer only when it is not an explicit MarkTV probe",
+  async (userAgent, blocks) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          "7": [{ numConnections: 1, connections: [{ userAgent }] }],
+        }),
+      })),
+    );
+    try {
+      const client = {
+        url: "http://fake",
+        snapshot: async () => ({ capabilities, inventory: [], snapshots }),
+        putChannel: async () => ({ ok: true, status: 200 }),
+        createChannel: async () => ({ id: "unused" }),
+        createFillerList: async () => ({ id: "unused" }),
+        putFillerList: async () => ({ ok: true, status: 200 }),
+        postProgramming: async () => ({ ok: true, status: 200 }),
+      } as never;
+      if (blocks)
+        await expect(
+          syncTunarrPlan(client, plan, schedule),
+        ).rejects.toMatchObject({ code: "ACTIVE_VIEWERS" });
+      else
+        await expect(
+          syncTunarrPlan(client, plan, schedule),
+        ).resolves.toMatchObject({ partialFailure: false });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  },
+);

@@ -95,6 +95,13 @@ export function invalidateUnpublishedSchedules(
     zone: channel.timezone,
   }).toISODate();
   if (!today) return 0;
+  const assignmentPrefix = `slot-movie-assignments:${channel.id}:`;
+  for (const setting of repositories.settings.list()) {
+    if (!setting.id.startsWith(assignmentPrefix)) continue;
+    const date = setting.id.slice(assignmentPrefix.length);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date) && date > today)
+      repositories.settings.remove(setting.id);
+  }
   repositories.movieOccurrences.removeAfterDate(channel.id, today);
   return repositories.schedules.removeAfterDate(channel.id, today);
 }
@@ -717,6 +724,7 @@ export class ScheduleService {
   async ensureMovieCoverage(
     channel: Channel,
     today: Date,
+    mayGenerateSchedule = true,
   ): Promise<{ resolvedDates: string[]; generatedDate?: string }> {
     const programming = channel.movieProgramming;
     if (!programming?.enabled) return { resolvedDates: [] };
@@ -738,6 +746,7 @@ export class ScheduleService {
       );
       if (assignment) resolvedDates.push(date);
     }
+    if (!mayGenerateSchedule) return { resolvedDates };
     for (const date of horizon.slice(1)) {
       if (this.repositories.schedules.latestForDate(channel.id, date)) continue;
       const generated = await this.ensure(channel, date);

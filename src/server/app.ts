@@ -715,8 +715,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
         lastSync: (channelId) =>
           readTunarrMappingForChannel(repositories, channelId)?.lastSync,
         movieProgramming: {
-          ensureCoverage: (channel, at) =>
-            context.schedules.ensureMovieCoverage(channel, at),
+          ensureCoverage: (channel, at, mayGenerateSchedule) =>
+            context.schedules.ensureMovieCoverage(
+              channel,
+              at,
+              mayGenerateSchedule,
+            ),
         },
       });
     }

@@ -49,7 +49,9 @@ function setup(options: {
   if (options.enabled === false) channel.movieProgramming!.enabled = false;
   const clock = () => options.now;
   const today = "2026-09-08";
-  const stored = new Map<string, Schedule>([[today, scheduleStub(channel, today)]]);
+  const stored = new Map<string, Schedule>([
+    [today, scheduleStub(channel, today)],
+  ]);
   const generate = vi.fn<
     (channel: Channel, date: string) => Promise<PersistedGeneration>
   >(async (channel, date) => {
@@ -64,6 +66,7 @@ function setup(options: {
     (
       channel: Channel,
       now: Date,
+      mayGenerateSchedule: boolean,
     ) => Promise<{ resolvedDates: string[]; generatedDate?: string }>
   >(
     options.coverage ??
@@ -107,7 +110,10 @@ function setup(options: {
     timers,
     now: clock,
     syncToTunarr,
-    lastSync: () => ({ scheduleId: scheduleStub(channel, today).id, status: "synced" }),
+    lastSync: () => ({
+      scheduleId: scheduleStub(channel, today).id,
+      status: "synced",
+    }),
     movieProgramming: { ensureCoverage },
   });
   return { refresh, generate, syncToTunarr, ensureCoverage };
@@ -125,10 +131,13 @@ test("movie coverage rolls forward in the quiet hours without touching the live 
   });
   await settle();
   expect(ensureCoverage).toHaveBeenCalledTimes(1);
-  expect(ensureCoverage.mock.calls[0][0]).toMatchObject({ id: "marktv-laughs" });
+  expect(ensureCoverage.mock.calls[0][0]).toMatchObject({
+    id: "marktv-laughs",
+  });
+  expect(ensureCoverage.mock.calls[0][2]).toBe(false);
   // Today's schedule already exists and is synced, so nothing is regenerated for
-  // today and nothing is pushed again. The quiet-hours pass still builds tomorrow
-  // (a generation, not a broadcast) and then the first missing horizon day.
+  // today and nothing is pushed again. The quiet-hours pass builds tomorrow;
+  // movie assignment resolution may run, but receives no extra generation budget.
   const generated = generate.mock.calls.map((call) => call[1]);
   expect(generated[0]).toBe("2026-09-09");
   expect(generated).not.toContain("2026-09-08");

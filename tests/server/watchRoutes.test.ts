@@ -7,6 +7,7 @@ import { buildApp } from "../../src/server/app.js";
 import { openDatabase } from "../../src/db/database.js";
 import { createRepositories } from "../../src/db/repositories.js";
 import { watchProxyLimits } from "../../src/server/routes/watch.js";
+import { hasRecentProxiedViewer } from "../../src/integrations/tunarr/sync.js";
 
 const directories: string[] = [];
 
@@ -205,6 +206,34 @@ async function withProxy(
 
 const SEGMENT_PATH =
   "/api/v1/watch/marktv-laughs/media/stream/channels/tunarr-channel/hls/data000001.ts";
+
+test("forwards a viewer identity and remembers proxied playback", async () => {
+  const seenAgents: string[] = [];
+  const { app, teardown } = await withProxy((request, response) => {
+    seenAgents.push(request.headers["user-agent"] ?? "");
+    response.setHeader("content-type", "application/vnd.apple.mpegurl");
+    response.end("#EXTM3U\n");
+  }, { channelId: "proxy-viewer-attribution" });
+  try {
+    const spoofed = await app.inject({
+      method: "GET",
+      url: "/api/v1/watch/marktv-laughs/stream.m3u8",
+      headers: { "user-agent": "marktv-always-on/1.0" },
+    });
+    expect(spoofed.statusCode).toBe(200);
+    expect(hasRecentProxiedViewer("proxy-viewer-attribution")).toBe(true);
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/watch/marktv-laughs/stream.m3u8",
+      headers: { "user-agent": "Mozilla/5.0 Viewer" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(seenAgents).toEqual(["marktv-always-on/1.0", "Mozilla/5.0 Viewer"]);
+    expect(hasRecentProxiedViewer("proxy-viewer-attribution")).toBe(true);
+  } finally {
+    await teardown();
+  }
+});
 
 test("forwards Range requests and preserves the partial-content answer", async () => {
   const seenRanges: (string | undefined)[] = [];

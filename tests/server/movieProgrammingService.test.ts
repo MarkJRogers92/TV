@@ -7,12 +7,27 @@ import {
 } from "../support/repositoryFixture.js";
 import { ensureMovieProgrammingPool } from "../../src/media/movieEnrollment.js";
 import { movieOccurrenceKey } from "../../src/domain/movieProgramming.js";
+import { invalidateUnpublishedSchedules } from "../../src/server/scheduleService.js";
 
 afterEach(async () => {
   await cleanupRepositoryFixtures();
 });
 
 const now = () => new Date("2026-09-07T12:00:00.000Z");
+
+test("invalidating future schedules clears their movie assignments only", async () => {
+  const fixture = await openMovieRepositories({ now });
+  const channel = fixture.fixture.channel;
+  const prefix = `slot-movie-assignments:${channel.id}:`;
+  fixture.repositories.settings.put(`${prefix}2026-09-07`, ["current"]);
+  fixture.repositories.settings.put(`${prefix}2026-09-08`, ["future"]);
+  fixture.repositories.settings.put("slot-movie-assignments:other:2026-09-08", ["other"]);
+  invalidateUnpublishedSchedules(fixture.repositories, channel, now());
+  expect(fixture.repositories.settings.get(`${prefix}2026-09-07`)?.value).toEqual(["current"]);
+  expect(fixture.repositories.settings.get(`${prefix}2026-09-08`)).toBeUndefined();
+  expect(fixture.repositories.settings.get("slot-movie-assignments:other:2026-09-08")?.value).toEqual(["other"]);
+  fixture.close();
+});
 
 test("a generated day stores its movie assignments and rotation", async () => {
   const fixture = await openMovieRepositories({ now });
@@ -242,6 +257,17 @@ test("rolling coverage resolves a week or more of upcoming airings", async () =>
       coverage.generatedDate!,
     ),
   ).toBeTruthy();
+  fixture.close();
+});
+
+test("movie coverage resolves assignments without a second schedule generation", async () => {
+  const fixture = await openMovieRepositories({ now });
+  const channel = fixture.fixture.channel;
+  const coverage = await fixture.service.ensureMovieCoverage(channel, now(), false);
+  expect(coverage.resolvedDates.length).toBeGreaterThanOrEqual(8);
+  expect(coverage.generatedDate).toBeUndefined();
+  expect(fixture.repositories.movieOccurrences.listForDate(channel.id, "2026-09-09").length).toBeGreaterThan(0);
+  expect(fixture.repositories.schedules.latestForDate(channel.id, "2026-09-09")).toBeUndefined();
   fixture.close();
 });
 

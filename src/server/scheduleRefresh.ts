@@ -39,13 +39,11 @@ const HORIZON_DAYS = 3;
 export const scheduleRefreshLimits = {
   intervalMs: 10 * 60_000,
   /**
-   * Local hours during which TOMORROW's schedule is built ahead of time.
+   * Preferred local hours for advance planning while the horizon is healthy.
    *
    * Generation is the slow part - ffmpeg runs over every episode - and the sync is
    * the disruptive part, because replacing the lineup interrupts whoever is
-   * watching. Building tomorrow in advance means the day boundary costs only the
-   * sync, instead of a generation that can take minutes. Chosen to sit well inside
-   * the quietest hours for a channel whose dayparts start in the morning.
+   * watching. A short horizon is caught up outside these hours as needed.
    */
   quietStartHour: 3,
   quietEndHour: 5,
@@ -84,10 +82,7 @@ export interface ScheduleRefreshContext {
        * answers about tomorrow, and the pass rebuilds today: the regeneration and
        * the pre-generation then flip `latest` back and forth forever, every tick.
        */
-      latestForDate: (
-        channelId: string,
-        date: string,
-      ) => Schedule | undefined;
+      latestForDate: (channelId: string, date: string) => Schedule | undefined;
       /**
        * Every stored generation for a channel, so the horizon coverage report can
        * measure the union of what exists. Read-only; the refresh plans nothing
@@ -122,9 +117,9 @@ export interface ScheduleRefreshDependencies {
    * The most recent recorded Tunarr sync. Reading it is what distinguishes
    * "generated" from "actually broadcast", so a failed sync gets retried.
    */
-  readonly lastSync: (channelId: string) =>
-    | { scheduleId?: string; status?: string }
-    | undefined;
+  readonly lastSync: (
+    channelId: string,
+  ) => { scheduleId?: string; status?: string } | undefined;
   /**
    * Rolls the movie-programming feature's coverage forward.
    *
@@ -135,6 +130,7 @@ export interface ScheduleRefreshDependencies {
     ensureCoverage: (
       channel: Channel,
       now: Date,
+      mayGenerateSchedule: boolean,
     ) => Promise<{ resolvedDates: string[]; generatedDate?: string }>;
   };
 }
@@ -168,7 +164,7 @@ export function scheduleHasStaleMedia(
   return schedule.entries.some((entry) => {
     if (entry.kind === "flex") return false;
     const item = entry.mediaId ? byId.get(entry.mediaId) : undefined;
-    return !item || item.path !== entry.path;
+    return !item || !item.available || item.path !== entry.path;
   });
 }
 
@@ -199,8 +195,7 @@ export function scheduleMissesPreviousCarry(
     return false;
   return !next.entries.some(
     (entry) =>
-      entry.mediaId === continuation.mediaId &&
-      (entry.sourceOffsetMs ?? 0) > 0,
+      entry.mediaId === continuation.mediaId && (entry.sourceOffsetMs ?? 0) > 0,
   );
 }
 
@@ -254,12 +249,14 @@ export function startScheduleRefresh(
             schedule = undefined;
           }
 
+          let generatedThisPass = false;
           if (!schedule) {
             logInfo("schedule.refresh", "Generating a schedule for today", {
               channelId: channel.id,
               date: today,
             });
             const generated = await context.schedules.generate(channel, today);
+            generatedThisPass = true;
             if (generated.ok === false) {
               logWarn("schedule.refresh", "Schedule generation was refused", {
                 channelId: channel.id,
@@ -280,7 +277,10 @@ export function startScheduleRefresh(
           // is recorded as synced, instead of assuming that generating was enough.
           // Without that, one failed sync would strand the lineup until the next day.
           const synced = dependencies.lastSync(channel.id);
-          if (synced?.scheduleId !== schedule.id || synced.status !== "synced") {
+          if (
+            synced?.scheduleId !== schedule.id ||
+            synced.status !== "synced"
+          ) {
             // The id is passed rather than letting the sync resolve "the newest
             // schedule" for itself: in the quiet hours the newest is tomorrow's, and
             // pushing that would air the wrong day.
@@ -312,16 +312,27 @@ export function startScheduleRefresh(
           // midnight TONIGHT, so by then tomorrow is already on air. One generation
           // is the cost, and the alternative is that the rest of today's last
           // feature is never aired.
+          const coverageBeforePlanning = assessCoverage(
+            context.repositories.schedules.list(channel.id),
+            {
+              startMs: now().getTime(),
+              endMs: now().getTime() + HORIZON_HOURS * 3_600_000,
+            },
+          );
           const carryGap =
             tomorrow && storedTomorrow
               ? scheduleMissesPreviousCarry(schedule, storedTomorrow)
               : false;
           if (
             tomorrow &&
+            !generatedThisPass &&
             (!storedTomorrow ||
               scheduleHasStaleMedia(storedTomorrow, media) ||
               carryGap) &&
             (carryGap ||
+              // A short rolling runway must recover without waiting for the
+              // next quiet window. Generation can exceed that entire window.
+              !coverageBeforePlanning.contiguous ||
               (local.hour >= scheduleRefreshLimits.quietStartHour &&
                 local.hour < scheduleRefreshLimits.quietEndHour))
           ) {
@@ -342,6 +353,7 @@ export function startScheduleRefresh(
               date: tomorrow,
             });
             const ahead = await context.schedules.generate(channel, tomorrow);
+            generatedThisPass = true;
             if (ahead.ok === false) {
               logWarn("schedule.refresh", "Pre-generation was refused", {
                 channelId: channel.id,
@@ -358,33 +370,47 @@ export function startScheduleRefresh(
           // channel without its own lookahead (the all-day movie channels) held
           // ~40h of metadata. Fill the FIRST missing future date, one per pass, so
           // the horizon catches up without a generation storm and never leaves a
-          // hole behind an earlier gap. Gated to the quiet hours like the
-          // pre-generation above: future schedules are not broadcast, but building
-          // them must not compete with an active day.
-          if (
-            local.hour >= scheduleRefreshLimits.quietStartHour &&
-            local.hour < scheduleRefreshLimits.quietEndHour
-          ) {
-            for (let offset = 1; offset <= HORIZON_DAYS; offset += 1) {
-              const date = local.plus({ days: offset }).toISODate();
-              if (!date) continue;
-              if (context.repositories.schedules.latestForDate(channel.id, date))
-                continue;
-              logInfo("schedule.refresh", "Filling the metadata horizon", {
-                channelId: channel.id,
-                date,
-              });
-              const filled = await context.schedules.generate(channel, date);
-              if (filled.ok === false) {
-                logWarn("schedule.refresh", "Horizon generation was refused", {
+          // hole behind an earlier gap. A two-hour quiet window cannot guarantee
+          // this when a generation takes longer, so a short runway is caught up
+          // throughout the day. This horizon pass builds at most one future
+          // date per channel/pass.
+          if (!generatedThisPass) {
+            const coverage = assessCoverage(
+              context.repositories.schedules.list(channel.id),
+              {
+                startMs: now().getTime(),
+                endMs: now().getTime() + HORIZON_HOURS * 3_600_000,
+              },
+            );
+            if (!coverage.contiguous) {
+              for (let offset = 1; offset <= HORIZON_DAYS; offset += 1) {
+                const date = local.plus({ days: offset }).toISODate();
+                if (!date) continue;
+                if (
+                  context.repositories.schedules.latestForDate(channel.id, date)
+                )
+                  continue;
+                logInfo("schedule.refresh", "Filling the metadata horizon", {
                   channelId: channel.id,
                   date,
-                  issues: filled.issues.map((issue) =>
-                    "code" in issue ? issue.code : "unknown",
-                  ),
                 });
+                const filled = await context.schedules.generate(channel, date);
+                generatedThisPass = true;
+                if (filled.ok === false) {
+                  logWarn(
+                    "schedule.refresh",
+                    "Horizon generation was refused",
+                    {
+                      channelId: channel.id,
+                      date,
+                      issues: filled.issues.map((issue) =>
+                        "code" in issue ? issue.code : "unknown",
+                      ),
+                    },
+                  );
+                }
+                break; // one generation per pass
               }
-              break; // one generation per pass
             }
           }
 
@@ -399,10 +425,12 @@ export function startScheduleRefresh(
             local.hour < scheduleRefreshLimits.quietEndHour
           ) {
             try {
-              const coverage = await dependencies.movieProgramming.ensureCoverage(
-                channel,
-                now(),
-              );
+              const coverage =
+                await dependencies.movieProgramming.ensureCoverage(
+                  channel,
+                  now(),
+                  !generatedThisPass,
+                );
               logInfo("schedule.refresh", "Movie coverage rolled forward", {
                 channelId: channel.id,
                 resolved: coverage.resolvedDates.length,
@@ -437,12 +465,16 @@ export function startScheduleRefresh(
               contiguous: horizon.contiguous,
             });
           } catch (error) {
-            logError("schedule.refresh.coverage", error, { channelId: channel.id });
+            logError("schedule.refresh.coverage", error, {
+              channelId: channel.id,
+            });
           }
         } catch (error) {
           // A bad catalog entry, failed generation, or Tunarr error on one
           // channel must not keep the other channels from refreshing.
-          logError("schedule.refresh.channel", error, { channelId: channel.id });
+          logError("schedule.refresh.channel", error, {
+            channelId: channel.id,
+          });
         }
       }
     } catch (error) {

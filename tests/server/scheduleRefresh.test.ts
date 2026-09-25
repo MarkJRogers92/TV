@@ -87,6 +87,7 @@ function setup(
     stored?: Schedule[];
     media?: MediaItem[];
     generate?: (channel: Channel, date: string) => Promise<PersistedGeneration>;
+    generatedSchedule?: (date: string) => Schedule;
     lastSync?: () => { scheduleId?: string; status?: string } | undefined;
     now?: () => Date;
     channels?: Channel[];
@@ -109,7 +110,8 @@ function setup(
   >(
     options.generate ??
       (async (_channel: Channel, date: string) => {
-        const schedule = scheduleStub(date);
+        const schedule =
+          options.generatedSchedule?.(date) ?? scheduleStub(date);
         stored.set(date, schedule);
         return { ok: true, schedule, exportPath: "/tmp/export.json" };
       }),
@@ -158,7 +160,9 @@ const settle = async () => {
 test("generates today's schedule and pushes it to Tunarr when the stored one is older", async () => {
   const lines: string[] = [];
   logSink.sink = (line) => lines.push(line);
-  const { refresh, generate, syncToTunarr } = setup({ storedDate: "2026-09-15" });
+  const { refresh, generate, syncToTunarr } = setup({
+    storedDate: "2026-09-15",
+  });
 
   await vi.waitFor(() => expect(syncToTunarr).toHaveBeenCalledTimes(1));
 
@@ -171,7 +175,7 @@ test("generates today's schedule and pushes it to Tunarr when the stored one is 
   refresh.stop();
 });
 
-test("does nothing when today's schedule already exists and is live", async () => {
+test("does not regenerate or resync a live today while extending its runway", async () => {
   const { refresh, generate, syncToTunarr } = setup({
     storedDate: TODAY,
     lastSync: () => ({ scheduleId: scheduleStub(TODAY).id, status: "synced" }),
@@ -181,7 +185,7 @@ test("does nothing when today's schedule already exists and is live", async () =
 
   // The whole point of the date comparison: a refresh must not regenerate a
   // schedule that is already correct for today and already broadcast.
-  expect(generate).not.toHaveBeenCalled();
+  expect(generate.mock.calls.map((call) => call[1])).toEqual(["2026-09-18"]);
   expect(syncToTunarr).not.toHaveBeenCalled();
   refresh.stop();
 });
@@ -203,6 +207,40 @@ test("fills the first missing future date to hold the 72-hour horizon", async ()
   refresh.stop();
 });
 
+test("fills one future day per pass outside quiet hours and stops at 72 hours", async () => {
+  const fullDay = (date: string): Schedule => {
+    const start = Date.parse(`${date}T05:00:00.000Z`);
+    return scheduleStub(date, [
+      {
+        id: `full-${date}`,
+        start: new Date(start).toISOString(),
+        end: new Date(start + 86_400_000).toISOString(),
+        localStart: "00:00",
+        localEnd: "00:00",
+        durationMs: 86_400_000,
+        kind: "flex",
+        title: "Already planned",
+      },
+    ]);
+  };
+  const { refresh, generate, syncToTunarr } = setup({
+    stored: [fullDay(TODAY)],
+    generatedSchedule: fullDay,
+    lastSync: () => ({ scheduleId: scheduleStub(TODAY).id, status: "synced" }),
+  });
+  await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1));
+  await refresh.refreshOnce();
+  await refresh.refreshOnce();
+  await refresh.refreshOnce();
+  expect(generate.mock.calls.map((call) => call[1])).toEqual([
+    "2026-09-18",
+    "2026-09-19",
+    "2026-09-20",
+  ]);
+  expect(syncToTunarr).not.toHaveBeenCalled();
+  refresh.stop();
+});
+
 test("retries the sync when the previous attempt did not succeed", async () => {
   // Generating is not broadcasting. The sync's plan-then-apply guard refuses when
   // the channel state moves between its snapshots, which an active viewer causes,
@@ -215,7 +253,7 @@ test("retries the sync when the previous attempt did not succeed", async () => {
 
   await vi.waitFor(() => expect(syncToTunarr).toHaveBeenCalledTimes(1));
 
-  expect(generate).not.toHaveBeenCalled();
+  expect(generate.mock.calls.map((call) => call[1])).toEqual(["2026-09-18"]);
   refresh.stop();
 });
 
@@ -290,7 +328,11 @@ test("a failed channel does not prevent the next channel from refreshing", async
     channels: [first, second],
     generate: async (channel, date) => {
       if (channel.id === first.id) throw new Error("first channel failed");
-      return { ok: true, schedule: scheduleStub(date), exportPath: "/tmp/export.json" };
+      return {
+        ok: true,
+        schedule: scheduleStub(date),
+        exportPath: "/tmp/export.json",
+      };
     },
   });
 
@@ -327,16 +369,17 @@ test("pre-generates tomorrow's schedule in the quiet hours without broadcasting 
   refresh.stop();
 });
 
-test("does not pre-generate outside the quiet hours", async () => {
+test("catches up a short horizon outside quiet hours without broadcasting it", async () => {
   // 17:00Z is 12:00 in America/Chicago - the default clock in these tests.
-  const { refresh, generate } = setup({
+  const { refresh, generate, syncToTunarr } = setup({
     storedDate: TODAY,
     lastSync: () => ({ scheduleId: scheduleStub(TODAY).id, status: "synced" }),
   });
 
   await settle();
 
-  expect(generate).not.toHaveBeenCalled();
+  expect(generate.mock.calls.map((call) => call[1])).toEqual(["2026-09-18"]);
+  expect(syncToTunarr).not.toHaveBeenCalled();
   refresh.stop();
 });
 
@@ -468,6 +511,15 @@ test("reads a stored schedule's media references against the catalog", () => {
       catalog,
     ),
   ).toBe(false);
+  // A quarantine makes the same path unusable without renaming it.
+  expect(
+    scheduleHasStaleMedia(
+      scheduleStub(TODAY, [
+        scheduledMedia("entry", "episode-1", "/media/new/renamed.mkv"),
+      ]),
+      [{ ...catalog[0]!, available: false }],
+    ),
+  ).toBe(true);
   // Renamed: the catalog moved that media somewhere else.
   expect(
     scheduleHasStaleMedia(
@@ -544,7 +596,7 @@ test("leaves today's stored schedule alone while its media still matches the cat
 
   // Regenerating an already-correct-and-synced schedule every ten minutes is the
   // loop this check must not reintroduce.
-  expect(generate).not.toHaveBeenCalled();
+  expect(generate.mock.calls.map((call) => call[1])).toEqual(["2026-09-18"]);
   expect(syncToTunarr).not.toHaveBeenCalled();
   refresh.stop();
 });
@@ -569,9 +621,7 @@ test("pre-generates a replacement for a stale tomorrow in the quiet hours", asyn
 });
 
 /** Today, having just recorded that a feature runs past the day boundary. */
-function carryingSchedule(
-  generatedAt = "2026-09-17T09:00:00.000Z",
-): Schedule {
+function carryingSchedule(generatedAt = "2026-09-17T09:00:00.000Z"): Schedule {
   return {
     ...scheduleStub(TODAY),
     generatedAt,
@@ -586,7 +636,9 @@ function carryingSchedule(
 }
 
 /** Tomorrow, opening on the carried film from the offset today recorded. */
-function continuingSchedule(generatedAt = "2026-09-17T09:30:00.000Z"): Schedule {
+function continuingSchedule(
+  generatedAt = "2026-09-17T09:30:00.000Z",
+): Schedule {
   return {
     ...scheduleStub("2026-09-18", [
       {
@@ -664,12 +716,18 @@ test("leaves a tomorrow that already carries the film alone", async () => {
   const tomorrow = continuingSchedule();
   const { refresh, generate, syncToTunarr } = setup({
     stored: [today, tomorrow],
+    media: [
+      {
+        ...catalogItem("cult-movie-1", "/media/movies/Cult/cult-movie-1.mp4"),
+        kind: "movie",
+      },
+    ],
     lastSync: () => ({ scheduleId: today.id, status: "synced" }),
   });
 
   await settle();
 
-  expect(generate).not.toHaveBeenCalled();
+  expect(generate.mock.calls.map((call) => call[1])).toEqual(["2026-09-19"]);
   expect(syncToTunarr).not.toHaveBeenCalled();
   refresh.stop();
 });

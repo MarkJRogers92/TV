@@ -46,11 +46,39 @@ type SyncClient = Pick<
  * sync permanently: measured 2026-09-24, the only "viewer" on all three channels
  * was `127.0.0.1 / node`, and no lineup had been accepted since 2026-09-21 -
  * so the watchdog was holding the channel on a four-day-old lineup. Anything
- * unrecognised still counts as a viewer (see below); only a named script client
- * is discounted.
+ * unrecognised still counts as a viewer (see below); only this app's explicitly
+ * named probes are discounted. Generic node/curl/python clients may be viewers.
  */
 const AUTOMATION_USER_AGENT =
-  /^(node|undici|curl|wget|python|python-requests|axios|got|marktv)\b/i;
+  /^marktv-(?:always-on|playout-watch)\/\d+(?:\.\d+)*(?:\s|$)/i;
+
+// Tunarr indexes connections by client IP. Its localhost entry can be replaced
+// by a later monitor request even while a browser is still using this proxy.
+// Remember actual proxy traffic separately for Tunarr's 120-second
+// stale-connection interval plus its 15-second cleanup grace.
+const PROXY_VIEWER_TTL_MS = 135_000;
+const proxiedViewerAt = new Map<string, number>();
+
+export function noteProxiedViewer(channelId: string, at = Date.now()): void {
+  for (const [id, seenAt] of proxiedViewerAt) {
+    if (at - seenAt > PROXY_VIEWER_TTL_MS) proxiedViewerAt.delete(id);
+  }
+  proxiedViewerAt.set(channelId, at);
+}
+
+export function hasRecentProxiedViewer(
+  channelId: string,
+  at = Date.now(),
+): boolean {
+  const seenAt = proxiedViewerAt.get(channelId);
+  return seenAt !== undefined && at - seenAt <= PROXY_VIEWER_TTL_MS;
+}
+
+export function isMarkTvAutomationUserAgent(
+  value: string | undefined,
+): boolean {
+  return AUTOMATION_USER_AGENT.test(value ?? "");
+}
 
 /**
  * Live connections watching one mapped channel, read from Tunarr's session
@@ -122,7 +150,7 @@ async function activeSessionCount(
       continue;
     }
     active += connections.filter(
-      (connection) => !AUTOMATION_USER_AGENT.test(connection.userAgent ?? ""),
+      (connection) => !isMarkTvAutomationUserAgent(connection.userAgent),
     ).length;
   }
   return active;
@@ -150,7 +178,8 @@ export async function syncTunarrPlan(
     : plan.mapping.channelId;
   if (
     existingChannelId &&
-    (await activeSessionCount(client, existingChannelId)) > 0
+    ((await activeSessionCount(client, existingChannelId)) > 0 ||
+      hasRecentProxiedViewer(existingChannelId))
   )
     throw tunarrError(
       "ACTIVE_VIEWERS",
