@@ -24,6 +24,8 @@ export function requestedPreparation(tags: readonly string[]): "remux" | null {
 export function remuxEligible(metadata: PreflightMetadata): boolean {
   if (metadata.status !== "passed" || metadata.mp4MoovBeforeMdat !== false) return false;
   if (!metadata.containerFormatNames.some((name) => name === "mov" || name === "mp4")) return false;
+  if (metadata.unsupportedTrackCount !== 0) return false;
+  if (metadata.tracks.filter((track) => track.type === "video").length !== 1) return false;
   const video = metadata.tracks.find((track) => track.type === "video" && track.selected);
   const audioTracks = metadata.tracks.filter((track) => track.type === "audio");
   const subtitles = metadata.tracks.filter((track) => track.type === "subtitle");
@@ -73,7 +75,9 @@ export async function renderPreparedRendition(input: {
   // This MP4 profile cannot promise preservation of PGS/forced subtitles or
   // alternate language tracks. Keep the original until that contract is solved.
   if (evidence.metadata.tracks.some((track) => track.type === "subtitle") ||
-      evidence.metadata.tracks.filter((track) => track.type === "audio").length > 1)
+      evidence.metadata.tracks.filter((track) => track.type === "audio").length > 1 ||
+      evidence.metadata.tracks.filter((track) => track.type === "video").length !== 1 ||
+      evidence.metadata.unsupportedTrackCount !== 0)
     throw new Error("alternate_tracks_require_review");
   if (!sourceVersionsEqual(job.source, await readSourceVersion(job.source.path))) throw new Error("source_changed");
   await mkdir(cacheDirectory, { recursive: true });

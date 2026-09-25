@@ -40,6 +40,8 @@ export type PreflightMetadata = {
   /** `false` means the MP4 index follows media data; `null` means not established. */
   mp4MoovBeforeMdat: boolean | null;
   tracks: PreflightTrack[];
+  /** Streams omitted by the selected-track parser, including cover art and data. */
+  unsupportedTrackCount: number | null;
   selectedVideoTrackIndex: number | null;
   selectedAudioTrackIndex: number | null;
   reason?: string;
@@ -206,7 +208,7 @@ export async function collectPreflightEvidence(path: string, options: PreflightO
   let sourceRecheckFailed = false;
   const metadata: PreflightMetadata = {
     status: "unavailable", durationSeconds: null, containerFormatNames: [],
-    mp4MoovBeforeMdat: null, tracks: [],
+    mp4MoovBeforeMdat: null, tracks: [], unsupportedTrackCount: null,
     selectedVideoTrackIndex: null, selectedAudioTrackIndex: null, reason: "source_unavailable",
   };
   let sampledDecode = deferredDecode();
@@ -222,6 +224,11 @@ export async function collectPreflightEvidence(path: string, options: PreflightO
     ], runOptions);
     const payload = JSON.parse(stdout) as ProbePayload;
     const tracks = buildTracks(payload);
+    metadata.unsupportedTrackCount = Array.isArray(payload.streams)
+      ? payload.streams.filter((stream) =>
+          (stream.codec_type !== "video" && stream.codec_type !== "audio" && stream.codec_type !== "subtitle") ||
+          (stream.codec_type === "video" && numeric(stream.disposition?.attached_pic) === 1)).length
+      : null;
     metadata.containerFormatNames = typeof payload.format?.format_name === "string"
       ? payload.format.format_name.split(",").map((name) => name.trim()).filter(Boolean) : [];
     if (metadata.containerFormatNames.includes("mov") || metadata.containerFormatNames.includes("mp4"))
