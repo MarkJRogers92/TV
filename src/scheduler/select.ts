@@ -11,10 +11,11 @@ export type SelectionInput = {
   seed: string;
   allowCooldownRelaxation?: boolean;
   /**
-   * Series whose pool has been fully aired and may therefore start again. Absent
-   * (or missing a series), an exhausted series is held instead of wrapped - which
-   * is what keeps a member it has never played, such as an earlier episode that
-   * appeared later, from being mistaken for a restart.
+   * Series that may start again once their run runs out. Absent (or missing a
+   * series), an exhausted series is held instead of wrapped - the default EP03
+   * and EP05 assert. Production supplies it for any series it has a recorded
+   * position for, because the rule there is simply: keep working through the
+   * episode numbers, and start again at the first when there are none left.
    */
   wrapAllowed?: ReadonlySet<string>;
 };
@@ -135,21 +136,6 @@ function chooseEpisodeChronological(
     )
   )
     return undefined;
-  const floors = new Map<
-    string,
-    { item: MediaItem; position: EpisodePosition }
-  >();
-  for (const entry of resolvedHistory) {
-    const key = seriesOrderKey(entry.item);
-    const position = episodePosition(entry.item);
-    const current = floors.get(key);
-    if (!current || compareEpisodePosition(position, current.position) > 0) {
-      floors.set(key, { item: entry.item, position });
-    }
-  }
-  const activeSeries = resolvedHistory.length
-    ? seriesOrderKey(resolvedHistory[resolvedHistory.length - 1].item)
-    : undefined;
   const grouped = new Map<string, MediaItem[]>();
   for (const item of available) {
     if (item.season === undefined || item.episode === undefined) continue;
@@ -163,6 +149,70 @@ function chooseEpisodeChronological(
       compareEpisodePosition(episodePosition(left), episodePosition(right)),
     );
   }
+  const lastAvailable = new Map<string, EpisodePosition>();
+  for (const [key, list] of grouped) {
+    const last = list[list.length - 1];
+    if (last) lastAvailable.set(key, episodePosition(last));
+  }
+
+  /*
+   * Where each series has got to.
+   *
+   * Normally the highest episode in its history, so a torn or rebuilt history
+   * cannot drag the run backwards. A series that has STARTED AGAIN is the
+   * exception: the run it is in now began at the last wrap, and its floor is the
+   * highest episode SINCE that wrap.
+   *
+   * Without that, a wrap re-selects the same first episode forever - the newest
+   * play is S1E1, the highest in history is still S1E7 from the run that just
+   * ended, the selector reads "nothing above S1E7" and wraps to S1E1 again.
+   * Measured on the live channel 2026-09-24: one Land of the Lost file filled
+   * both 07:00 and 20:30 of the same day.
+   */
+  const floors = new Map<
+    string,
+    { item: MediaItem; position: EpisodePosition }
+  >();
+  const historyBySeries = new Map<
+    string,
+    Array<{ item: MediaItem; position: EpisodePosition }>
+  >();
+  for (const entry of resolvedHistory) {
+    const key = seriesOrderKey(entry.item);
+    const record = { item: entry.item, position: episodePosition(entry.item) };
+    const bucket = historyBySeries.get(key);
+    if (bucket) bucket.push(record);
+    else historyBySeries.set(key, [record]);
+  }
+  for (const [key, plays] of historyBySeries) {
+    // A wrap is a step BACKWARDS taken from the series' last available episode -
+    // the point at which it has nothing left to advance to. Only that starts a
+    // new run; any other backward step is a fault in the history, not a restart,
+    // and must not carry the run back with it.
+    const last = lastAvailable.get(key);
+    let runStart = 0;
+    if (last) {
+      for (let index = plays.length - 1; index > 0; index -= 1) {
+        const before = plays[index - 1]!.position;
+        if (
+          compareEpisodePosition(plays[index]!.position, before) < 0 &&
+          compareEpisodePosition(before, last) >= 0
+        ) {
+          runStart = index;
+          break;
+        }
+      }
+    }
+    let floor = plays[runStart]!;
+    for (const play of plays.slice(runStart + 1)) {
+      if (compareEpisodePosition(play.position, floor.position) > 0)
+        floor = play;
+    }
+    floors.set(key, floor);
+  }
+  const activeSeries = resolvedHistory.length
+    ? seriesOrderKey(resolvedHistory[resolvedHistory.length - 1].item)
+    : undefined;
   const seriesNext = new Map<string, MediaItem>();
   for (const [key, list] of grouped) {
     const floor = floors.get(key);

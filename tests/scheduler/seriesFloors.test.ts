@@ -72,8 +72,6 @@ const identify = (mediaId: string) => {
       };
 };
 
-const poolMembers = new Map([["show", new Set(episodes.map(({ id }) => id))]]);
-
 function repositoriesWithSettings() {
   const store = new Map<string, { value: unknown }>();
   const repositories = {
@@ -180,42 +178,11 @@ test("[EP] the floor is where the series got to on the most recent prior date", 
   ).toEqual(["s1e2"]);
 });
 
-test("[EP] a spent pool may start again; one that is not spent may not", () => {
-  const partial: SeriesFloorRecord[] = [
-    {
-      channelId: "c",
-      seriesKey: "show",
-      date: "2026-09-19",
-      season: 1,
-      episode: 3,
-      mediaId: "s1e3",
-      playedIds: ["s1e1", "s1e2", "s1e3"],
-    },
-  ];
-  // S1E4..S1E6 have never aired, so this series is NOT finished.
-  expect(wrapAllowedSeries(partial, "2026-09-20", poolMembers)).toEqual(
-    new Set(),
-  );
-
-  const spent: SeriesFloorRecord[] = [
-    {
-      channelId: "c",
-      seriesKey: "show",
-      date: "2026-09-19",
-      season: 1,
-      episode: 6,
-      mediaId: "s1e6",
-      playedIds: episodes.map(({ id }) => id),
-    },
-  ];
-  expect(wrapAllowedSeries(spent, "2026-09-20", poolMembers)).toEqual(
-    new Set(["show"]),
-  );
-});
-
-test("[EP05] a member the series never played keeps it from wrapping", () => {
-  // Every episode but s1e2 has aired - an earlier episode that appeared later is
-  // exactly the case EP05 guards. It must be neither skipped over nor wrapped.
+test("[EP] a series with a recorded position may start again once its run ends", () => {
+  // S1E2 never aired, but the cursor is past it - and once past, only a restart
+  // can ever play it. Withholding the restart here does not protect S1E2, it
+  // holds the series at its last episode permanently and the slot falls to
+  // filler. So the member is not what decides; the position is.
   const records: SeriesFloorRecord[] = [
     {
       channelId: "c",
@@ -227,9 +194,16 @@ test("[EP05] a member the series never played keeps it from wrapping", () => {
       playedIds: ["s1e1", "s1e3", "s1e4", "s1e5", "s1e6"],
     },
   ];
-  expect(wrapAllowedSeries(records, "2026-09-20", poolMembers)).toEqual(
+  expect(wrapAllowedSeries(records, "2026-09-20", ["show"])).toEqual(
+    new Set(["show"]),
+  );
+
+  // A series with no record has not begun: the opener rule decides, not a wrap.
+  expect(wrapAllowedSeries(records, "2026-09-20", ["other"])).toEqual(
     new Set(),
   );
+  // Neither has one whose only record is for a LATER date.
+  expect(wrapAllowedSeries(records, "2026-09-10", ["show"])).toEqual(new Set());
 });
 
 test("[EP] a spent pool starts again at its first episode, and holds without the licence", () => {
@@ -249,7 +223,7 @@ test("[EP] a spent pool starts again at its first episode, and holds without the
     items: episodes,
     kind: "episode",
     history: floorHistory(spent, "2026-09-20"),
-    wrapAllowed: wrapAllowedSeries(spent, "2026-09-20", poolMembers),
+    wrapAllowed: wrapAllowedSeries(spent, "2026-09-20", ["show"]),
     at: "2026-09-20T20:00:00.000Z",
     seed: "s",
   });
@@ -310,17 +284,15 @@ test("[EP] the recorded cycle accumulates across days and resets when it wraps",
   expect(record).toMatchObject({ season: 1, episode: 1, mediaId: "s1e1" });
   expect(record.playedIds).toEqual(["s1e1"]);
 
-  // The new cycle has only played S1E1, so the series is not spent a second time.
+  // The series has a recorded position, so a later date may start it again.
   expect(
-    wrapAllowedSeries(
-      readSeriesFloors(repositories, "c"),
-      "2026-09-23",
-      poolMembers,
-    ),
-  ).toEqual(new Set());
+    wrapAllowedSeries(readSeriesFloors(repositories, "c"), "2026-09-23", [
+      "show",
+    ]),
+  ).toEqual(new Set(["show"]));
 });
 
-test("[EP] rebuilding a day can raise its floor, never lower it", () => {
+test("[EP] a regenerated day's floor follows the plan that will air", () => {
   const { repositories } = repositoriesWithSettings();
   recordSeriesFloors(
     repositories,
@@ -329,7 +301,10 @@ test("[EP] rebuilding a day can raise its floor, never lower it", () => {
     schedule(["s1e4"]),
     identify,
   );
-  // A rebuild of the same day that only reaches S1E2 must not walk it back.
+  // The day is regenerated and now reaches only S1E2. The floor must follow the
+  // new plan, not the old, further one: the successor day is built from
+  // whatever is recorded here, so keeping the stale S1E4 would make it start at
+  // S1E5 and silently skip two episodes that exist.
   recordSeriesFloors(
     repositories,
     "c",
@@ -341,11 +316,11 @@ test("[EP] rebuilding a day can raise its floor, never lower it", () => {
   expect(recorded).toHaveLength(1);
   expect(recorded[0]).toMatchObject({
     date: "2026-09-20",
-    episode: 4,
-    mediaId: "s1e4",
+    episode: 2,
+    mediaId: "s1e2",
   });
 
-  // A rebuild that gets FURTHER does advance.
+  // And a regeneration that reaches further advances just the same.
   recordSeriesFloors(
     repositories,
     "c",

@@ -25,21 +25,23 @@
  * generation order, regenerating any day is order-independent, and a missing or
  * rebuilt neighbour cannot move it.
  *
- * THE FLOOR IS A POSITION *AND* A CYCLE.
+ * THE RULE IS A POSITION, AND A RESTART AT THE END.
  *
- * A position alone is not enough once a series is allowed to start again when its
- * pool is spent: after a wrap the series sits BEHIND where it once was, so "the
- * furthest position ever reached" would send it back to the old high-water mark
- * and replay the same opening episodes every day. The floor therefore also
- * records which members have aired in the CURRENT cycle, which is what makes both
- * of these true at once:
+ * A series works through its episode numbers in order; when nothing is left
+ * above the cursor it starts again at its first episode. That much needs only
+ * the position - the selector advances from it and never moves backwards, so no
+ * episode can air twice before the run runs out.
  *
- *  - an episode cannot air twice before its pool is spent (`floorHistory` gives
- *    the position to advance from, and the selector only ever moves forward), and
- *  - a spent pool starts again at its first episode (`wrapAllowedSeries` says so,
- *    and only then) - while a series with a member it has NOT played, such as an
- *    earlier episode that appeared later, is held rather than wrapped. That is
- *    the difference between cycling and the EP03/EP05 defects.
+ * Two things the position alone does not settle, and how they are handled:
+ *
+ *  - After a restart the series sits BEHIND where it once was, so "the furthest
+ *    position ever reached" would drag it back to the old high-water mark and
+ *    replay the same opening episodes every day. The floor is therefore the most
+ *    RECENT prior date's position, not the furthest.
+ *  - The members aired in the current run are still recorded (`playedIds`), as
+ *    evidence of what actually went out. They are NOT a licence: a run can begin
+ *    mid-pool, in which case it can never list every member, and gating the
+ *    restart on that held every sitcom at its last episode forever.
  *
  * The floor is not a plan: it records only where a series had got to, so it
  * cannot make an episode air - it can only stop one airing twice.
@@ -167,33 +169,35 @@ export function floorHistory(
 }
 
 /**
- * Series whose pool has been fully aired and may therefore start again.
+ * Series that may start again once their run runs out.
  *
- * This is the ONLY licence to repeat an episode, and it is deliberately
- * conservative: a series qualifies only when every member of its pool appears in
- * the current cycle's played set. Anything else - a member not yet aired, an
- * earlier episode that appeared after the series moved on, a pool with no members
- * - leaves the series held, which is the EP03/EP05 behaviour.
+ * The rule is the one the channel is specified by, and it is deliberately
+ * simple: work through the episode numbers in order, and when there is nothing
+ * left above the cursor, go back to episode one. Nothing can air twice before
+ * that, because the selector only ever moves forward from the floor.
+ *
+ * The only thing consulted here is whether the series HAS a recorded position.
+ * A series with none has not begun, and is left to the opener rule rather than
+ * being treated as exhausted.
+ *
+ * This previously also required every member of the pool to have aired once, to
+ * stop a torn floor from looking like a finished run. That condition can never
+ * be met by a series whose run began mid-pool - and once the cursor passes a
+ * member, only a restart can ever play it - so the series was held at its last
+ * episode forever. Measured 2026-09-24: every sitcom reached its final episode
+ * at once and six days fell back to filler (`EXHAUSTED_POOL` on every slot).
+ * Position is the fault the durable, date-keyed floor fixes; completeness was
+ * the wrong instrument for it and starved the channel instead.
  */
 export function wrapAllowedSeries(
   records: readonly SeriesFloorRecord[],
   date: string,
-  poolMembersBySeries: ReadonlyMap<string, ReadonlySet<string>>,
+  seriesKeys: Iterable<string>,
 ): Set<string> {
   const allowed = new Set<string>();
-  for (const [seriesKey, members] of poolMembersBySeries) {
-    if (members.size === 0) continue;
-    const record = priorRecord(records, date, seriesKey);
-    if (record === undefined) continue;
-    const played = new Set(record.playedIds);
-    let complete = true;
-    for (const memberId of members) {
-      if (!played.has(memberId)) {
-        complete = false;
-        break;
-      }
-    }
-    if (complete) allowed.add(seriesKey);
+  for (const seriesKey of seriesKeys) {
+    if (priorRecord(records, date, seriesKey) !== undefined)
+      allowed.add(seriesKey);
   }
   return allowed;
 }
@@ -207,8 +211,7 @@ export function wrapAllowedSeries(
  * information - it only makes it durable and date-keyed, which is what stops a
  * missing or rebuilt neighbour from dragging it backwards.
  *
- * Safe to run repeatedly: `recordSeriesFloors` keeps the further position per
- * series and date, so a backfill can raise a floor but never lower one.
+ * Safe to run repeatedly: each date keeps the value from its newest generation.
  */
 export function backfillSeriesFloors(
   repositories: Repositories,
@@ -311,17 +314,22 @@ export function recordSeriesFloors(
   if (written.size === 0) return 0;
 
   const merged = new Map<string, SeriesFloorRecord>();
-  for (const record of readSeriesFloors(repositories, channelId)) {
+  for (const record of stored) {
     merged.set(`${record.seriesKey}@${record.date}`, record);
   }
   for (const record of written.values()) {
-    const id = `${record.seriesKey}@${record.date}`;
-    const existing = merged.get(id);
-    // Same series and date keeps the FURTHER position, with its own cycle: a
-    // rebuild of a day may raise its own floor but must not lower it.
-    if (existing === undefined || comparePositions(record, existing) > 0) {
-      merged.set(id, record);
-    }
+    // The plan just recorded is the one that will air for this date, so it is
+    // what the day following it has to continue from. This REPLACES any earlier
+    // value for the same series and date.
+    //
+    // An earlier version kept the FURTHER of the two, on the theory that a
+    // rebuild reaching less must not walk the floor back. That theory does not
+    // hold: a successor date is already built either way, so keeping the further
+    // position cannot prevent a repeat - it only preserves the skip. Measured
+    // 2026-09-24: the corrected 09-24 plan reached S2E13, the pre-fix record for
+    // it said S2E15, the stale value won, and 09-25 started at S2E16 - two
+    // episodes that exist, silently never aired.
+    merged.set(`${record.seriesKey}@${record.date}`, record);
   }
 
   // Bound it: keep the most recent dates only.

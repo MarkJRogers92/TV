@@ -220,14 +220,14 @@ export class ScheduleService {
   }
 
   /**
-   * The members of each series' pool, for the channel's episode slots.
+   * The series this channel can actually draw episodes from.
    *
-   * Only pools the channel actually draws episodes from count: a series present
-   * in some unrelated pool is not "spent" on this channel, and treating it as
-   * spent would wrap it early.
+   * Only pools the channel's episode slots name count: a series present in some
+   * unrelated pool is not on this channel at all, and has no business being
+   * offered a restart.
    */
-  private poolMembersBySeries(channel: Channel): Map<string, Set<string>> {
-    const members = new Map<string, Set<string>>();
+  private poolSeriesKeys(channel: Channel): Set<string> {
+    const keys = new Set<string>();
     const poolIds = new Set(
       channel.slots
         .filter((slot) => slot.kind === "episode")
@@ -238,13 +238,10 @@ export class ScheduleService {
       for (const mediaId of pool.mediaIds) {
         const item = this.repositories.media.get(mediaId);
         if (item === undefined || item.kind !== "episode") continue;
-        const seriesKey = seriesOrderKey(item);
-        const set = members.get(seriesKey);
-        if (set) set.add(mediaId);
-        else members.set(seriesKey, new Set([mediaId]));
+        keys.add(seriesOrderKey(item));
       }
     }
-    return members;
+    return keys;
   }
 
   private episodeIdentity(mediaId: string) {
@@ -279,13 +276,13 @@ export class ScheduleService {
         ...this.repositories.schedules.historyBefore(channel.id, date),
         ...floorHistory(this.seriesFloors(channel.id), date),
       ],
-      // A series may start again only when its pool is demonstrably spent. The
-      // licence is computed from the durable cycle record, so a member the series
-      // has never played keeps it held instead of looking like a restart.
+      // A series with a recorded position may start again once it runs out.
+      // Nothing is repeated before that, because selection only moves forward
+      // from the floor; see src/scheduler/seriesFloors.ts.
       wrapAllowed: wrapAllowedSeries(
         this.seriesFloors(channel.id),
         date,
-        this.poolMembersBySeries(channel),
+        this.poolSeriesKeys(channel),
       ),
       now: this.now(),
     };
