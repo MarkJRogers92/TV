@@ -35,6 +35,7 @@ import {
   type PreparationExecutor,
 } from "../preparation/executor.js";
 import { describePreparationEvent } from "../preparation/events.js";
+import { preparationEligibleMedia } from "../preparation/eligibleMedia.js";
 import {
   createHealthShadow,
   type HealthShadow,
@@ -710,6 +711,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       // Not awaited: a refresh that has to generate takes minutes, and serving must
       // not wait on it.
       scheduleRefresh = startScheduleRefresh(context, {
+        eligibleMedia: (media) => preparationEligibleMedia(repositories, media),
         syncToTunarr: (channelId, scheduleId, at) =>
           autoSyncTunarr(repositories, { channelId, scheduleId, now: at }),
         lastSync: (channelId) =>

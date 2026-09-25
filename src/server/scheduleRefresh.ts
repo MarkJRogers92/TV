@@ -98,6 +98,8 @@ export interface ScheduleRefreshContext {
 }
 
 export interface ScheduleRefreshDependencies {
+  /** The current version-matched preparation verdict and prepared path view. */
+  readonly eligibleMedia?: (media: MediaItem[]) => MediaItem[];
   readonly timers?: ScheduleRefreshTimers;
   readonly now?: () => Date;
   /**
@@ -159,12 +161,19 @@ export interface ScheduleRefresh {
 export function scheduleHasStaleMedia(
   schedule: Schedule,
   media: MediaItem[],
+  eligibleMedia: MediaItem[] = media,
 ): boolean {
   const byId = new Map(media.map((item) => [item.id, item]));
+  const eligibleById = new Map(eligibleMedia.map((item) => [item.id, item]));
   return schedule.entries.some((entry) => {
     if (entry.kind === "flex") return false;
     const item = entry.mediaId ? byId.get(entry.mediaId) : undefined;
-    return !item || !item.available || item.path !== entry.path;
+    const eligible = entry.mediaId ? eligibleById.get(entry.mediaId) : undefined;
+    // A prepared rendition may appear after today's original was published.
+    // Both remain valid for that version; future generation may choose the
+    // prepared path without forcing a mid-program cutover today.
+    return !item || !eligible?.available ||
+      (entry.path !== item.path && entry.path !== eligible.path);
   });
 }
 
@@ -216,6 +225,7 @@ export function startScheduleRefresh(
     try {
       // Read once per pass: every channel is checked against the same catalog.
       const media = context.repositories.media.list();
+      const eligibleMedia = dependencies.eligibleMedia?.(media) ?? media;
       for (const channel of context.repositories.channels.list()) {
         if (!channel.enabled) continue;
         try {
@@ -240,7 +250,7 @@ export function startScheduleRefresh(
           // schedule for today. Regenerating for the SAME date is what replaces
           // it; the stored one is dropped here so the generation below runs and
           // the sync is aimed at the replacement rather than the stale row.
-          if (schedule && scheduleHasStaleMedia(schedule, media)) {
+          if (schedule && scheduleHasStaleMedia(schedule, media, eligibleMedia)) {
             logWarn("schedule.refresh", "Replacing a stale schedule", {
               channelId: channel.id,
               date: today,
@@ -327,7 +337,7 @@ export function startScheduleRefresh(
             tomorrow &&
             !generatedThisPass &&
             (!storedTomorrow ||
-              scheduleHasStaleMedia(storedTomorrow, media) ||
+              scheduleHasStaleMedia(storedTomorrow, media, eligibleMedia) ||
               carryGap) &&
             (carryGap ||
               // A short rolling runway must recover without waiting for the

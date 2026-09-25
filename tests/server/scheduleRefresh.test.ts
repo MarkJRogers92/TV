@@ -520,6 +520,25 @@ test("reads a stored schedule's media references against the catalog", () => {
       [{ ...catalog[0]!, available: false }],
     ),
   ).toBe(true);
+  const prepared = [{ ...catalog[0]!, path: "/cache/validated.mp4" }];
+  // A newly prepared version must not invalidate today's still-working
+  // original, and a schedule that already names that version stays current.
+  expect(scheduleHasStaleMedia(
+    scheduleStub(TODAY, [scheduledMedia("original", "episode-1", "/media/new/renamed.mkv")]),
+    catalog, prepared,
+  )).toBe(false);
+  expect(scheduleHasStaleMedia(
+    scheduleStub(TODAY, [scheduledMedia("prepared", "episode-1", "/cache/validated.mp4")]),
+    catalog, prepared,
+  )).toBe(false);
+  expect(scheduleHasStaleMedia(
+    scheduleStub(TODAY, [scheduledMedia("prepared", "episode-1", "/cache/validated.mp4")]),
+    catalog,
+  )).toBe(true);
+  expect(scheduleHasStaleMedia(
+    scheduleStub(TODAY, [scheduledMedia("quarantined", "episode-1", "/media/new/renamed.mkv")]),
+    catalog, [{ ...catalog[0]!, available: false }],
+  )).toBe(true);
   // Renamed: the catalog moved that media somewhere else.
   expect(
     scheduleHasStaleMedia(
