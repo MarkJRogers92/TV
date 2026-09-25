@@ -4,17 +4,19 @@ import { collectPreflightEvidence, type PreflightEvidence, type PreflightLevel }
 import type { PreparationObserver } from "./events.js";
 import type { PreparationClassification } from "./models.js";
 import { readSourceVersionSync } from "./sourceVersion.js";
+import { renderPreparedRendition, requestedPreparation } from "./render.js";
 
 /** A finalising preflight depth. `metadata` alone is not enough to classify a source. */
 export type ExecutorLevel = Exclude<PreflightLevel, "metadata">;
 
 export type PreparationExecutorOptions = {
   intervalMs?: number;
-  /** Preflight depth to request. Conversion is not implemented, so this only grades evidence. */
+  /** Preflight depth to request before any selective preparation. */
   level?: ExecutorLevel;
   now?: () => Date;
   collect?: typeof collectPreflightEvidence;
   readSource?: (path: string) => PreparationSourceVersion | null;
+  render?: typeof renderPreparedRendition;
   onError?: (error: unknown) => void;
   onEvent?: PreparationObserver;
 };
@@ -37,11 +39,8 @@ function safeRead(read: (path: string) => PreparationSourceVersion | null, path:
 }
 
 /**
- * Runs one preparation job at a time: claim, collect read-only preflight
- * evidence, and record the graded result. It never converts, moves, or rewrites
- * the original — classification is `ready_original` when the source is playable
- * as-is, `quarantined` on decode corruption, and `unavailable` when the source
- * cannot be read.
+ * Runs one preparation job at a time. Only a specific catalog request opts a
+ * sampled-playable source into derived preparation. Originals are never moved.
  */
 export function createPreparationExecutor(
   repositories: Repositories,
@@ -52,6 +51,7 @@ export function createPreparationExecutor(
   const now = options.now ?? (() => new Date());
   const collect = options.collect ?? collectPreflightEvidence;
   const readSource = options.readSource ?? readSourceVersionSync;
+  const render = options.render ?? renderPreparedRendition;
   const onError = options.onError ?? (() => undefined);
   const onEvent = options.onEvent ?? (() => undefined);
   let timer: NodeJS.Timeout | undefined;
@@ -115,6 +115,12 @@ export function createPreparationExecutor(
 
   const runPass = async () => {
     const at = now().toISOString();
+    // Retry one transient processing failure per pass after an hour. Failed
+    // preparation never blocks the sampled-playable original meanwhile.
+    const retryable = repositories.preparation.jobs.list().find((job) =>
+      job.state === "failed" && Date.parse(at) - Date.parse(job.updatedAt) >= 60 * 60 * 1_000);
+    if (retryable) repositories.preparation.retry({ id: retryable.id, attempt: retryable.attempt },
+      safeRead(readSource, retryable.source.path), at);
     const claimed = repositories.preparation.claimNext((path) => safeRead(readSource, path), at);
     if (!claimed) return;
     const lease = { id: claimed.id, attempt: claimed.attempt };
@@ -128,6 +134,45 @@ export function createPreparationExecutor(
       onEvent({ event: "job.failed", path: claimed.source.path, reason });
       onError(error);
       return;
+    }
+    const requested = repositories.media.get(claimed.sourceMediaId);
+    const mode = requested?.path === claimed.source.path ? requestedPreparation(requested.tags) : null;
+    if (mode && (evidence.result === "sampled" || evidence.result === "fully_decoded")) {
+      try {
+        const prepared = await render({ job: claimed, evidence, mode,
+          cacheDirectory: repositories.preparation.cacheDirectory, now });
+        const current = safeRead(readSource, claimed.source.path);
+        const result = repositories.preparation.complete(lease, {
+          classification: "needs_remux",
+          metadataEvidence: evidence.metadata,
+          sampleEvidence: evidence.sampledDecode,
+          fullDecodeEvidence: evidence.fullDecode,
+          rendition: prepared.rendition,
+        }, current, now().toISOString());
+        if (result.kind === "completed") {
+          repositories.media.put({ ...requested!, id: `prepared-${prepared.rendition.id}`,
+            path: prepared.rendition.path, sourceMediaId: requested!.id,
+            durationMs: Math.round(prepared.validation.metadata.durationSeconds! * 1_000),
+            tags: ["prepared-rendition"], available: true });
+          onEvent({ event: "job.classified", path: claimed.source.path,
+            classification: "needs_remux" });
+        }
+        return;
+      } catch (error) {
+        // A playable source remains usable when the optional conversion fails.
+        const reason = error instanceof Error ? error.message : "preparation_failed";
+        onError(error);
+        if (reason === "source_changed") {
+          repositories.preparation.complete(lease, {
+            classification: "ready_original", metadataEvidence: evidence.metadata,
+            sampleEvidence: evidence.sampledDecode, fullDecodeEvidence: evidence.fullDecode,
+          }, safeRead(readSource, claimed.source.path), now().toISOString());
+          return;
+        }
+        repositories.preparation.fail(lease, reason, now().toISOString());
+        onEvent({ event: "job.failed", path: claimed.source.path, reason });
+        return;
+      }
     }
     const completed = finalize(lease, evidence, now().toISOString());
     // A stale result is a fenced attempt, not a classification; skip the event.

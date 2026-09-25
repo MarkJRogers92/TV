@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDatabase } from "../../src/db/database.js";
@@ -9,8 +9,11 @@ import {
 } from "../../src/db/repositories.js";
 import { demo } from "../../src/demo/marktvLaughs.js";
 import { generateSchedule } from "../../src/scheduler/generate.js";
+import { TunarrClient } from "../../src/integrations/tunarr/client.js";
+import { readSourceVersionSync } from "../../src/preparation/sourceVersion.js";
 import {
   autoSyncTunarr,
+  ensurePreparedCacheLibrary,
   readTunarrMapping,
   readTunarrMappingForChannel,
   readTunarrMappings,
@@ -85,23 +88,37 @@ function stubTunarr(
     offerScan?: boolean;
     /** Active Tunarr sessions, so a sync can be blocked by a live viewer. */
     sessions?: unknown[];
+    preparedCache?: { path: string; programs: unknown[] };
+    sourceWrites?: unknown[];
   } = {},
 ) {
   let rescanned = false;
+  let cacheCreated = false;
+  let cacheScanned = false;
   const stub = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     options.record?.push(`${init?.method ?? "GET"} ${url}`);
     if (options.fail) throw new TypeError("fetch failed");
     const ok = (body: unknown = {}) =>
       new Response(JSON.stringify(body), { status: 200 });
+    if (url.endsWith("/api/media-sources") && init?.method === "POST") {
+      options.sourceWrites?.push(JSON.parse(String(init.body)));
+      cacheCreated = true;
+      return new Response(JSON.stringify({ id: "source-cache" }), { status: 201 });
+    }
     if (url.endsWith("/api/media-sources"))
       return ok(
         options.offerScan === false
           ? []
-          : [{ id: "source-a", libraries: [{ id: "lib-a" }] }],
+          : [{ id: "source-a", libraries: [{ id: "lib-a" }] },
+            ...(cacheCreated && options.preparedCache ? [{ id: "source-cache", type: "local",
+              name: "MarkTV Prepared Cache", mediaType: "other_videos",
+              paths: [options.preparedCache.path],
+              libraries: [{ id: "lib-cache", externalKey: options.preparedCache.path }] }] : [])],
       );
     if (/\/libraries\/[^/]+\/scan$/.test(url)) {
       rescanned = true;
+      if (url.includes("/lib-cache/")) cacheScanned = true;
       return new Response("", { status: 202 });
     }
     if (/\/api\/media-sources\/[^/]+\/[^/]+\/status$/.test(url))
@@ -136,6 +153,8 @@ function stubTunarr(
     const match = url.match(/\/api\/media-libraries\/([^/]+)\/programs$/);
     if (match) {
       const id = decodeURIComponent(match[1]);
+      if (id === "lib-cache" && options.preparedCache)
+        return ok(cacheScanned ? options.preparedCache.programs : []);
       const source =
         rescanned && options.rescanTo ? options.rescanTo : programsByLibrary;
       if (id in source) return ok(source[id]);
@@ -308,6 +327,96 @@ test("syncs the generated schedule and records the outcome", async () => {
     status: "synced",
     scheduleId: fixture.schedule.id,
   });
+  repositories.close();
+});
+
+test("registers a dedicated bounded cache source once and syncs its prepared path", async () => {
+  const fixture = setup();
+  const entry = fixture.schedule.entries.find((candidate) => candidate.mediaId)!;
+  const item = fixture.items.find((candidate) => candidate.id === entry.mediaId)!;
+  const directory = await mkdtemp(join(tmpdir(), "marktv-sync-prepared-"));
+  dirs.push(directory);
+  const originalPath = join(directory, "original.mkv");
+  await writeFile(originalPath, "source");
+  const source = readSourceVersionSync(originalPath);
+  Object.assign(item, { source: "local-folder", path: originalPath,
+    fileSizeBytes: source.sizeBytes, fileModifiedMs: source.modifiedMs,
+    deviceId: source.deviceId, inode: source.inode });
+  const repositories = await repositoriesWithSchedule(fixture);
+  await mkdir(repositories.preparation.cacheDirectory, { recursive: true });
+  const preparedPath = join(repositories.preparation.cacheDirectory, "prepared.mp4");
+  await writeFile(preparedPath, "validated fixture");
+  fixture.schedule.entries = fixture.schedule.entries.map((candidate) =>
+    candidate.mediaId === item.id ? { ...candidate, path: preparedPath } : candidate);
+  repositories.schedules.replaceSuccessful(fixture.channel.id, fixture.schedule);
+  repositories.preparation.observe({ sourceMediaId: item.id, source, observedAt: "2026-09-14T12:00:00Z" });
+  repositories.preparation.observe({ sourceMediaId: item.id, source, observedAt: "2026-09-14T12:01:00Z" });
+  const claimed = repositories.preparation.claimNext(() => source)!;
+  repositories.preparation.complete({ id: claimed.id, attempt: claimed.attempt }, {
+    classification: "needs_remux",
+    rendition: { id: "prepared-fixture", path: preparedPath, profile: "fixture", mode: "remux",
+      validatedAt: "2026-09-14T12:02:00Z", validation: { metadata: {}, fullDecode: { status: "passed" } } },
+  }, source);
+  const calls: string[] = [];
+  const sourceWrites: unknown[] = [];
+  const cacheProgram = localProgram(`prepared-${item.id}`, preparedPath, item.durationMs ?? 60_000);
+  stubTunarr({ "lib-a": fixture.items.map((candidate) =>
+    localProgram(candidate.id, candidate.path!, candidate.durationMs ?? 60_000)) },
+    { record: calls, sourceWrites, preparedCache: { path: repositories.preparation.cacheDirectory,
+      programs: [{ ...cacheProgram, program: { ...cacheProgram.program, type: "other_video" } }] } });
+
+  const outcome = await autoSyncTunarr(repositories, { channelId: fixture.channel.id, now });
+  expect(outcome.status).toBe("synced");
+  expect(readTunarrMapping(repositories)?.plan?.matchCounts.unmatched).toBe(0);
+  expect(readTunarrMapping(repositories)?.libraryIds).toEqual(["lib-a", "lib-cache"]);
+  expect(calls.filter((call) => call === "POST http://tunarr.test/api/media-sources")).toHaveLength(1);
+  expect(sourceWrites).toEqual([{ type: "local", name: "MarkTV Prepared Cache", mediaType: "other_videos",
+    paths: [repositories.preparation.cacheDirectory], pathReplacements: [] }]);
+  expect(calls.filter((call) => call.endsWith("/libraries/lib-a/scan"))).toHaveLength(0);
+  const repeated = await autoSyncTunarr(repositories, { channelId: fixture.channel.id, now });
+  expect(repeated.status).toBe("synced");
+  expect(calls.filter((call) => call === "POST http://tunarr.test/api/media-sources")).toHaveLength(1);
+  repositories.close();
+});
+
+test("refuses a conflicting cache source without creating or rewriting Tunarr sources", async () => {
+  const calls: string[] = [];
+  const fetcher = (async (url: string, init?: RequestInit) => {
+    calls.push(`${init?.method ?? "GET"} ${url}`);
+    return new Response(JSON.stringify([{ id: "other", type: "local", name: "MarkTV Prepared Cache",
+      mediaType: "other_videos", paths: ["/different/cache"], libraries: [] }]));
+  }) as typeof fetch;
+  const client = new TunarrClient("http://tunarr.test", fetcher);
+  await expect(ensurePreparedCacheLibrary(client, "/expected/cache")).rejects.toThrow("prepared_cache_source_conflict");
+  expect(calls).toEqual(["GET http://tunarr.test/api/media-sources"]);
+});
+
+test("refuses a stored schedule containing a version-matched quarantine before contacting Tunarr", async () => {
+  const fixture = setup();
+  const entry = fixture.schedule.entries.find((candidate) => candidate.mediaId)!;
+  const item = fixture.items.find((candidate) => candidate.id === entry.mediaId)!;
+  const directory = await mkdtemp(join(tmpdir(), "marktv-sync-quarantine-"));
+  dirs.push(directory);
+  const path = join(directory, "bad.mkv");
+  await writeFile(path, "corrupt fixture");
+  const source = readSourceVersionSync(path);
+  Object.assign(item, { source: "local-folder", path,
+    fileSizeBytes: source.sizeBytes, fileModifiedMs: source.modifiedMs,
+    deviceId: source.deviceId, inode: source.inode });
+  fixture.schedule.entries = fixture.schedule.entries.map((candidate) =>
+    candidate.mediaId === item.id ? { ...candidate, path } : candidate);
+  const repositories = await repositoriesWithSchedule(fixture);
+  repositories.preparation.observe({ sourceMediaId: item.id, source, observedAt: "2026-09-14T12:00:00Z" });
+  repositories.preparation.observe({ sourceMediaId: item.id, source, observedAt: "2026-09-14T12:01:00Z" });
+  const claimed = repositories.preparation.claimNext(() => source)!;
+  repositories.preparation.complete({ id: claimed.id, attempt: claimed.attempt },
+    { classification: "quarantined", failureKind: "decode_corruption" }, source);
+  const fetchStub = vi.fn();
+  vi.stubGlobal("fetch", fetchStub);
+
+  const outcome = await autoSyncTunarr(repositories, { channelId: fixture.channel.id, now });
+  expect(outcome).toMatchObject({ status: "blocked", blockingErrors: 1 });
+  expect(fetchStub).not.toHaveBeenCalled();
   repositories.close();
 });
 

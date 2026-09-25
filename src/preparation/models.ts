@@ -51,6 +51,14 @@ export const preparationJobSchema = z.object({
   sampleEvidence: z.unknown().nullable(),
   fullDecodeEvidence: z.unknown().nullable(),
   airingEvidence: z.unknown().nullable(),
+  rendition: z.object({
+    id: z.string().min(1),
+    path: z.string().min(1),
+    profile: z.string().min(1),
+    mode: z.enum(["remux", "normalize"]),
+    validatedAt: z.string().min(1),
+    validation: z.object({ metadata: z.unknown(), fullDecode: z.unknown() }),
+  }).nullable().default(null),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
 });

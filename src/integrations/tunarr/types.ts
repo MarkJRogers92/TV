@@ -149,6 +149,14 @@ export const fillerListSchema = z.object({
 export const transcodeConfigSchema = z
   .object({ id: z.string(), name: z.string().optional() })
   .passthrough();
+export type TunarrMediaSource = {
+  id: string;
+  type?: string;
+  name?: string;
+  mediaType?: string;
+  paths?: string[];
+  libraries?: Array<{ id: string; externalKey?: string }>;
+};
 export const channelSchema = z
   .object({
     id: z.string(),

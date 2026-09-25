@@ -41,6 +41,7 @@ import {
   type ContinuityPreparer,
 } from "../continuity/prepare.js";
 import { readContinuityConfig } from "../continuity/status.js";
+import { preparationEligibleMedia } from "../preparation/eligibleMedia.js";
 import {
   buildPreservedLineupSchedule,
   readPreservedLineup,
@@ -154,9 +155,9 @@ export class ScheduleService {
   private async analyzeEpisodeBreaks(
     channel: Channel,
     selectedMediaIds: ReadonlySet<string>,
+    items: readonly MediaItem[],
   ) {
     const pools = this.repositories.pools.list();
-    const items = this.repositories.media.list();
     const poolsById = new Map(pools.map((pool) => [pool.id, pool]));
     const itemsById = new Map(items.map((item) => [item.id, item]));
     const work = new Map<
@@ -272,7 +273,7 @@ export class ScheduleService {
     const input = {
       channel,
       pools: this.repositories.pools.list(),
-      items: this.repositories.media.list(),
+      items: preparationEligibleMedia(this.repositories, this.repositories.media.list()),
       date,
       // Two sources of history, on purpose. `historyBefore` is the right rule -
       // the newest generation of each PRIOR date - but it cannot see a date that
@@ -367,7 +368,7 @@ export class ScheduleService {
           requestedEpisodeMediaIds.add(mediaId);
         Object.assign(
           episodeBreakAnalyses,
-          await this.analyzeEpisodeBreaks(channel, newlySelected),
+          await this.analyzeEpisodeBreaks(channel, newlySelected, input.items),
         );
         result = generateSchedule({ ...ordinary, episodeBreakAnalyses });
         if (result.ok === false) return result;

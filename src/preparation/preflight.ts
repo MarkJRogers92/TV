@@ -21,7 +21,7 @@ export type EvidenceStatus = "passed" | "failed" | "unavailable" | "deferred";
 
 export type PreflightTrack = {
   index: number;
-  type: "video" | "audio";
+  type: "video" | "audio" | "subtitle";
   codec: string | null;
   selected: boolean;
   width?: number;
@@ -108,7 +108,7 @@ function unavailableReason(reason: string) {
 function buildTracks(payload: ProbePayload): PreflightTrack[] {
   const streams = Array.isArray(payload.streams) ? payload.streams : [];
   const typed = streams.flatMap((stream, ordinal) => {
-    if (stream.codec_type !== "video" && stream.codec_type !== "audio") return [];
+    if (stream.codec_type !== "video" && stream.codec_type !== "audio" && stream.codec_type !== "subtitle") return [];
     const type: PreflightTrack["type"] = stream.codec_type;
     const index = numeric(stream.index);
     // Embedded cover art (`attached_pic`) is a still picture, not a video track.

@@ -149,3 +149,26 @@ test("[PR02][PR11] a playable source is marked ready_original with no conversion
   // No derived rendition and no full-decode claim: the original is used as-is.
   expect(job.fullDecodeEvidence).toMatchObject({ status: "deferred" });
 });
+
+test("a failed requested rendition leaves the original eligible and retries only after backoff", async () => {
+  const { repositories } = await fixture();
+  repositories.media.put({ id: "media-1", source: "local-folder", path: SOURCE.path,
+    kind: "episode", title: "Episode", durationMs: 60_000, durationStatus: "ok",
+    available: true, tags: ["preparation:needs-remux"] });
+  const render = vi.fn(async () => { throw new Error("preparation_storage_headroom"); });
+  const clock = { value: new Date("2026-09-24T12:02:00Z") };
+  const runner = createPreparationExecutor(repositories, {
+    collect: (async () => evidence("sampled")) as never,
+    readSource: () => SOURCE,
+    render: render as never,
+    now: () => clock.value,
+  });
+  await runner.runOnce();
+  expect(repositories.preparation.jobs.list()[0]).toMatchObject({ state: "failed", classification: null });
+  expect(repositories.media.get("media-1")!.available).toBe(true);
+  await runner.runOnce();
+  expect(render).toHaveBeenCalledTimes(1);
+  clock.value = new Date("2026-09-24T13:03:00Z");
+  await runner.runOnce();
+  expect(render).toHaveBeenCalledTimes(2);
+});

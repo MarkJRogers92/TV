@@ -22,6 +22,7 @@ import {
   type TunarrMappingInput,
   type TunarrProgramming,
   type TunarrSnapshotResult,
+  type TunarrMediaSource,
   type TunarrTranscodeConfig,
 } from "./types.js";
 
@@ -109,14 +110,27 @@ export class TunarrClient {
    * not enough to scan it: Tunarr's scan route is addressed by source then
    * library, and only the source knows it holds the library.
    */
-  async mediaSources(): Promise<Array<{ id: string; libraries?: Array<{ id: string }> }>> {
+  async mediaSources(): Promise<TunarrMediaSource[]> {
     const response = await this.request("/api/media-sources");
     if (!response.ok)
       throw tunarrError("UNREACHABLE", "Unable to read Tunarr media sources");
     const body: unknown = await response.json();
-    return Array.isArray(body)
-      ? (body as Array<{ id: string; libraries?: Array<{ id: string }> }>)
-      : [];
+    if (!Array.isArray(body) || !body.every((entry) => entry && typeof entry.id === "string"))
+      throw tunarrError("UNSUPPORTED_SCHEMA", "Tunarr media sources response is unsupported");
+    return body as TunarrMediaSource[];
+  }
+
+  /** A dedicated local source scans only MarkTV's bounded prepared cache. */
+  async createLocalMediaSource(name: string, path: string): Promise<string> {
+    const response = await this.request("/api/media-sources", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "local", name, mediaType: "other_videos",
+        paths: [path], pathReplacements: [] }),
+    });
+    if (response.status !== 201) throw tunarrError("MEDIA_SOURCE_CREATE_FAILED", "Tunarr could not register prepared cache");
+    const body = await response.json() as { id?: unknown };
+    if (typeof body.id !== "string" || !body.id) throw tunarrError("UNSUPPORTED_SCHEMA", "Tunarr created source without an id");
+    return body.id;
   }
 
   /** Asks Tunarr to rescan one library. The scan itself runs asynchronously. */

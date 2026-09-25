@@ -1,10 +1,13 @@
 import type { Repositories } from "../db/repositories.js";
 import { TunarrClient } from "../integrations/tunarr/client.js";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
   buildTunarrSyncPlan,
   type TunarrSyncPlan,
 } from "../integrations/tunarr/plan.js";
 import { syncTunarrPlan } from "../integrations/tunarr/sync.js";
+import { preparationEligibleMedia } from "../preparation/eligibleMedia.js";
+import type { TunarrMediaSource } from "../integrations/tunarr/types.js";
 import {
   normalizeLibraryIds,
   type TunarrMappingInput,
@@ -26,6 +29,55 @@ import {
 
 export const TUNARR_MAPPING_SETTING = "tunarr-mapping";
 export const TUNARR_MAPPINGS_SETTING = "tunarr-mappings";
+const PREPARED_SOURCE_NAME = "MarkTV Prepared Cache";
+const preparedRegistration = new Map<string, Promise<string>>();
+
+function isInside(path: string, directory: string): boolean {
+  if (!isAbsolute(path)) return false;
+  const rel = relative(resolve(directory), resolve(path));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+/** The local cache gets its own one-path source, so scanning it never walks original media roots. */
+export async function ensurePreparedCacheLibrary(client: TunarrClient, cacheDirectory: string): Promise<string> {
+  const key = `${client.url}\u001f${resolve(cacheDirectory)}`;
+  const pending = preparedRegistration.get(key);
+  if (pending) return pending;
+  const work = (async () => {
+    let sources = await client.mediaSources();
+    const candidates = sources.filter((source) =>
+      source.name === PREPARED_SOURCE_NAME || source.paths?.some((path) => resolve(path) === resolve(cacheDirectory)));
+    if (candidates.length > 1) throw new Error("prepared_cache_source_ambiguous");
+    let source: TunarrMediaSource | undefined = candidates[0];
+    if (source && (source.type !== "local" || source.name !== PREPARED_SOURCE_NAME ||
+      source.mediaType !== "other_videos" || source.paths?.length !== 1 ||
+      resolve(source.paths[0]!) !== resolve(cacheDirectory)))
+      throw new Error("prepared_cache_source_conflict");
+    const sourceId = source?.id ?? await client.createLocalMediaSource(PREPARED_SOURCE_NAME, resolve(cacheDirectory));
+    if (!source?.libraries?.some((library) => library.externalKey && resolve(library.externalKey) === resolve(cacheDirectory))) {
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        sources = await client.mediaSources();
+        const same = sources.filter((candidate) => candidate.name === PREPARED_SOURCE_NAME ||
+          candidate.paths?.some((path) => resolve(path) === resolve(cacheDirectory)));
+        if (same.length > 1) throw new Error("prepared_cache_source_ambiguous");
+        source = same.find((candidate) => candidate.id === sourceId);
+        if (source && (source.type !== "local" || source.name !== PREPARED_SOURCE_NAME ||
+          source.mediaType !== "other_videos" || source.paths?.length !== 1 ||
+          resolve(source.paths[0]!) !== resolve(cacheDirectory)))
+          throw new Error("prepared_cache_source_conflict");
+        if (source?.libraries?.some((library) => library.externalKey && resolve(library.externalKey) === resolve(cacheDirectory))) break;
+        if (attempt < 5) await new Promise((done) => setTimeout(done, 1_000));
+      }
+    }
+    const matching = source?.libraries?.filter((library) =>
+      library.externalKey && resolve(library.externalKey) === resolve(cacheDirectory)) ?? [];
+    if (matching.length !== 1 || !matching[0]!.id) throw new Error("prepared_cache_library_unavailable");
+    return matching[0]!.id;
+  })();
+  preparedRegistration.set(key, work);
+  try { return await work; }
+  finally { if (preparedRegistration.get(key) === work) preparedRegistration.delete(key); }
+}
 
 export type TunarrAutoSyncOutcome = {
   status: "synced" | "skipped" | "blocked" | "failed";
@@ -147,10 +199,9 @@ function persist(
 async function rescanTunarrLibraries(
   client: TunarrClient,
   mapping: TunarrMappingInput,
+  onlyLibraryId?: string,
 ): Promise<boolean> {
-  const libraryIds = normalizeLibraryIds(
-    mapping.libraryIds ?? mapping.libraryId,
-  );
+  const libraryIds = onlyLibraryId ? [onlyLibraryId] : normalizeLibraryIds(mapping.libraryIds ?? mapping.libraryId);
   if (!libraryIds.length) return false;
   const sources = await client.mediaSources();
   let requested = false;
@@ -209,9 +260,37 @@ export async function autoSyncTunarr(
         : "There is no schedule to sync",
     });
 
-  const input = mappingInput(stored);
+  // Generation may have selected a validated derived path under the original
+  // logical media ID. Use the same version-checked catalog view at every plan
+  // and apply step, including retries after a Tunarr rescan.
+  const mediaCatalog = preparationEligibleMedia(repositories, repositories.media.list());
+  const eligibleById = new Map(mediaCatalog.map((item) => [item.id, item.available]));
+  const unavailable = schedule.entries.find((entry) =>
+    entry.mediaId && eligibleById.get(entry.mediaId) === false);
+  if (unavailable)
+    return persist(repositories, stored, { ...base, status: "blocked", scheduleId: schedule.id,
+      blockingErrors: 1, message: `Scheduled media ${unavailable.mediaId} is unavailable` });
+  const eligibleCatalog = mediaCatalog.filter((item) => item.available);
+  const catalogById = new Map(eligibleCatalog.map((item) => [item.id, item]));
+  const cacheDirectory = repositories.preparation.cacheDirectory;
+  const preparedPaths = new Set(schedule.entries.flatMap((entry) => {
+    const path = entry.path;
+    const catalog = entry.mediaId ? catalogById.get(entry.mediaId) : undefined;
+    return path && catalog?.path === path && isInside(path, cacheDirectory) ? [resolve(path)] : [];
+  }));
+  let activeMapping = stored;
   try {
     const client = new TunarrClient(stored.url);
+    let cacheLibraryId: string | undefined;
+    if (preparedPaths.size) {
+      cacheLibraryId = await ensurePreparedCacheLibrary(client, cacheDirectory);
+      const originalIds = normalizeLibraryIds(activeMapping.libraryIds ?? activeMapping.libraryId);
+      if (!originalIds.includes(cacheLibraryId)) {
+        activeMapping = { ...activeMapping, libraryIds: [...originalIds, cacheLibraryId] };
+        upsertTunarrMapping(repositories, activeMapping);
+      }
+    }
+    const input = mappingInput(activeMapping);
     const snapshot = await client.snapshot(input);
     let plan = buildTunarrSyncPlan(
       schedule,
@@ -219,13 +298,16 @@ export async function autoSyncTunarr(
       snapshot.capabilities,
       input,
       snapshot.snapshots,
-      repositories.media.list(),
+      eligibleCatalog,
     );
     // A plan that cannot resolve its media usually means Tunarr has not scanned
     // since those files arrived. Rescanning turns a refusal the user would have
     // had to clear by hand into one automatic retry, and costs nothing on the
     // ordinary path where the inventory is already current.
-    if (!plan.syncEligible && (await rescanTunarrLibraries(client, input))) {
+    // A prepared day scans only its dedicated cache source. Tunarr's local scan
+    // endpoint scans an entire source even when given one library ID; scanning
+    // the original media source here would walk the full external library.
+    if (!plan.syncEligible && (await rescanTunarrLibraries(client, input, cacheLibraryId))) {
       for (let attempt = 0; attempt < 6 && !plan.syncEligible; attempt += 1) {
         if (attempt > 0)
           await new Promise((resolve) => setTimeout(resolve, 10_000));
@@ -236,14 +318,14 @@ export async function autoSyncTunarr(
           refreshed.capabilities,
           input,
           refreshed.snapshots,
-          repositories.media.list(),
+          eligibleCatalog,
         );
       }
     }
     if (!plan.syncEligible)
       return persist(
         repositories,
-        { ...stored, plan },
+        { ...activeMapping, plan },
         {
           ...base,
           status: "blocked",
@@ -257,7 +339,7 @@ export async function autoSyncTunarr(
       client,
       plan,
       schedule,
-      repositories.media.list(),
+      eligibleCatalog,
     ).catch(
       (error: unknown) => {
         if ((error as { code?: string }).code === "ACTIVE_VIEWERS")
@@ -268,7 +350,7 @@ export async function autoSyncTunarr(
     if (result === "blocked")
       return persist(
         repositories,
-        { ...stored, plan },
+        { ...activeMapping, plan },
         {
           ...base,
           status: "blocked",
@@ -277,7 +359,7 @@ export async function autoSyncTunarr(
             "The Tunarr channel has active viewers; the sync will retry after playback stops",
         },
       );
-    const state = { ...stored, ...result.state, plan };
+    const state = { ...activeMapping, ...result.state, plan };
     if (result.state.channelId) state.createChannel = false;
     if (result.partialFailure)
       return persist(repositories, state, {
@@ -297,7 +379,7 @@ export async function autoSyncTunarr(
       )?.payload.length,
     });
   } catch (error) {
-    return persist(repositories, stored, {
+    return persist(repositories, activeMapping, {
       ...base,
       status: "failed",
       scheduleId: schedule.id,

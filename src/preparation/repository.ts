@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { MarkTvDatabase } from "../db/database.js";
 import {
   preparationIntakeSchema,
@@ -15,12 +15,13 @@ import {
 export const PREPARATION_SETTLE_MS = 60_000;
 
 export type PreparationEvidence = Partial<Pick<PreparationJob,
-  "metadataEvidence" | "sampleEvidence" | "fullDecodeEvidence" | "airingEvidence"
+  "metadataEvidence" | "sampleEvidence" | "fullDecodeEvidence" | "airingEvidence" | "rendition"
 >>;
 /** The attempt number fences writes from a worker after recovery or retry. */
 export type PreparationJobLease = Pick<PreparationJob, "id" | "attempt">;
 
 export type PreparationRepository = {
+  cacheDirectory: string;
   observe(
     input: { sourceMediaId: string; source: PreparationSourceVersion; observedAt: string },
     options?: { outputDirectories?: readonly string[] },
@@ -115,7 +116,7 @@ export function createPreparationRepository(database: MarkTvDatabase): Preparati
     ...job, state: "stale", classification: unavailable ? "unavailable" : null,
     failureKind: unavailable ? "source_unavailable" : null,
     failureDetail: unavailable ? "Source is unavailable at its recorded path" : null,
-    metadataEvidence: null, sampleEvidence: null, fullDecodeEvidence: null, airingEvidence: null,
+    metadataEvidence: null, sampleEvidence: null, fullDecodeEvidence: null, airingEvidence: null, rendition: null,
     updatedAt: now,
   });
 
@@ -152,13 +153,14 @@ export function createPreparationRepository(database: MarkTvDatabase): Preparati
     const job = existingJob ?? saveJob({
       id: jobId, intakeId, sourceMediaId: input.sourceMediaId, source, sourceVersionKey: key,
       state: "queued", attempt: 0, classification: null, failureKind: null, failureDetail: null,
-      metadataEvidence: null, sampleEvidence: null, fullDecodeEvidence: null, airingEvidence: null,
+      metadataEvidence: null, sampleEvidence: null, fullDecodeEvidence: null, airingEvidence: null, rendition: null,
       createdAt: input.observedAt, updatedAt: input.observedAt,
     });
     return { kind: "settled" as const, intake, job };
   }).immediate();
 
   return {
+    cacheDirectory: join(dirname(database.name), "derived", "preparation"),
     observe,
     intakes: {
       list: () => (database.prepare("SELECT json FROM preparation_intakes ORDER BY first_observed_at, id").all() as Array<{ json: string }>).map((row) => preparationIntakeSchema.parse(JSON.parse(row.json))),
@@ -225,7 +227,7 @@ export function createPreparationRepository(database: MarkTvDatabase): Preparati
       if (!job || job.state !== "running") return { kind: "not-running" as const };
       if (job.attempt !== lease.attempt) return { kind: "lease-lost" as const };
       saveJob({ ...job, state: "failed", classification: null, failureKind: "processing_error", failureDetail: detail,
-        metadataEvidence: null, sampleEvidence: null, fullDecodeEvidence: null, airingEvidence: null, updatedAt: now });
+        metadataEvidence: null, sampleEvidence: null, fullDecodeEvidence: null, airingEvidence: null, rendition: null, updatedAt: now });
       return { kind: "failed" as const };
     }).immediate(),
     retry: (lease, currentSource, now = new Date().toISOString()) => database.transaction(() => {
@@ -235,7 +237,7 @@ export function createPreparationRepository(database: MarkTvDatabase): Preparati
       if (job.state !== "failed" && job.state !== "stale") return { kind: "not-retryable" as const };
       if (!sameVersion(job.source, currentSource)) { invalidate(job, currentSource === null, now); return { kind: "stale" as const }; }
       saveJob({ ...job, state: "queued", classification: null, failureKind: null, failureDetail: null,
-        metadataEvidence: null, sampleEvidence: null, fullDecodeEvidence: null, airingEvidence: null, updatedAt: now });
+        metadataEvidence: null, sampleEvidence: null, fullDecodeEvidence: null, airingEvidence: null, rendition: null, updatedAt: now });
       return { kind: "queued" as const };
     }).immediate(),
     recoverInterrupted: (now = new Date().toISOString()) => database.transaction(() => {
@@ -245,7 +247,7 @@ export function createPreparationRepository(database: MarkTvDatabase): Preparati
         const latest = jobFrom(jobGet.get(job.id) as { json: string } | undefined);
         if (!latest || latest.state !== "running") return undefined;
         saveJob({ ...latest, state: "queued", classification: null, failureKind: null, failureDetail: null,
-          metadataEvidence: null, sampleEvidence: null, fullDecodeEvidence: null, airingEvidence: null, updatedAt: now });
+          metadataEvidence: null, sampleEvidence: null, fullDecodeEvidence: null, airingEvidence: null, rendition: null, updatedAt: now });
         return latest.id;
       }).filter((id) => id !== undefined).length;
     }).immediate(),
