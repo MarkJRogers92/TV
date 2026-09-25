@@ -266,7 +266,7 @@ export async function autoSyncTunarr(
   const mediaCatalog = preparationEligibleMedia(repositories, repositories.media.list());
   const eligibleById = new Map(mediaCatalog.map((item) => [item.id, item.available]));
   const unavailable = schedule.entries.find((entry) =>
-    entry.mediaId && eligibleById.get(entry.mediaId) === false);
+    entry.kind !== "flex" && (!entry.mediaId || eligibleById.get(entry.mediaId) !== true));
   if (unavailable)
     return persist(repositories, stored, { ...base, status: "blocked", scheduleId: schedule.id,
       blockingErrors: 1, message: `Scheduled media ${unavailable.mediaId} is unavailable` });

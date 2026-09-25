@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { copyFile, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -17,14 +18,15 @@ const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
 
 test("settled source is remuxed, fully decoded, catalogued, and selected under its original pool ID", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "marktv-prepared-"));
+  const directory = await mkdtemp(join(realpathSync.native(tmpdir()), "marktv-prepared-"));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   const sourcePath = join(directory, "episode.mkv");
   await run("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=320x240:r=24",
     "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "1", "-shortest",
     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", sourcePath]);
   const source = readSourceVersionSync(sourcePath);
-  const repositories = createRepositories(openDatabase(join(directory, "data")));
+  const database = openDatabase(join(directory, "data"));
+  const repositories = createRepositories(database);
   cleanups.push(() => { repositories.close(); });
   const item = {
     id: "episode-1", source: "local-folder" as const, path: sourcePath,
@@ -55,10 +57,21 @@ test("settled source is remuxed, fully decoded, catalogued, and selected under i
     mode: "remux", cacheDirectory: repositories.preparation.cacheDirectory });
   expect(reused.rendition.path).toBe(job.rendition!.path);
   expect((await stat(job.rendition!.path)).mtimeMs).toBe(before.mtimeMs);
+  const outsidePath = join(directory, `${job.rendition!.id}.mp4`);
+  await copyFile(job.rendition!.path, outsidePath);
+  const outsideJob = { ...job, rendition: { ...job.rendition!, path: outsidePath } };
+  database.prepare("UPDATE preparation_jobs SET json = ? WHERE id = ?").run(JSON.stringify(outsideJob), job.id);
+  expect(preparationEligibleMedia(repositories, [item])[0]!.path).toBe(sourcePath);
+  database.prepare("UPDATE preparation_jobs SET json = ? WHERE id = ?").run(JSON.stringify(job), job.id);
+  await writeFile(job.rendition!.path, "corrupted cache");
+  expect(preparationEligibleMedia(repositories, [item])[0]!.path).toBe(sourcePath);
+  await rm(job.rendition!.path);
+  await symlink(outsidePath, job.rendition!.path);
+  expect(preparationEligibleMedia(repositories, [item])[0]!.path).toBe(sourcePath);
 });
 
 test("only a matching proven quarantine suppresses scheduling", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "marktv-quarantine-"));
+  const directory = await mkdtemp(join(realpathSync.native(tmpdir()), "marktv-quarantine-"));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   const sourcePath = join(directory, "broken.mp4");
   const { writeFile } = await import("node:fs/promises");

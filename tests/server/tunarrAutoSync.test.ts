@@ -1,7 +1,10 @@
 import { afterEach, expect, test, vi } from "vitest";
+import { execFile } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { openDatabase } from "../../src/db/database.js";
 import {
   createRepositories,
@@ -23,6 +26,7 @@ import {
 } from "../../src/server/tunarrAutoSync.js";
 
 const dirs: string[] = [];
+const runFfmpeg = promisify(execFile);
 afterEach(async () => {
   vi.unstubAllGlobals();
   await Promise.all(
@@ -227,7 +231,7 @@ async function repositoriesWithSchedule(
   // `null` means "Tunarr was never configured"; omitting it configures one.
   mapping: Partial<StoredTunarrMapping> | null = {},
 ): Promise<Repositories> {
-  const dir = await mkdtemp(join(tmpdir(), "marktv-autosync-"));
+  const dir = await mkdtemp(join(realpathSync.native(tmpdir()), "marktv-autosync-"));
   dirs.push(dir);
   const repositories = createRepositories(openDatabase(dir));
   repositories.channels.put(fixture.channel);
@@ -344,8 +348,10 @@ test("registers a dedicated bounded cache source once and syncs its prepared pat
     deviceId: source.deviceId, inode: source.inode });
   const repositories = await repositoriesWithSchedule(fixture);
   await mkdir(repositories.preparation.cacheDirectory, { recursive: true });
-  const preparedPath = join(repositories.preparation.cacheDirectory, "prepared.mp4");
-  await writeFile(preparedPath, "validated fixture");
+  const renditionId = "a".repeat(64);
+  const preparedPath = join(repositories.preparation.cacheDirectory, `${renditionId}.mp4`);
+  await runFfmpeg("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=64x64:r=24",
+    "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", preparedPath]);
   fixture.schedule.entries = fixture.schedule.entries.map((candidate) =>
     candidate.mediaId === item.id ? { ...candidate, path: preparedPath } : candidate);
   repositories.schedules.replaceSuccessful(fixture.channel.id, fixture.schedule);
@@ -354,8 +360,9 @@ test("registers a dedicated bounded cache source once and syncs its prepared pat
   const claimed = repositories.preparation.claimNext(() => source)!;
   repositories.preparation.complete({ id: claimed.id, attempt: claimed.attempt }, {
     classification: "needs_remux",
-    rendition: { id: "prepared-fixture", path: preparedPath, profile: "fixture", mode: "remux",
-      validatedAt: "2026-09-14T12:02:00Z", validation: { metadata: {}, fullDecode: { status: "passed" } } },
+    rendition: { id: renditionId, path: preparedPath, profile: "fixture", mode: "remux",
+      validatedAt: "2026-09-14T12:02:00Z", validation: { metadata: {
+        status: "passed", durationSeconds: 1, selectedAudioTrackIndex: null }, fullDecode: { status: "passed" } } },
   }, source);
   const calls: string[] = [];
   const sourceWrites: unknown[] = [];
@@ -377,7 +384,7 @@ test("registers a dedicated bounded cache source once and syncs its prepared pat
   expect(repeated.status).toBe("synced");
   expect(calls.filter((call) => call === "POST http://tunarr.test/api/media-sources")).toHaveLength(1);
   repositories.close();
-});
+}, 15_000);
 
 test("refuses a conflicting cache source without creating or rewriting Tunarr sources", async () => {
   const calls: string[] = [];
@@ -416,6 +423,20 @@ test("refuses a stored schedule containing a version-matched quarantine before c
 
   const outcome = await autoSyncTunarr(repositories, { channelId: fixture.channel.id, now });
   expect(outcome).toMatchObject({ status: "blocked", blockingErrors: 1 });
+  expect(fetchStub).not.toHaveBeenCalled();
+  repositories.close();
+});
+
+test("refuses an unresolved scheduled media ID before contacting Tunarr", async () => {
+  const fixture = setup();
+  const repositories = await repositoriesWithSchedule(fixture);
+  const missingId = fixture.schedule.entries.find((entry) => entry.kind !== "flex")!.mediaId!;
+  repositories.media.remove(missingId);
+  const fetchStub = vi.fn();
+  vi.stubGlobal("fetch", fetchStub);
+  const outcome = await autoSyncTunarr(repositories, { channelId: fixture.channel.id, now });
+  expect(outcome).toMatchObject({ status: "blocked", blockingErrors: 1 });
+  expect(outcome.message).toContain(missingId);
   expect(fetchStub).not.toHaveBeenCalled();
   repositories.close();
 });
