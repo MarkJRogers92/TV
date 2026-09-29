@@ -4,6 +4,7 @@ import { buildTunarrSyncPlan } from "../../src/integrations/tunarr/plan.js";
 import {
   hasRecentProxiedViewer,
   noteProxiedViewer,
+  replacesExhaustedLineup,
   syncTunarrPlan,
 } from "../../src/integrations/tunarr/sync.js";
 import type {
@@ -363,6 +364,78 @@ test("applies the plan when the mapped channel has no active viewers", async () 
     completed: ["channel-update", "filler-create", "programming"],
     partialFailure: false,
   });
+});
+
+test("recognizes a lineup that ran out while today's schedule is due", () => {
+  const dayMs = 86_400_000;
+  const today = Date.parse("2026-09-28T05:00:00.000Z");
+  const todays = {
+    ...schedule,
+    durationMs: dayMs,
+    entries: [{ ...schedule.entries[0]!, start: "2026-09-28T05:00:00.000Z" }],
+  };
+  const yesterdays = { startTime: today - dayMs, duration: dayMs };
+  const fiveAfter = today + 5 * 60_000;
+  expect(replacesExhaustedLineup(yesterdays, todays, fiveAfter)).toBe(true);
+  // Yesterday's lineup still covers the moment: the guard applies.
+  expect(replacesExhaustedLineup(yesterdays, todays, today - 60_000)).toBe(false);
+  // A lineup that already covers today (a preserved long lineup, or a
+  // completed sync) is never exhausted.
+  expect(
+    replacesExhaustedLineup({ startTime: today, duration: 366 * dayMs }, todays, fiveAfter),
+  ).toBe(false);
+  // Tomorrow's schedule is not the one on air, so it waits for the viewer.
+  const tomorrows = {
+    ...todays,
+    entries: [{ ...todays.entries[0]!, start: "2026-09-29T05:00:00.000Z" }],
+  };
+  expect(replacesExhaustedLineup(yesterdays, tomorrows, fiveAfter)).toBe(false);
+  expect(replacesExhaustedLineup(undefined, todays, fiveAfter)).toBe(false);
+  expect(replacesExhaustedLineup(yesterdays, schedule, fiveAfter)).toBe(false);
+});
+
+test("replaces an exhausted lineup even while a viewer is watching", async () => {
+  const dayMs = 86_400_000;
+  const today = Date.parse("2026-09-28T05:00:00.000Z");
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(today + 5 * 60_000);
+  try {
+    const todays = {
+      ...schedule,
+      durationMs: dayMs,
+      entries: [
+        {
+          ...schedule.entries[0]!,
+          start: "2026-09-28T05:00:00.000Z",
+          durationMs: dayMs,
+        },
+      ],
+    };
+    const looping = {
+      ...snapshots,
+      channels: [{ ...channel, startTime: today - dayMs, duration: dayMs }],
+    };
+    const dayPlan = buildTunarrSyncPlan(todays, [], capabilities, mapping, looping);
+    const activeSessionCount = vi.fn(async () => 1);
+    const postProgramming = vi.fn(async () => ({ ok: true, status: 200 }));
+    const client = {
+      snapshot: async () => ({ capabilities, inventory: [], snapshots: looping }),
+      activeSessionCount,
+      putChannel: async () => ({ ok: true, status: 200 }),
+      createChannel: async () => ({ id: "unused" }),
+      createFillerList: async () => ({ id: "unused" }),
+      putFillerList: async () => ({ ok: true, status: 200 }),
+      postProgramming,
+    } as never;
+
+    await expect(syncTunarrPlan(client, dayPlan, todays)).resolves.toMatchObject({
+      partialFailure: false,
+    });
+    expect(activeSessionCount).not.toHaveBeenCalled();
+    expect(postProgramming).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("allows channel creation without an existing channel to check", async () => {

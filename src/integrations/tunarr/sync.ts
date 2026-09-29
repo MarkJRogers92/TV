@@ -156,6 +156,31 @@ async function activeSessionCount(
   return active;
 }
 
+/**
+ * Whether the mapped channel is looping a lineup that has already run out while
+ * the schedule being synced is the one that belongs on air now.
+ *
+ * Tunarr repeats a lineup from its start once `startTime + duration` passes, so
+ * a daily lineup held back by the viewer guard replays yesterday under today's
+ * guide - measured 2026-09-28, four hours on Laughs. Replacing it interrupts the
+ * viewer once, but they were already watching the wrong day. Every other sync
+ * still waits for playback to stop.
+ */
+export function replacesExhaustedLineup(
+  channel: { startTime: number; duration: number } | undefined,
+  schedule: Schedule,
+  now: number,
+): boolean {
+  if (!channel || !(channel.duration > 0)) return false;
+  const scheduleStart = Date.parse(schedule.entries[0]?.start ?? "");
+  if (!Number.isFinite(scheduleStart)) return false;
+  return (
+    now >= channel.startTime + channel.duration &&
+    scheduleStart <= now &&
+    now < scheduleStart + schedule.durationMs
+  );
+}
+
 export async function syncTunarrPlan(
   client: SyncClient,
   plan: TunarrSyncPlan,
@@ -176,8 +201,14 @@ export async function syncTunarrPlan(
   const existingChannelId = plan.mapping.createChannel
     ? undefined
     : plan.mapping.channelId;
+  const existingChannel = existingChannelId
+    ? freshSnapshot.snapshots.channels.find(
+        (channel) => channel.id === existingChannelId,
+      )
+    : undefined;
   if (
     existingChannelId &&
+    !replacesExhaustedLineup(existingChannel, currentSchedule, Date.now()) &&
     ((await activeSessionCount(client, existingChannelId)) > 0 ||
       hasRecentProxiedViewer(existingChannelId))
   )
