@@ -12,8 +12,18 @@ import { join } from "node:path";
 import { z } from "zod";
 import type { Repositories } from "../db/repositories.js";
 
+/**
+ * A gap is only classified once it ends. At the moment requests stop, a real
+ * stall and a channel change look identical: Tunarr keeps an abandoned session
+ * for about two minutes. Measured 2026-09-24..29, 43 of 55 notified gaps ended
+ * with the session disappearing rather than requests resuming. So:
+ *
+ * - `viewer-request-gap`: requests stopped (informational only)
+ * - `viewer-request-stalled`: requests resumed after a gap (a real stall)
+ * - `viewer-left`: the session ended during a gap (usually a channel change)
+ */
 export type ViewerRequestAlert = {
-  condition: "viewer-request-stalled" | "recovered";
+  condition: "viewer-request-gap" | "viewer-request-stalled" | "viewer-left";
   channelId: string;
   detail: string;
 };
@@ -29,11 +39,18 @@ export type ViewerRequestWatchOptions = {
   /** Heartbeat age beyond which an observed viewer is considered stalled. */
   heartbeatStaleMs?: number;
   requestTimeoutMs?: number;
+  /** Sessions responses at least this slow are reported through onSlowResponse. */
+  slowResponseMs?: number;
   now?: () => Date;
   fetchImpl?: typeof fetch;
   /** Test seam; production reads only the local `stream.m3u8` file stat. */
   producerModifiedAt?: (path: string) => Promise<number>;
   onAlert?: (alert: ViewerRequestAlert) => void;
+  /**
+   * The metadata request is trivial, so a slow answer means Tunarr's server
+   * process is busy - the same process that serves playlists and segments.
+   */
+  onSlowResponse?: (durationMs: number, url: string) => void;
   onError?: (error: unknown, channelId?: string) => void;
 };
 
@@ -84,7 +101,10 @@ type ViewerState = {
   channelId: string;
   userAgent?: string;
   observedFresh: boolean;
+  /** The viewer's last heartbeat before the current gap. */
   stalledAtMs?: number;
+  /** Heartbeat age, producer age and sessions latency when the gap was seen. */
+  gapDetail?: string;
 };
 
 function flattenSessions(value: unknown): SessionEntry[] {
@@ -140,12 +160,14 @@ export function createViewerRequestWatch(
   const intervalMs = options.intervalMs ?? 10_000;
   const heartbeatStaleMs = options.heartbeatStaleMs ?? 25_000;
   const requestTimeoutMs = options.requestTimeoutMs ?? 2_000;
+  const slowResponseMs = options.slowResponseMs ?? 1_000;
   const now = options.now ?? (() => new Date());
   const fetchImpl = options.fetchImpl ?? fetch;
   const producerModifiedAt =
     options.producerModifiedAt ??
     (async (path: string) => (await stat(path)).mtimeMs);
   const onAlert = options.onAlert ?? (() => undefined);
+  const onSlowResponse = options.onSlowResponse ?? (() => undefined);
   const onError = options.onError ?? (() => undefined);
   const viewers = new Map<string, ViewerState>();
   let timer: NodeJS.Timeout | undefined;
@@ -189,7 +211,9 @@ export function createViewerRequestWatch(
     const checkedAtMs = now().getTime();
     for (const [url, group] of byUrl) {
       let entries: SessionEntry[];
+      let responseMs: number;
       try {
+        const requestedAtMs = now().getTime();
         const response = await fetchImpl(url, {
           signal: AbortSignal.timeout(requestTimeoutMs),
           headers: { "user-agent": "marktv-viewer-request-watch/1.0" },
@@ -198,10 +222,12 @@ export function createViewerRequestWatch(
           throw new Error(`Tunarr sessions endpoint returned ${response.status}`);
         }
         entries = flattenSessions(await response.json());
+        responseMs = Math.max(0, now().getTime() - requestedAtMs);
       } catch (error) {
         for (const channel of group) onError(error, channel.channelId);
         continue;
       }
+      if (responseMs >= slowResponseMs) onSlowResponse(responseMs, url);
 
       for (const channel of group) {
         const seen = new Set<string>();
@@ -243,45 +269,48 @@ export function createViewerRequestWatch(
             if (fresh) {
               state.observedFresh = true;
               if (state.stalledAtMs !== undefined) {
+                // Measured between the viewer's own requests, not our polls.
                 const gapSeconds = Math.max(
                   1,
-                  Math.round((checkedAtMs - state.stalledAtMs) / 1_000),
+                  Math.round((lastHeartbeatMs - state.stalledAtMs) / 1_000),
                 );
                 onAlert({
-                  condition: "recovered",
+                  condition: "viewer-request-stalled",
                   channelId: channel.channelId,
-                  detail: `${describeViewer(state.userAgent)} requests resumed after about ${gapSeconds} seconds. This confirms requests resumed, not that the TV picture recovered.`,
+                  detail: `${describeViewer(state.userAgent)} stopped requesting playback data for about ${gapSeconds} seconds, then resumed. ${state.gapDetail ?? ""} This confirms a request stall, not what the TV displayed.`.replace(/\s+/g, " "),
                 });
                 delete state.stalledAtMs;
+                delete state.gapDetail;
               }
             } else if (
               state.observedFresh &&
               state.stalledAtMs === undefined &&
               ageMs > heartbeatStaleMs
             ) {
-              state.stalledAtMs = checkedAtMs;
+              state.stalledAtMs = lastHeartbeatMs;
               const producerDetail =
                 producerAgeMs === null
-                  ? "The producer playlist timestamp is unavailable."
-                  : `The producer playlist was last updated about ${Math.round(producerAgeMs / 1_000)} seconds ago.`;
+                  ? "The producer playlist timestamp was unavailable."
+                  : `The producer playlist had been updated about ${Math.round(producerAgeMs / 1_000)} seconds earlier.`;
+              state.gapDetail = `When the gap was detected, ${producerDetail.charAt(0).toLowerCase()}${producerDetail.slice(1)} Tunarr answered the sessions request in ${responseMs} ms.`;
               onAlert({
-                condition: "viewer-request-stalled",
+                condition: "viewer-request-gap",
                 channelId: channel.channelId,
-                detail: `${describeViewer(state.userAgent)} has not requested playback data for about ${Math.round(ageMs / 1_000)} seconds. ${producerDetail} This is a viewer request gap, not proof of a frozen picture; paused or closed apps can look the same.`,
+                detail: `${describeViewer(state.userAgent)} has not requested playback data for about ${Math.round(ageMs / 1_000)} seconds. ${producerDetail} Unclassified until requests resume or the session ends.`,
               });
             }
           }
         }
 
-        // A session disappearing ends the observation. Clear any outstanding
-        // alert but say explicitly that disappearance is not proof of recovery.
+        // A session disappearing ends the observation. During a gap that is
+        // usually a channel change or a closed app, not a stall.
         for (const [key, state] of viewers) {
           if (state.channelId !== channel.channelId || seen.has(key)) continue;
           if (state.stalledAtMs !== undefined) {
             onAlert({
-              condition: "recovered",
+              condition: "viewer-left",
               channelId: channel.channelId,
-              detail: `${describeViewer(state.userAgent)} session ended and its alert was cleared. Playback recovery is unknown.`,
+              detail: `${describeViewer(state.userAgent)} session ended during a request gap, usually a channel change or a closed app.`,
             });
           }
           viewers.delete(key);

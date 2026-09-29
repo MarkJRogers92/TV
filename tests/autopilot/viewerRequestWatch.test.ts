@@ -28,7 +28,7 @@ function response(body: unknown): Response {
 
 afterEach(() => vi.restoreAllMocks());
 
-test("alerts on a viewer request gap only after seeing it active, then reports recovery", async () => {
+test("reports a gap, then classifies it as a stall when requests resume", async () => {
   let time = 1_790_000_000_000;
   let heartbeat = time;
   let producerModifiedAt = time;
@@ -61,7 +61,7 @@ test("alerts on a viewer request gap only after seeing it active, then reports r
   await watch.runOnce();
   expect(alerts).toHaveLength(1);
   expect(alerts[0]).toMatchObject({
-    condition: "viewer-request-stalled",
+    condition: "viewer-request-gap",
     channelId: "cult",
   });
   expect(urls).toEqual([
@@ -75,9 +75,11 @@ test("alerts on a viewer request gap only after seeing it active, then reports r
   await watch.runOnce();
   expect(alerts).toHaveLength(2);
   expect(alerts[1]).toMatchObject({
-    condition: "recovered",
+    condition: "viewer-request-stalled",
     channelId: "cult",
   });
+  // Measured between the viewer's own heartbeats: 26s + 10s.
+  expect((alerts[1] as { detail: string }).detail).toContain("about 36 seconds");
 
   await watch.stop();
 });
@@ -103,5 +105,60 @@ test("does not alert for an already-stale or non-viewer session", async () => {
   time += 60_000;
   await watch.runOnce();
   expect(alerts).toEqual([]);
+  await watch.stop();
+});
+
+test("classifies a gap that ends with the session leaving as a viewer leaving", async () => {
+  let time = 1_790_000_000_000;
+  let body: unknown = sessions(time);
+  const alerts: Array<{ condition: string }> = [];
+  const repositories = {
+    channels: { list: () => [channel] },
+  } as unknown as Repositories;
+  const watch = createViewerRequestWatch(repositories, {
+    streamsDirectoryFor: () => "/streams/cult",
+    sessionsUrlFor: () => "http://127.0.0.1:8000/api/sessions",
+    tunarrChannelIdFor: () => "tunarr-cult",
+    producerModifiedAt: async () => time,
+    now: () => new Date(time),
+    fetchImpl: (async () => response(body)) as typeof fetch,
+    onAlert: (alert) => alerts.push(alert),
+  });
+
+  await watch.runOnce();
+  time += 30_000;
+  await watch.runOnce();
+  // Tunarr drops the abandoned session after its stale interval.
+  body = {};
+  time += 100_000;
+  await watch.runOnce();
+  expect(alerts.map((alert) => alert.condition)).toEqual([
+    "viewer-request-gap",
+    "viewer-left",
+  ]);
+  await watch.stop();
+});
+
+test("reports a slow sessions response", async () => {
+  let time = 1_790_000_000_000;
+  const slow: number[] = [];
+  const repositories = {
+    channels: { list: () => [channel] },
+  } as unknown as Repositories;
+  const watch = createViewerRequestWatch(repositories, {
+    streamsDirectoryFor: () => "/streams/cult",
+    sessionsUrlFor: () => "http://127.0.0.1:8000/api/sessions",
+    tunarrChannelIdFor: () => "tunarr-cult",
+    producerModifiedAt: async () => time,
+    now: () => new Date(time),
+    fetchImpl: (async () => {
+      time += 1_500;
+      return response(sessions(time));
+    }) as typeof fetch,
+    onSlowResponse: (durationMs) => slow.push(durationMs),
+  });
+
+  await watch.runOnce();
+  expect(slow).toEqual([1_500]);
   await watch.stop();
 });

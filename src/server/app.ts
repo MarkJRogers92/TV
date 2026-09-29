@@ -723,20 +723,22 @@ export async function buildApp(options: BuildAppOptions = {}) {
             channelId: alert.channelId,
             detail: alert.detail,
           });
-          const recovered = alert.condition === "recovered";
+          // Only a gap that ended with requests resuming is a stall. A gap
+          // that ended with the session leaving is almost always zapping.
+          if (alert.condition !== "viewer-request-stalled") return;
           alertSink.raise({
-            kind: recovered ? "recovered" : "incident",
+            kind: "incident",
             channelId: alert.channelId,
             reason: alert.condition,
             detail: alert.detail,
-            ...(recovered
-              ? {}
-              : {
-                  action:
-                    "check the TV app; MarkTV did not restart or change the stream",
-                }),
+            action:
+              "compare with Tunarr's producer reserve at that time; MarkTV did not restart or change the stream",
           });
         },
+        onSlowResponse: (durationMs) =>
+          logInfo("viewer-request-watch", "Tunarr sessions response slow", {
+            durationMs,
+          }),
         onError: (error, channelId) =>
           logError(
             "viewer-request-watch",
