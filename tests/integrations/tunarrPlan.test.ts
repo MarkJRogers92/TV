@@ -996,6 +996,28 @@ test("blocks midroll sync when complete spots cannot exactly fill the break", ()
   );
 });
 
+test("picks the record whose stored spelling matches after a case-only rename", () => {
+  const mapping = { libraryId: "lib", channelId: "7", createChannel: false };
+  const current = inventory[0]!;
+  // Both records normalize to the same physical path on a case-insensitive
+  // volume; only the current record keeps the schedule's exact spelling.
+  const withStale: TunarrInventory = [
+    { ...current, sourcePath: current.path },
+    {
+      id: "movie-stale",
+      path: current.path,
+      sourcePath: current.path.toUpperCase(),
+      program: wrapper("movie-stale", current.path.toUpperCase()),
+    },
+    ...inventory.slice(1),
+  ];
+  const plan = buildTunarrSyncPlan(schedule, withStale, capabilities, mapping, snapshots);
+  expect(plan.blockingErrors).not.toContainEqual(
+    expect.objectContaining({ code: "AMBIGUOUS_MEDIA_PATH" }),
+  );
+  expect(JSON.stringify(plan.operations)).not.toContain("movie-stale");
+});
+
 test("blocks duplicate, unmatched, placeholder, and relative media", () => {
   const mapping = { libraryId: "lib", channelId: "7", createChannel: false };
   expect(

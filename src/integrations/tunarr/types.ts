@@ -241,6 +241,8 @@ export type TunarrContentProgram = z.infer<typeof fillerProgramSchema>;
 export type TunarrInventory = Array<{
   id: string;
   path: string;
+  /** Path as stored by Tunarr before local realpath normalization. */
+  sourcePath?: string;
   program: TunarrContentProgram;
 }>;
 export type TunarrProgramming = z.infer<typeof programmingSchema>;

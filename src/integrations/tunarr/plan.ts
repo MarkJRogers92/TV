@@ -282,13 +282,23 @@ function matchEntry(
     );
     return;
   }
-  if (matches.length !== 1) {
+  // Tunarr can retain duplicate local records after a case-only filename
+  // rename on a case-insensitive volume. Both records resolve to the same
+  // physical path, but only the record whose stored spelling matches the
+  // schedule's source path is the current catalog entry. Keep refusing
+  // duplicates when the schedule cannot identify exactly one original path.
+  const exactSourceMatches = matches.filter(
+    (item) => item.sourcePath === entry.path,
+  );
+  const selectedMatches =
+    exactSourceMatches.length === 1 ? exactSourceMatches : matches;
+  if (selectedMatches.length !== 1) {
     counts.ambiguous += 1;
     blockingErrors.push({ code: "AMBIGUOUS_MEDIA_PATH", message: path });
     return;
   }
   counts.matched += 1;
-  return matches[0];
+  return selectedMatches[0];
 }
 
 function validMidrollLayout(entry: ScheduleEntry) {

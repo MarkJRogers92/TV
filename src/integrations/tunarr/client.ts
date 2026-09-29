@@ -281,6 +281,7 @@ export class TunarrClient {
               inventory.push({
                 id: parsed.data.id,
                 path: normalizeLocalPath(location.path),
+                sourcePath: location.path,
                 program: parsed.data,
               });
             }
@@ -300,6 +301,7 @@ export class TunarrClient {
             inventory.push({
               id: parsed.data.id,
               path: normalizeLocalPath(externalId),
+              sourcePath: externalId,
               program: parsed.data,
             });
           }
