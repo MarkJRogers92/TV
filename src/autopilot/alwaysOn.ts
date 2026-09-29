@@ -12,8 +12,9 @@
  * request can never create a second producer. The cadence exists only to
  * re-start a session that was lost (e.g. after a Tunarr restart).
  *
- * It performs no scheduling and holds no state; the URL is a seam so the
- * Tunarr integration stays out of this module.
+ * It performs no scheduling; the URL is a seam so the Tunarr integration stays
+ * out of this module. The one thing it remembers is when its last pass ended,
+ * so it can tell when the machine slept and resync the channels (see below).
  */
 import type { Repositories } from "../db/repositories.js";
 
@@ -25,6 +26,16 @@ export type AlwaysOnOptions = {
   requestTimeoutMs?: number;
   onResult?: (channelId: string, ok: boolean, status: number) => void;
   onError?: (error: unknown, channelId?: string) => void;
+  /**
+   * Ends a channel's producer session so the next request starts a fresh one
+   * at the lineup's wall-clock position. Called for every channel after the
+   * machine sleeps; absent means sleep is only reported.
+   */
+  resetSession?: (channelId: string) => Promise<void>;
+  /** A pass this much later than scheduled means the machine was asleep. */
+  wakeGapMs?: number;
+  now?: () => number;
+  onWake?: (gapMs: number) => void;
 };
 
 export type AlwaysOnSupervisor = {
@@ -45,6 +56,14 @@ export function createAlwaysOnSupervisor(
   const fetchImpl = options.fetchImpl ?? fetch;
   const onResult = options.onResult ?? (() => undefined);
   const onError = options.onError ?? (() => undefined);
+  const wakeGapMs = options.wakeGapMs ?? 120_000;
+  const now = options.now ?? (() => Date.now());
+  // Timers do not fire while the Mac sleeps, and Tunarr's producers freeze
+  // with them. On wake they resume from where they stopped, so every channel
+  // airs behind its schedule by the length of the sleep (2026-09-29: about 90
+  // minutes after a 98-minute sleep) while its segments look perfectly
+  // healthy. A pass that arrives far later than scheduled is the sign.
+  let lastPassEndedAt: number | undefined;
   let timer: NodeJS.Timeout | undefined;
   let inFlight: Promise<void> | undefined;
   let stopping = false;
@@ -60,10 +79,24 @@ export function createAlwaysOnSupervisor(
   };
 
   const runPass = async () => {
+    const startedAt = now();
+    const lateByMs =
+      lastPassEndedAt === undefined
+        ? 0
+        : startedAt - lastPassEndedAt - intervalMs;
+    const woke = lateByMs > wakeGapMs;
+    if (woke) options.onWake?.(lateByMs);
     for (const channel of repositories.channels.list()) {
       if (!channel.enabled) continue;
       const url = options.resolveStreamUrl(channel.id);
       if (!url) continue;
+      if (woke && options.resetSession) {
+        try {
+          await options.resetSession(channel.id);
+        } catch (error) {
+          onError(error, channel.id);
+        }
+      }
       try {
         const response = await fetchImpl(url, {
           signal: AbortSignal.timeout(requestTimeoutMs),
@@ -84,6 +117,7 @@ export function createAlwaysOnSupervisor(
     inFlight = runPass()
       .catch((error) => onError(error))
       .finally(() => {
+        lastPassEndedAt = now();
         inFlight = undefined;
         if (started && !stopping) schedule();
       });

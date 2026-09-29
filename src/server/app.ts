@@ -772,6 +772,26 @@ export async function buildApp(options: BuildAppOptions = {}) {
           }),
         onError: (error, channelId) =>
           logError("always-on", error, channelId ? { channelId } : {}),
+        // After a sleep, end each channel's frozen session; the request that
+        // follows starts a fresh producer at the lineup's current position.
+        resetSession: async (channelId) => {
+          const mapping = readTunarrMappingForChannel(repositories, channelId);
+          if (!mapping?.url || !mapping.channelId) return;
+          const response = await fetch(
+            `${mapping.url.replace(/\/+$/, "")}/api/channels/${mapping.channelId}/sessions`,
+            { method: "DELETE", signal: AbortSignal.timeout(15_000) },
+          );
+          // 404 means there was no session to end, which is fine.
+          if (!response.ok && response.status !== 404)
+            throw new Error(`Tunarr session reset returned ${response.status}`);
+          logInfo("always-on", "Channel session reset after sleep", {
+            channelId,
+          });
+        },
+        onWake: (gapMs) =>
+          logInfo("always-on", "Machine slept; resyncing channels to the clock", {
+            sleptSeconds: Math.round(gapMs / 1_000),
+          }),
       });
       void alwaysOn.start().catch((error) => logError("always-on", error));
     }
