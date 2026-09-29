@@ -59,6 +59,10 @@ import {
   createPlayoutWatch,
   type PlayoutWatch,
 } from "../autopilot/playoutWatch.js";
+import {
+  createViewerRequestWatch,
+  type ViewerRequestWatch,
+} from "../autopilot/viewerRequestWatch.js";
 import { recordIncident } from "../autopilot/incidents.js";
 import { DateTime } from "luxon";
 import { KeychainCredentialStore } from "../security/keychain.js";
@@ -131,6 +135,10 @@ export type BuildAppOptions = {
   healthShadow?: boolean;
   /** Root of the per-channel HLS stream directories for the shadow watchdog. */
   healthShadowRoot?: string;
+  /** Alert-only metadata monitor for real viewer request gaps; off by default. */
+  viewerRequestWatch?: boolean;
+  /** Root of the per-channel HLS stream directories for the viewer monitor. */
+  viewerRequestStreamsRoot?: string;
   /**
    * Whether the watchdog may ACT (bounded, channel-scoped) as well as observe.
    * Off by default: the transport repair is a deliberate opt-in once the shadow
@@ -391,6 +399,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   let alwaysOn: AlwaysOnSupervisor | null = null;
   let podExposureObserver: PodExposureObserver | null = null;
   let playoutWatch: PlayoutWatch | null = null;
+  let viewerRequestWatch: ViewerRequestWatch | null = null;
   app.addHook("onClose", async () => {
     scheduleRefresh?.stop();
     // Stop the intake scanner before the database handle closes: its poll timer
@@ -407,6 +416,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     // ledger rows through them.
     await podExposureObserver?.stop();
     await playoutWatch?.stop();
+    await viewerRequestWatch?.stop();
     // The coordinator owns every durable acquisition write, so stop it
     // (clearing its timer, aborting local transfers, and persisting resumable
     // state) before the database handle is closed.
@@ -688,6 +698,62 @@ export async function buildApp(options: BuildAppOptions = {}) {
         }`,
       });
     }
+    if (options.viewerRequestWatch && options.viewerRequestStreamsRoot) {
+      viewerRequestWatch = createViewerRequestWatch(repositories, {
+        streamsDirectoryFor: (channel) => {
+          const tunarrChannelId = readTunarrMappingForChannel(
+            repositories,
+            channel.id,
+          )?.channelId;
+          return tunarrChannelId
+            ? join(options.viewerRequestStreamsRoot!, `stream_${tunarrChannelId}`)
+            : null;
+        },
+        tunarrChannelIdFor: (channelId) =>
+          readTunarrMappingForChannel(repositories, channelId)?.channelId ??
+          null,
+        sessionsUrlFor: (channelId) => {
+          const mapping = readTunarrMappingForChannel(repositories, channelId);
+          return mapping?.url
+            ? `${mapping.url.replace(/\/+$/, "")}/api/sessions`
+            : null;
+        },
+        onAlert: (alert) => {
+          logInfo("viewer-request-watch", alert.condition, {
+            channelId: alert.channelId,
+            detail: alert.detail,
+          });
+          const recovered = alert.condition === "recovered";
+          alertSink.raise({
+            kind: recovered ? "recovered" : "incident",
+            channelId: alert.channelId,
+            reason: alert.condition,
+            detail: alert.detail,
+            ...(recovered
+              ? {}
+              : {
+                  action:
+                    "check the TV app; MarkTV did not restart or change the stream",
+                }),
+          });
+        },
+        onError: (error, channelId) =>
+          logError(
+            "viewer-request-watch",
+            error,
+            channelId ? { channelId } : {},
+          ),
+      });
+      void viewerRequestWatch
+        .start()
+        .catch((error) => logError("viewer-request-watch", error));
+      logInfo("viewer-request-watch", "started", {
+        intervalMs: 10_000,
+        heartbeatStaleMs: 25_000,
+        streamsRoot: options.viewerRequestStreamsRoot,
+        source: "Tunarr /api/sessions and local playlist stat only",
+      });
+    }
     if (options.alwaysOn) {
       // Start each enabled channel's producer so it keeps running with no viewers.
       alwaysOn = createAlwaysOnSupervisor(repositories, {
@@ -734,6 +800,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     await preparationExecutor?.stop().catch(() => undefined);
     await healthShadow?.stop().catch(() => undefined);
     await alwaysOn?.stop().catch(() => undefined);
+    await viewerRequestWatch?.stop().catch(() => undefined);
     await coordinator.stop().catch(() => undefined);
     repositories.close();
     throw error;

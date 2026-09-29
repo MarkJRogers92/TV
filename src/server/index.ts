@@ -47,6 +47,12 @@ const app = await buildApp({
   // is a deliberate opt-in rather than a default background load.
   healthShadow: Boolean(process.env.MARKTV_HEALTH_SHADOW_ROOT),
   healthShadowRoot: process.env.MARKTV_HEALTH_SHADOW_ROOT,
+  // Client-stall alerts use only Tunarr session metadata and local file stats.
+  // Enabled with the existing streams root; set to 0 to disable independently.
+  viewerRequestWatch:
+    Boolean(process.env.MARKTV_HEALTH_SHADOW_ROOT) &&
+    process.env.MARKTV_VIEWER_REQUEST_WATCH !== "0",
+  viewerRequestStreamsRoot: process.env.MARKTV_HEALTH_SHADOW_ROOT,
   // Acting is a separate, deliberate opt-in from observing.
   healthRecovery:
     Boolean(process.env.MARKTV_HEALTH_SHADOW_ROOT) &&
