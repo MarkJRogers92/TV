@@ -617,6 +617,40 @@ test("rescans Tunarr and retries once when a stale inventory blocks the plan", a
   repositories.close();
 }, 30_000);
 
+test("does not rescan again within the hour for the same unresolved media", async () => {
+  const fixture = setup();
+  const repositories = await repositoriesWithSchedule(fixture);
+  const stale = {
+    "lib-a": fixture.items
+      .slice(1)
+      .map((item) => localProgram(item.id, item.path!, item.durationMs ?? 60_000)),
+  };
+  // First attempt without a scannable source records the blocking reason.
+  stubTunarr(stale, { offerScan: false });
+  const first = await autoSyncTunarr(repositories, {
+    channelId: fixture.channel.id,
+    now,
+  });
+  expect(first.status).toBe("blocked");
+  const stored = readTunarrMappingForChannel(repositories, fixture.channel.id)!;
+  const rescannedAt = new Date(now().getTime() - 10 * 60_000).toISOString();
+  upsertTunarrMapping(repositories, {
+    ...stored,
+    lastSync: { ...stored.lastSync!, rescannedAt },
+  });
+
+  const calls: string[] = [];
+  stubTunarr(stale, { record: calls });
+  const retry = await autoSyncTunarr(repositories, {
+    channelId: fixture.channel.id,
+    now,
+  });
+
+  expect(retry).toMatchObject({ status: "blocked", message: first.message, rescannedAt });
+  expect(calls.some((call) => call.endsWith("/scan"))).toBe(false);
+  repositories.close();
+});
+
 test("blocks without mutating while the mapped channel has active viewers", async () => {
   const fixture = setup();
   const repositories = await repositoriesWithSchedule(fixture);

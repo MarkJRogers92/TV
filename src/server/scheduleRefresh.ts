@@ -114,7 +114,7 @@ export interface ScheduleRefreshDependencies {
     channelId: string,
     scheduleId: string,
     now: () => Date,
-  ) => Promise<{ status: string }>;
+  ) => Promise<{ status: string; message?: string }>;
   /**
    * The most recent recorded Tunarr sync. Reading it is what distinguishes
    * "generated" from "actually broadcast", so a failed sync gets retried.
@@ -304,6 +304,11 @@ export function startScheduleRefresh(
               date: today,
               scheduleId: schedule.id,
               tunarr: tunarr.status,
+              // Without the reason, a viewer block and an unmatched file look
+              // the same in the log, and the stored copy is overwritten.
+              ...(tunarr.status !== "synced" && tunarr.message
+                ? { reason: tunarr.message }
+                : {}),
             });
           }
 

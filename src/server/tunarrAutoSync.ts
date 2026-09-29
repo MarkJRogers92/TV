@@ -88,7 +88,32 @@ export type TunarrAutoSyncOutcome = {
   programCount?: number;
   blockingErrors?: number;
   message?: string;
+  /** When this schedule's blocked sync last paid for a Tunarr library rescan. */
+  rescannedAt?: string;
 };
+
+// A retry blocked by the same unresolved media has already paid for a rescan.
+// Walking the whole external library every ten minutes cannot change the
+// answer, and it runs in the process that serves playback.
+const RESCAN_REPEAT_MS = 60 * 60_000;
+
+function recentRescanFor(
+  last: TunarrAutoSyncOutcome | undefined,
+  scheduleId: string,
+  message: string | undefined,
+  nowMs: number,
+): string | undefined {
+  if (
+    last?.status !== "blocked" ||
+    last.scheduleId !== scheduleId ||
+    last.message !== message ||
+    !last.rescannedAt
+  )
+    return undefined;
+  return nowMs - Date.parse(last.rescannedAt) < RESCAN_REPEAT_MS
+    ? last.rescannedAt
+    : undefined;
+}
 
 export type StoredTunarrMapping = TunarrMappingInput & {
   url: string;
@@ -307,7 +332,21 @@ export async function autoSyncTunarr(
     // A prepared day scans only its dedicated cache source. Tunarr's local scan
     // endpoint scans an entire source even when given one library ID; scanning
     // the original media source here would walk the full external library.
-    if (!plan.syncEligible && (await rescanTunarrLibraries(client, input, cacheLibraryId))) {
+    const skippedRescanAt = plan.syncEligible
+      ? undefined
+      : recentRescanFor(
+          stored.lastSync,
+          schedule.id,
+          plan.blockingErrors[0]?.message,
+          options.now().getTime(),
+        );
+    let rescannedAt = skippedRescanAt;
+    if (
+      !plan.syncEligible &&
+      !skippedRescanAt &&
+      (await rescanTunarrLibraries(client, input, cacheLibraryId))
+    ) {
+      rescannedAt = at;
       for (let attempt = 0; attempt < 6 && !plan.syncEligible; attempt += 1) {
         if (attempt > 0)
           await new Promise((resolve) => setTimeout(resolve, 10_000));
@@ -332,6 +371,7 @@ export async function autoSyncTunarr(
           scheduleId: schedule.id,
           blockingErrors: plan.blockingErrors.length,
           message: plan.blockingErrors[0]?.message,
+          ...(rescannedAt ? { rescannedAt } : {}),
         },
       );
 
